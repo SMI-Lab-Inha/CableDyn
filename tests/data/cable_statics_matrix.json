@@ -1612,5 +1612,137 @@
    }
   },
   "mesh_of": "ROUGH_1003"
+ },
+ {
+  "id": "SIS_B800_EA5E7_EI5E2",
+  "expect": "admissible",
+  "why": "static_init_sweep case 87 (family b, depth 800 m, slackness 1.25, buoyancy ratio 1.5, EA 5e+07 N, EI 500 N m2, kBot 100000, span ratio 1, buoyant fraction 0.29) through the deck route; oracle: elastic multi-segment EI = 0 catenary",
+  "deck": "--------------------- CableDyn Input File ------------------------------------\nSW_B800_EA5E7_EI5E2\n--------------------- LINE TYPES ---------------------------------------------\nTypeName  Diam   MassDenInAir  EA       BA   EI       Cd_n  Cd_t  Ca_n  Ca_t\n(-)       (m)    (kg/m)        (N)      (-)  (N-m2)   (-)   (-)   (-)   (-)\nbare      0.160  36.720364  5e+07  0.0  500  1.2  0.1  1.0  0.0\nbuoy      0.290  0.0  5e+07  0.0  500  1.2  0.1  1.0  0.0\n--------------------- POINTS ------------------------------------------------\nID  Type     X       Y    Z\n(-) (-)      (m)     (m)  (m)\n1   Coupled  0.0  0.0  -16\n2   Fixed    800  0.0  -800\n--------------------- LINES -------------------------------------------------\nID  NodeA  NodeB  Outputs\n(-) (-)    (-)    (-)\n1   1      2      -\n--------------------- SECTIONS ----------------------------------------------\nLineID  LineType  Length   NumSegs\n(-)     (-)       (m)      (-)\n1  bare  393.790176522  72\n1  buoy  404.728792536  74\n1  bare  601.623880797  110\n--------------------- EQUIVALENT BUOYANCY -----------------------------------\nLineType  Diam   SubmergedWeightNpm\n(-)       (m)    (N/m)\nbuoy      0.290  -237\n--------------------- OPTIONS -----------------------------------------------\n800 WtrDpth\n100000 kBot\n0.0 TMax\nnone frictionMu\n--------------------- OUTPUTS -----------------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line ----------------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [
+     45921.372599184884
+    ],
+    "lambda_over_length": 0.0010485728908409383
+   }
+  }
+ },
+ {
+  "id": "SIS_B800_EA5E7_EI5E2_SEQ",
+  "expect": "admissible",
+  "why": "static_init_sweep case 87 (family b, depth 800 m, slackness 1.25, buoyancy ratio 1.5, EA 5e+07 N, EI 500 N m2, kBot 100000, span ratio 1, buoyant fraction 0.29) through the deck route, mesh-sequenced route first; oracle: elastic multi-segment EI = 0 catenary",
+  "deck": "--------------------- CableDyn Input File ------------------------------------\nSW_B800_EA5E7_EI5E2_SEQ\n--------------------- LINE TYPES ---------------------------------------------\nTypeName  Diam   MassDenInAir  EA       BA   EI       Cd_n  Cd_t  Ca_n  Ca_t\n(-)       (m)    (kg/m)        (N)      (-)  (N-m2)   (-)   (-)   (-)   (-)\nbare      0.160  36.720364  5e+07  0.0  500  1.2  0.1  1.0  0.0\nbuoy      0.290  0.0  5e+07  0.0  500  1.2  0.1  1.0  0.0\n--------------------- POINTS ------------------------------------------------\nID  Type     X       Y    Z\n(-) (-)      (m)     (m)  (m)\n1   Coupled  0.0  0.0  -16\n2   Fixed    800  0.0  -800\n--------------------- LINES -------------------------------------------------\nID  NodeA  NodeB  Outputs\n(-) (-)    (-)    (-)\n1   1      2      -\n--------------------- SECTIONS ----------------------------------------------\nLineID  LineType  Length   NumSegs\n(-)     (-)       (m)      (-)\n1  bare  393.790176522  72\n1  buoy  404.728792536  74\n1  bare  601.623880797  110\n--------------------- EQUIVALENT BUOYANCY -----------------------------------\nLineType  Diam   SubmergedWeightNpm\n(-)       (m)    (N/m)\nbuoy      0.290  -237\n--------------------- OPTIONS -----------------------------------------------\n800 WtrDpth\n100000 kBot\n0.0 TMax\nnone frictionMu\nsequenced cable_statics\n--------------------- OUTPUTS -----------------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line ----------------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [
+     45921.372599184884
+    ],
+    "lambda_over_length": 0.0010485728908409383
+   }
+  }
+ },
+ {
+  "id": "SIS_B800_EA2E9_EI5E2",
+  "expect": "admissible",
+  "why": "static_init_sweep case 89 (family b, depth 800 m, slackness 1.25, buoyancy ratio 1.5, EA 2e+09 N, EI 500 N m2, kBot 100000, span ratio 1, buoyant fraction 0.29) through the deck route; oracle: elastic multi-segment EI = 0 catenary",
+  "deck": "--------------------- CableDyn Input File ------------------------------------\nSW_B800_EA2E9_EI5E2\n--------------------- LINE TYPES ---------------------------------------------\nTypeName  Diam   MassDenInAir  EA       BA   EI       Cd_n  Cd_t  Ca_n  Ca_t\n(-)       (m)    (kg/m)        (N)      (-)  (N-m2)   (-)   (-)   (-)   (-)\nbare      0.160  36.720364  2e+09  0.0  500  1.2  0.1  1.0  0.0\nbuoy      0.290  0.0  2e+09  0.0  500  1.2  0.1  1.0  0.0\n--------------------- POINTS ------------------------------------------------\nID  Type     X       Y    Z\n(-) (-)      (m)     (m)  (m)\n1   Coupled  0.0  0.0  -16\n2   Fixed    800  0.0  -800\n--------------------- LINES -------------------------------------------------\nID  NodeA  NodeB  Outputs\n(-) (-)    (-)    (-)\n1   1      2      -\n--------------------- SECTIONS ----------------------------------------------\nLineID  LineType  Length   NumSegs\n(-)     (-)       (m)      (-)\n1  bare  393.790176522  72\n1  buoy  404.728792536  74\n1  bare  601.623880797  110\n--------------------- EQUIVALENT BUOYANCY -----------------------------------\nLineType  Diam   SubmergedWeightNpm\n(-)       (m)    (N/m)\nbuoy      0.290  -237\n--------------------- OPTIONS -----------------------------------------------\n800 WtrDpth\n100000 kBot\n0.0 TMax\nnone frictionMu\n--------------------- OUTPUTS -----------------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line ----------------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [
+     45968.597408873895
+    ],
+    "lambda_over_length": 0.0010485728908409383
+   }
+  }
+ },
+ {
+  "id": "SIS_B800_EA2E9_EI5E2_SEQ",
+  "expect": "admissible",
+  "why": "static_init_sweep case 89 (family b, depth 800 m, slackness 1.25, buoyancy ratio 1.5, EA 2e+09 N, EI 500 N m2, kBot 100000, span ratio 1, buoyant fraction 0.29) through the deck route, mesh-sequenced route first; oracle: elastic multi-segment EI = 0 catenary",
+  "deck": "--------------------- CableDyn Input File ------------------------------------\nSW_B800_EA2E9_EI5E2_SEQ\n--------------------- LINE TYPES ---------------------------------------------\nTypeName  Diam   MassDenInAir  EA       BA   EI       Cd_n  Cd_t  Ca_n  Ca_t\n(-)       (m)    (kg/m)        (N)      (-)  (N-m2)   (-)   (-)   (-)   (-)\nbare      0.160  36.720364  2e+09  0.0  500  1.2  0.1  1.0  0.0\nbuoy      0.290  0.0  2e+09  0.0  500  1.2  0.1  1.0  0.0\n--------------------- POINTS ------------------------------------------------\nID  Type     X       Y    Z\n(-) (-)      (m)     (m)  (m)\n1   Coupled  0.0  0.0  -16\n2   Fixed    800  0.0  -800\n--------------------- LINES -------------------------------------------------\nID  NodeA  NodeB  Outputs\n(-) (-)    (-)    (-)\n1   1      2      -\n--------------------- SECTIONS ----------------------------------------------\nLineID  LineType  Length   NumSegs\n(-)     (-)       (m)      (-)\n1  bare  393.790176522  72\n1  buoy  404.728792536  74\n1  bare  601.623880797  110\n--------------------- EQUIVALENT BUOYANCY -----------------------------------\nLineType  Diam   SubmergedWeightNpm\n(-)       (m)    (N/m)\nbuoy      0.290  -237\n--------------------- OPTIONS -----------------------------------------------\n800 WtrDpth\n100000 kBot\n0.0 TMax\nnone frictionMu\nsequenced cable_statics\n--------------------- OUTPUTS -----------------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line ----------------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [
+     45968.597408873895
+    ],
+    "lambda_over_length": 0.0010485728908409383
+   }
+  }
+ },
+ {
+  "id": "SIS_B800_EI5E2",
+  "expect": "admissible",
+  "why": "static_init_sweep case 91 (family b, depth 800 m, slackness 1.25, buoyancy ratio 1.5, EA 4.69e+08 N, EI 500 N m2, kBot 100000, span ratio 1, buoyant fraction 0.29) through the deck route; oracle: elastic multi-segment EI = 0 catenary",
+  "deck": "--------------------- CableDyn Input File ------------------------------------\nSW_B800_EI5E2\n--------------------- LINE TYPES ---------------------------------------------\nTypeName  Diam   MassDenInAir  EA       BA   EI       Cd_n  Cd_t  Ca_n  Ca_t\n(-)       (m)    (kg/m)        (N)      (-)  (N-m2)   (-)   (-)   (-)   (-)\nbare      0.160  36.720364  4.69e+08  0.0  500  1.2  0.1  1.0  0.0\nbuoy      0.290  0.0  4.69e+08  0.0  500  1.2  0.1  1.0  0.0\n--------------------- POINTS ------------------------------------------------\nID  Type     X       Y    Z\n(-) (-)      (m)     (m)  (m)\n1   Coupled  0.0  0.0  -16\n2   Fixed    800  0.0  -800\n--------------------- LINES -------------------------------------------------\nID  NodeA  NodeB  Outputs\n(-) (-)    (-)    (-)\n1   1      2      -\n--------------------- SECTIONS ----------------------------------------------\nLineID  LineType  Length   NumSegs\n(-)     (-)       (m)      (-)\n1  bare  393.790176522  72\n1  buoy  404.728792536  74\n1  bare  601.623880797  110\n--------------------- EQUIVALENT BUOYANCY -----------------------------------\nLineType  Diam   SubmergedWeightNpm\n(-)       (m)    (N/m)\nbuoy      0.290  -237\n--------------------- OPTIONS -----------------------------------------------\n800 WtrDpth\n100000 kBot\n0.0 TMax\nnone frictionMu\n--------------------- OUTPUTS -----------------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line ----------------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [
+     45964.63285892178
+    ],
+    "lambda_over_length": 0.0010485728908409383
+   }
+  }
+ },
+ {
+  "id": "SIS_B800_EI5E2_SEQ",
+  "expect": "admissible",
+  "why": "static_init_sweep case 91 (family b, depth 800 m, slackness 1.25, buoyancy ratio 1.5, EA 4.69e+08 N, EI 500 N m2, kBot 100000, span ratio 1, buoyant fraction 0.29) through the deck route, mesh-sequenced route first; oracle: elastic multi-segment EI = 0 catenary",
+  "deck": "--------------------- CableDyn Input File ------------------------------------\nSW_B800_EI5E2_SEQ\n--------------------- LINE TYPES ---------------------------------------------\nTypeName  Diam   MassDenInAir  EA       BA   EI       Cd_n  Cd_t  Ca_n  Ca_t\n(-)       (m)    (kg/m)        (N)      (-)  (N-m2)   (-)   (-)   (-)   (-)\nbare      0.160  36.720364  4.69e+08  0.0  500  1.2  0.1  1.0  0.0\nbuoy      0.290  0.0  4.69e+08  0.0  500  1.2  0.1  1.0  0.0\n--------------------- POINTS ------------------------------------------------\nID  Type     X       Y    Z\n(-) (-)      (m)     (m)  (m)\n1   Coupled  0.0  0.0  -16\n2   Fixed    800  0.0  -800\n--------------------- LINES -------------------------------------------------\nID  NodeA  NodeB  Outputs\n(-) (-)    (-)    (-)\n1   1      2      -\n--------------------- SECTIONS ----------------------------------------------\nLineID  LineType  Length   NumSegs\n(-)     (-)       (m)      (-)\n1  bare  393.790176522  72\n1  buoy  404.728792536  74\n1  bare  601.623880797  110\n--------------------- EQUIVALENT BUOYANCY -----------------------------------\nLineType  Diam   SubmergedWeightNpm\n(-)       (m)    (N/m)\nbuoy      0.290  -237\n--------------------- OPTIONS -----------------------------------------------\n800 WtrDpth\n100000 kBot\n0.0 TMax\nnone frictionMu\nsequenced cable_statics\n--------------------- OUTPUTS -----------------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line ----------------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [
+     45964.63285892178
+    ],
+    "lambda_over_length": 0.0010485728908409383
+   }
+  }
+ },
+ {
+  "id": "SIS_F800_KN3E6_EI5E2",
+  "expect": "admissible",
+  "why": "static_init_sweep case 115 (family f, depth 800 m, slackness 1.372, buoyancy ratio 2.5, EA 4.69e+08 N, EI 500 N m2, kBot 3e+06, span ratio 1, buoyant fraction 0.29) through the deck route; the buoyant arch floats at the surface, so no submerged EI = 0 root applies",
+  "deck": "--------------------- CableDyn Input File ------------------------------------\nSW_F800_KN3E6_EI5E2\n--------------------- LINE TYPES ---------------------------------------------\nTypeName  Diam   MassDenInAir  EA       BA   EI       Cd_n  Cd_t  Ca_n  Ca_t\n(-)       (m)    (kg/m)        (N)      (-)  (N-m2)   (-)   (-)   (-)   (-)\nbare      0.160  36.720364  4.69e+08  0.0  500  1.2  0.1  1.0  0.0\nbuoy      0.290  0.0  4.69e+08  0.0  500  1.2  0.1  1.0  0.0\n--------------------- POINTS ------------------------------------------------\nID  Type     X       Y    Z\n(-) (-)      (m)     (m)  (m)\n1   Coupled  0.0  0.0  -16\n2   Fixed    800  0.0  -800\n--------------------- LINES -------------------------------------------------\nID  NodeA  NodeB  Outputs\n(-) (-)    (-)    (-)\n1   1      2      -\n--------------------- SECTIONS ----------------------------------------------\nLineID  LineType  Length   NumSegs\n(-)     (-)       (m)      (-)\n1  bare  432.135000000  72\n1  buoy  444.138750000  74\n1  bare  660.206250000  110\n--------------------- EQUIVALENT BUOYANCY -----------------------------------\nLineType  Diam   SubmergedWeightNpm\n(-)       (m)    (N/m)\nbuoy      0.290  -395\n--------------------- OPTIONS -----------------------------------------------\n800 WtrDpth\n3e+06 kBot\n0.0 TMax\nnone frictionMu\n--------------------- OUTPUTS -----------------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line ----------------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [],
+    "lambda_over_length": 0.0009555294150673793
+   }
+  }
+ },
+ {
+  "id": "SIS_F800_KN3E6_EI5E2_SEQ",
+  "expect": "admissible",
+  "why": "static_init_sweep case 115 (family f, depth 800 m, slackness 1.372, buoyancy ratio 2.5, EA 4.69e+08 N, EI 500 N m2, kBot 3e+06, span ratio 1, buoyant fraction 0.29) through the deck route, mesh-sequenced route first; the buoyant arch floats at the surface, so no submerged EI = 0 root applies",
+  "deck": "--------------------- CableDyn Input File ------------------------------------\nSW_F800_KN3E6_EI5E2_SEQ\n--------------------- LINE TYPES ---------------------------------------------\nTypeName  Diam   MassDenInAir  EA       BA   EI       Cd_n  Cd_t  Ca_n  Ca_t\n(-)       (m)    (kg/m)        (N)      (-)  (N-m2)   (-)   (-)   (-)   (-)\nbare      0.160  36.720364  4.69e+08  0.0  500  1.2  0.1  1.0  0.0\nbuoy      0.290  0.0  4.69e+08  0.0  500  1.2  0.1  1.0  0.0\n--------------------- POINTS ------------------------------------------------\nID  Type     X       Y    Z\n(-) (-)      (m)     (m)  (m)\n1   Coupled  0.0  0.0  -16\n2   Fixed    800  0.0  -800\n--------------------- LINES -------------------------------------------------\nID  NodeA  NodeB  Outputs\n(-) (-)    (-)    (-)\n1   1      2      -\n--------------------- SECTIONS ----------------------------------------------\nLineID  LineType  Length   NumSegs\n(-)     (-)       (m)      (-)\n1  bare  432.135000000  72\n1  buoy  444.138750000  74\n1  bare  660.206250000  110\n--------------------- EQUIVALENT BUOYANCY -----------------------------------\nLineType  Diam   SubmergedWeightNpm\n(-)       (m)    (N/m)\nbuoy      0.290  -395\n--------------------- OPTIONS -----------------------------------------------\n800 WtrDpth\n3e+06 kBot\n0.0 TMax\nnone frictionMu\nsequenced cable_statics\n--------------------- OUTPUTS -----------------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line ----------------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [],
+    "lambda_over_length": 0.0009555294150673793
+   }
+  }
+ },
+ {
+  "id": "SIS_F200_FB040_EI5E2",
+  "expect": "admissible",
+  "why": "static_init_sweep case 118 (family f, depth 200 m, slackness 1.25, buoyancy ratio 2.5, EA 4.69e+08 N, EI 500 N m2, kBot 100000, span ratio 1, buoyant fraction 0.4) through the deck route; the buoyant arch floats at the surface, so no submerged EI = 0 root applies",
+  "deck": "--------------------- CableDyn Input File ------------------------------------\nSW_F200_FB040_EI5E2\n--------------------- LINE TYPES ---------------------------------------------\nTypeName  Diam   MassDenInAir  EA       BA   EI       Cd_n  Cd_t  Ca_n  Ca_t\n(-)       (m)    (kg/m)        (N)      (-)  (N-m2)   (-)   (-)   (-)   (-)\nbare      0.160  36.720364  4.69e+08  0.0  500  1.2  0.1  1.0  0.0\nbuoy      0.290  0.0  4.69e+08  0.0  500  1.2  0.1  1.0  0.0\n--------------------- POINTS ------------------------------------------------\nID  Type     X       Y    Z\n(-) (-)      (m)     (m)  (m)\n1   Coupled  0.0  0.0  -4\n2   Fixed    200  0.0  -200\n--------------------- LINES -------------------------------------------------\nID  NodeA  NodeB  Outputs\n(-) (-)    (-)    (-)\n1   1      2      -\n--------------------- SECTIONS ----------------------------------------------\nLineID  LineType  Length   NumSegs\n(-)     (-)       (m)      (-)\n1  bare  97.232142351  20\n1  buoy  140.986606409  29\n1  bare  111.816963704  23\n--------------------- EQUIVALENT BUOYANCY -----------------------------------\nLineType  Diam   SubmergedWeightNpm\n(-)       (m)    (N/m)\nbuoy      0.290  -395\n--------------------- OPTIONS -----------------------------------------------\n200 WtrDpth\n100000 kBot\n0.0 TMax\nnone frictionMu\n--------------------- OUTPUTS -----------------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line ----------------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [],
+    "lambda_over_length": 0.0041942915633607575
+   }
+  }
+ },
+ {
+  "id": "SIS_F200_FB040_EI5E2_SEQ",
+  "expect": "admissible",
+  "why": "static_init_sweep case 118 (family f, depth 200 m, slackness 1.25, buoyancy ratio 2.5, EA 4.69e+08 N, EI 500 N m2, kBot 100000, span ratio 1, buoyant fraction 0.4) through the deck route, mesh-sequenced route first; the buoyant arch floats at the surface, so no submerged EI = 0 root applies",
+  "deck": "--------------------- CableDyn Input File ------------------------------------\nSW_F200_FB040_EI5E2_SEQ\n--------------------- LINE TYPES ---------------------------------------------\nTypeName  Diam   MassDenInAir  EA       BA   EI       Cd_n  Cd_t  Ca_n  Ca_t\n(-)       (m)    (kg/m)        (N)      (-)  (N-m2)   (-)   (-)   (-)   (-)\nbare      0.160  36.720364  4.69e+08  0.0  500  1.2  0.1  1.0  0.0\nbuoy      0.290  0.0  4.69e+08  0.0  500  1.2  0.1  1.0  0.0\n--------------------- POINTS ------------------------------------------------\nID  Type     X       Y    Z\n(-) (-)      (m)     (m)  (m)\n1   Coupled  0.0  0.0  -4\n2   Fixed    200  0.0  -200\n--------------------- LINES -------------------------------------------------\nID  NodeA  NodeB  Outputs\n(-) (-)    (-)    (-)\n1   1      2      -\n--------------------- SECTIONS ----------------------------------------------\nLineID  LineType  Length   NumSegs\n(-)     (-)       (m)      (-)\n1  bare  97.232142351  20\n1  buoy  140.986606409  29\n1  bare  111.816963704  23\n--------------------- EQUIVALENT BUOYANCY -----------------------------------\nLineType  Diam   SubmergedWeightNpm\n(-)       (m)    (N/m)\nbuoy      0.290  -395\n--------------------- OPTIONS -----------------------------------------------\n200 WtrDpth\n100000 kBot\n0.0 TMax\nnone frictionMu\nsequenced cable_statics\n--------------------- OUTPUTS -----------------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line ----------------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [],
+    "lambda_over_length": 0.0041942915633607575
+   }
+  }
  }
 ]
