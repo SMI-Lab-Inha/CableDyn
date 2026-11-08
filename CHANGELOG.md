@@ -18,8 +18,6 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
-- Python: `CableDyn.channel` and `channels` refuse a token holding a NUL character, which the
-  library read only up to the NUL (`"FairTen1\0x"` returned `FairTen1`).
 
 ## [0.4.1] - 2026-11-08
 
