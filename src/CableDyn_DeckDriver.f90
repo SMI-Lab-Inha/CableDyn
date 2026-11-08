@@ -3173,7 +3173,9 @@ CONTAINS
     END IF
     IF (LEN_TRIM(resolution_note) > 0 .AND. primary_done) &
       CALL report_note('line '//TRIM(int_to_str(ln%id))//': '//TRIM(resolution_note))
-    IF (tolerance_note) THEN
+    ! tolerance_note is set by a solve repeated at a looser tolerance, whose last Newton step can
+    ! still land below the tight one: only a residual above the tight tolerance is a floor to note
+    IF (tolerance_note .AND. res > static_tol_target) THEN
       WRITE (note_text, '(A,I0,A,ES9.2,A,ES9.2)') 'line ', ln%id, ': static residual floor above the '// &
         'dynamic tolerance ', static_tol_target, '; equilibrium accepted at the relative residual ', res
       CALL report_note(note_text)

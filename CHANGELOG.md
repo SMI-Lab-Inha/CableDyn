@@ -18,6 +18,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- Finite-EI statics: the note "static residual floor above the dynamic tolerance" could report a
+  residual below that tolerance (accepted at 6.91e-9 against 1e-8): a polish repeated at the
+  coupled static tolerance after the tight one failed can still end below the tight tolerance.
+  The note is now printed only when the residual reached lies above it.
 
 ## [0.4.1] - 2026-11-08
 
