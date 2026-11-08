@@ -1037,9 +1037,21 @@ so the shedding frequency locks onto the cross-flow motion inside the band
 :math:`c_F \pm d_F` (MoorDyn's defaults 0.18 and 0.08). The running RMS values average over
 ``VIVrmsWindow`` seconds, by default 500 steps of ``dtM`` as in MoorDyn, and the phases start at
 :math:`2\pi i/N` at node :math:`i` counted from the deck's End A (MoorDyn's ``AttachA``), also on
-a line written anchor first, which the reader turns around. On a finite-EI mesh the static solve
+a line written anchor first, which the reader turns around. The node tangent
+:math:`\mathbf{q}` runs from End A to End B, as MoorDyn's; turning it around turns the lift and
+:math:`\mathbf{e}` around and starts the same motion from the phases plus :math:`\pi`, so the
+lift field is MoorDyn's whichever end a deck writes first. On a finite-EI mesh the static solve
 refined, the deck nodes keep that seed and the nodes it added take the seed interpolated in
 arc length. The static equilibrium carries no lift.
+
+The seed decides which response the line settles on where two lock-in branches coexist. On the
+taut line of the ``viv_lockin`` test, between about 0.21 and 0.33 m/s, a line locked in its first
+mode at 0.18 m/s stays there as the current rises, while one coming down from 0.30 m/s stays in
+its second mode, and a start from rest with the spread seed settles in the second mode, as
+MoorDyn-C does. MoorDyn-F (v2.3.8, OpenFAST v5.0.0) sets the same seed but does not copy it into
+the state vector it integrates, so its phases start at zero at every node: a uniform lift that
+excites the symmetric modes only, after which the line stays in its first mode. ``zero
+VIVphaseSeed`` starts every phase at zero, and reproduces that start (:doc:`options`).
 
 In the implicit step the phase is explicit: the step's lift takes the phase predicted at
 :math:`t_{n+1}` from the step-start rate (the generalised-α level under the configuration blend),

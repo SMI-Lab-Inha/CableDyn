@@ -231,6 +231,8 @@ _OPTION_ALIASES = {
     "max_strain": "max_strain",
     "vivrmswindow": "viv_rms_window",
     "viv_rms_window": "viv_rms_window",
+    "vivphaseseed": "viv_phase_seed",
+    "viv_phase_seed": "viv_phase_seed",
     "rangestart": "range_start",
     "range_start": "range_start",
     "waveseed": "wave_seed",
@@ -1332,6 +1334,8 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
             if _strip_quotes(value).lower() in _STATICS_FRICTION_POLICIES
             else "must be asLaid or none"
         )
+    if key == "viv_phase_seed":
+        return None if value.lower() in {"spread", "zero"} else "must be spread or zero"
     if key == "cable_statics":
         return (
             None

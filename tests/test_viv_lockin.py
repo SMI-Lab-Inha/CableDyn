@@ -31,7 +31,13 @@ locks in. MoorDyn-F (OpenFAST v5 moordyn_driver, dtM 5e-4 s) gives a mid-span A/
   the same first-mode frequency and shape: at U 0.21 m/s both lock into mode 1 with the same
   mid-span A/D (within 3 %) and frequency; at U 0.30 m/s the string jumps to mode 2 (mid-span
   A/D below 0.15) while the cable, whose bending raises f2/f1 to about 3.15, stays in mode 1
-  (mid-span A/D above 0.6).
+  (mid-span A/D above 0.6);
+* at U 0.24 m/s, where two lock-in branches coexist, a start from rest with the spread seed settles
+  in mode 2 as MoorDyn-C v2.7.2 does (x/L 0.24 A/D within 3 % of its 0.574, frequency within one
+  bin of 0.527 Hz), and VIVphaseSeed zero in mode 1 as MoorDyn-F in OpenFAST v5.0.0 (whose phases
+  start at zero) does (mid-span A/D within 1 % of its 0.699, frequency within one bin of 0.353 Hz);
+* the lift at t = 0, 2 m from the deck's End A, has MoorDyn's direction and size on an EI = 0 line
+  and a finite-EI cable, whether the deck writes the line fairlead first or anchor first.
 
 usage: test_viv_lockin.py --exe <cabledyn> --output <dir>
 """
@@ -54,6 +60,10 @@ from cabledyn import read_output  # noqa: E402
 
 FAILURES: list[str] = []
 MD_AD, MD_F = 0.662, 0.293  # MoorDyn-F reference, mid span
+# U 0.24 m/s, where two lock-in branches coexist (VALIDATION.md L2-VIV): MoorDyn-C v2.7.2 (seeded
+# phases, RK2, dtM 5e-4 s) settles on mode 2 (quarter span x/L = 0.24: A/D 0.574 at 0.527 Hz);
+# MoorDyn-F v2.3.8 (OpenFAST v5.0.0, phases from zero) on mode 1 (mid span: 0.699 at 0.353 Hz)
+MDC_Q24, MDC_F24, MDF_M24, MDF_F24 = 0.574, 0.527, 0.699, 0.353
 D = 0.1
 
 
@@ -151,22 +161,46 @@ def lift_std(path: Path) -> np.ndarray:
     return data[:, cols].std(axis=0)
 
 
-def response(path: Path) -> tuple[float, float, float]:
-    """Mid A/D, mid peak frequency, quarter A/D over 60-120 s."""
+def response(path: Path, mid_name: str = "L1N25PZ", qtr_name: str = "L1N12PZ",
+             peak_of: str = "mid") -> tuple[float, float, float]:
+    """Mid A/D, peak frequency (of the mid or the quarter channel), quarter A/D over 60-120 s."""
     hist = read_output(path)
     t = hist.column(hist.channels[0])
     mask = t >= 60.0
-    mid = hist.column("L1N25PZ")[mask]
-    qtr = hist.column("L1N12PZ")[mask]
+    mid = hist.column(mid_name)[mask]
+    qtr = hist.column(qtr_name)[mask]
     mid = mid - mid.mean()
+    qtr = qtr - qtr.mean()
+    sig = mid if peak_of == "mid" else qtr
     dt = float(np.median(np.diff(t[mask])))
-    freq = np.fft.rfftfreq(mid.size, dt)
-    power = np.abs(np.fft.rfft(mid * np.hanning(mid.size)))
+    freq = np.fft.rfftfreq(sig.size, dt)
+    power = np.abs(np.fft.rfft(sig * np.hanning(sig.size)))
     return (
         math.sqrt(2.0) * float(mid.std()) / D,
         float(freq[1:][np.argmax(power[1:])]),
-        math.sqrt(2.0) * float((qtr - qtr.mean()).std()) / D,
+        math.sqrt(2.0) * float(qtr.std()) / D,
     )
+
+
+def anchor_first(text: str) -> str:
+    """The deck with End A on the fixed point at x = 0 and End B on the coupled point at x = 100 m:
+    the same line, which the reader turns around (it runs from its fairlead)."""
+    a, b = "1    Coupled      0.0     0.0   -50.0", "2    Fixed        100.0   0.0   -50.0"
+    assert a in text and b in text
+    return text.replace(a, "1    Fixed        0.0     0.0   -50.0").replace(b, "2    Coupled      100.0   0.0   -50.0")
+
+
+def first_lift(path: Path, x: float, from_end_b: bool) -> float:
+    """Cross-flow (z) lift at t = 0 at the node nearest x of a V file (public node order)."""
+    lines = path.read_text().splitlines()
+    head = next(i for i, line in enumerate(lines) if line.startswith("Time"))
+    names = lines[head].split("\t")
+    row = np.array([float(v) for v in lines[head + 1].split()])
+    cols = [j for j, name in enumerate(names) if name.endswith("LiftZ(N)")]
+    xs = np.linspace(0.0, 100.0, len(cols))
+    if from_end_b:
+        xs = xs[::-1]
+    return float(row[cols[int(np.argmin(np.abs(xs - x)))]])
 
 
 def main() -> int:
@@ -178,7 +212,7 @@ def main() -> int:
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    for u in (0.15, 0.21, 0.30):
+    for u in (0.15, 0.21, 0.24, 0.30):
         (out / f"current_{u}.dat").write_text(CURRENT.format(u=u), encoding="utf-8", newline="\n")
     # the stiff cable and its equal-frequency string (neutrally buoyant: no sag stiffening)
     beta = math.pi**2 * 5.0e7 / (5.0e4 * 100.0**2)
@@ -195,6 +229,18 @@ def main() -> int:
     for u in (0.21, 0.30):
         runs.append((("stiff", u), f"viv_stiff_u{u}", deck(0.01, waterkin=f"current_{u}.dat", **stiff)))
         runs.append((("string", u), f"viv_string_u{u}", deck(0.01, waterkin=f"current_{u}.dat", **string)))
+    # the two-branch band at U 0.24 m/s, probed at MoorDyn's mid (deck node 25: N26 here) and
+    # x/L = 0.24 (node 12: N13): the spread seed, and VIVphaseSeed zero
+    band = deck(0.01, waterkin="current_0.24.dat").replace("L1N25PZ\nL1N12PZ", "L1N26PZ\nL1N13PZ")
+    runs.append(("band", "viv_band_u0.24", band))
+    runs.append(("band_zero", "viv_band_u0.24_zero",
+                 band.replace("0.25     VIVrmsWindow", "0.25     VIVrmsWindow\nzero     VIVphaseSeed")))
+    # the lift at t = 0 has MoorDyn's direction whichever end the deck writes first
+    for ei, tag in ((0.0, "ei0"), (1.0, "fei")):
+        start = deck(0.01, ei=ei, waterkin="current_0.24.dat", outputs="V").replace("120.0    TMax",
+                                                                                  "0.02     TMax")
+        runs.append((("t0", tag, False), f"viv_t0_{tag}", start))
+        runs.append((("t0", tag, True), f"viv_t0_{tag}_anchor_first", anchor_first(start)))
     for _, name, text in runs:
         (out / f"{name}.dat").write_text(text, encoding="utf-8", newline="\n")
     env = dict(os.environ, OMP_NUM_THREADS="1")
@@ -212,7 +258,13 @@ def main() -> int:
             print(proc.stdout[-2000:], proc.stderr[-2000:])
             check(False, f"{name}: the run completes (exit {proc.returncode})")
             continue
-        results[key] = response(out / f"{name}.out")
+        if isinstance(key, tuple) and key[0] == "t0":
+            results[key] = first_lift(out / f"{name}.Line1.V.out", 2.0, key[2])
+        elif key in ("band", "band_zero"):
+            results[key] = response(out / f"{name}.out", "L1N26PZ", "L1N13PZ",
+                                    "qtr" if key == "band" else "mid")
+        else:
+            results[key] = response(out / f"{name}.out")
     if 0.01 in results:
         ad, f, qtr = results[0.01]
         check(abs(ad - MD_AD) <= 0.03 * MD_AD,
@@ -267,6 +319,22 @@ def main() -> int:
         check(a1 > 0.6 and a0 < 0.15,
               f"U 0.30 m/s: stiff cable stays in mode 1 (mid-span A/D {a1:.3f}), the string jumps to "
               f"mode 2 (mid-span A/D {a0:.3f})")
+    if "band" in results:
+        mid, f, qtr = results["band"]
+        check(abs(qtr - MDC_Q24) <= 0.03 * MDC_Q24 and abs(f - MDC_F24) <= 1.0 / 60.0 and mid < 0.1,
+              f"U 0.24 m/s, seeded phases: mode 2, x/L 0.24 A/D {qtr:.3f} at {f:.3f} Hz, mid span {mid:.3f}; "
+              f"MoorDyn-C {MDC_Q24} at {MDC_F24} Hz (within 3 % and one bin)")
+    if "band_zero" in results:
+        mid, f, _ = results["band_zero"]
+        check(abs(mid - MDF_M24) <= 0.01 * MDF_M24 and abs(f - MDF_F24) <= 1.0 / 60.0,
+              f"U 0.24 m/s, VIVphaseSeed zero: mode 1, mid-span A/D {mid:.3f} at {f:.3f} Hz; MoorDyn-F "
+              f"{MDF_M24} at {MDF_F24} Hz (within 1 % and one bin)")
+    for tag, what in (("ei0", "EI = 0 line"), ("fei", "finite-EI cable")):
+        a, b = results.get(("t0", tag, False)), results.get(("t0", tag, True))
+        if a is not None and b is not None:
+            check(a > 4.0 and abs(b - a) <= 1.0e-9 * abs(a),
+                  f"{what}: lift at t = 0, 2 m from the deck's End A, {a:+.4f} N fairlead first and "
+                  f"{b:+.4f} N anchor first (MoorDyn's +z, the same on both)")
     print(f"{len(FAILURES)} failure(s)")
     return 1 if FAILURES else 0
 

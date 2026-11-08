@@ -73,8 +73,10 @@ PROGRAM test_hermite_viv
   CALL require(es == CD_HCDYN_OK .AND. model%has_viv, 'VIV installs again: '//TRIM(em))
   CALL CD_HermiteCable_Dyn_Set_Waves(model, 1.0_wp, 8.0_wp, 0.0_wp, 100.0_wp, GACC, es, em)
   CALL require(es /= CD_HCDYN_OK, 'an internal wave family is refused on a VIV cable')
-  CALL require(ABS(model%viv_phi(NE + 1)) < TINY(1.0_wp) .AND. &
-               ABS(model%viv_phi(1) - 2.0_wp*PI) < 1.0e-12_wp, 'the phases start at 2 pi i/N from End A')
+  ! MoorDyn's 2 pi i/N from End A, half a turn on: the material tangent runs from End B to End A
+  CALL require(ABS(model%viv_phi(NE + 1) - PI) < 1.0e-12_wp .AND. &
+               ABS(model%viv_phi(NE) - (2.0_wp*PI/REAL(NE, wp) + PI)) < 1.0e-12_wp .AND. &
+               ABS(model%viv_phi(1) - PI) < 1.0e-12_wp, 'the phases start at 2 pi i/N + pi from End A')
   ! a drag reconfigured after VIV carries the lift scale and shedding diameter with it
   BLOCK
     REAL(wp) :: k0(NE), dn0(NE + 1), hd(NE), hn(NE), ht(NE)

@@ -670,6 +670,9 @@ MODULE CableDyn_DeckDriver
     ! of the synchronisation model (OPTION VIVrmsWindow, s); 0 = MoorDyn's 500 time steps of
     ! the deck dtM (or of the run's step when the deck has none).
     REAL(wp) :: viv_rms_window = CD_ZERO
+    ! Initial VIV phases (OPTION VIVphaseSeed): spread over a turn along the line, 2 pi i/N
+    ! (MoorDyn-C), or zero at every node (.TRUE.: the start of MoorDyn-F in OpenFAST v5.0.0).
+    LOGICAL :: viv_phase_zero = .FALSE.
     ! WaveKinMod-1 elevation history reduced once to its real Fourier components.
     ! These feed the same arbitrary-component Airy kernel used by reference-matched
     ! irregular seas; wave_eta_mean carries the zero-frequency waterline offset.
@@ -3468,27 +3471,22 @@ CONTAINS
     ! coupled host may step the cable at a dt adjusted from the deck dtM.
     IF (PRESENT(install_viv)) THEN
       IF (install_viv .AND. ANY(viv_cl > CD_ZERO)) THEN
-        ! MoorDyn's phase seed counts the deck nodes from the deck's End A: a line the reader turned
-        ! around, or a mesh the static solve refined, takes it node by node (CD_Deck_VIV_Phase_Seed)
-        IF (ln%ends_swapped .OR. ALLOCATED(cable%deck_node)) THEN
-          BLOCK
-            REAL(wp) :: seed(cable%line%nn)
-            IF (ALLOCATED(cable%deck_node)) THEN
-              CALL CD_Deck_VIV_Phase_Seed(cable%line%l0, ln%ends_swapped, seed, deck_map=cable%deck_node)
-            ELSE
-              CALL CD_Deck_VIV_Phase_Seed(cable%line%l0, ln%ends_swapped, seed)
-            END IF
-            CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
-                                             MERGE(opts%viv_rms_window, &
-                                                   REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
-                                                   opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed)
-          END BLOCK
-        ELSE
+        ! MoorDyn's phase seed counts the deck nodes from the deck's End A, with its node tangent
+        ! towards the deck's End B; CD_Deck_VIV_Phase_Seed takes it node by node to the model's
+        ! nodes and tangent (a line the reader turned around, a mesh the static solve refined)
+        BLOCK
+          REAL(wp) :: seed(cable%line%nn)
+          IF (ALLOCATED(cable%deck_node)) THEN
+            CALL CD_Deck_VIV_Phase_Seed(cable%line%l0, ln%ends_swapped, seed, deck_map=cable%deck_node, &
+                                        zero=opts%viv_phase_zero)
+          ELSE
+            CALL CD_Deck_VIV_Phase_Seed(cable%line%l0, ln%ends_swapped, seed, zero=opts%viv_phase_zero)
+          END IF
           CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
                                            MERGE(opts%viv_rms_window, &
                                                  REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
-                                                 opts%viv_rms_window > CD_ZERO), es, em)
-        END IF
+                                                 opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed)
+        END BLOCK
         IF (es /= CD_HCDYN_OK) THEN
           CALL fail(ErrStat, ErrMsg, 'finite-EI cable VIV wiring failed: '//TRIM(em)); RETURN
         END IF
@@ -10379,17 +10377,14 @@ CONTAINS
         END IF
         tw = opts%viv_rms_window
         IF (.NOT. (tw > CD_ZERO) .AND. opts%has_dtm) tw = REAL(CD_VIV_NM, wp)*opts%dtM
-        IF (ln%ends_swapped) THEN
-          ! MoorDyn counts the phase seed from the deck's End A, which the reader turned around
-          BLOCK
-            REAL(wp) :: seed(model%n_dof/3)
-            CALL CD_Deck_VIV_Phase_Seed(model%l0, .TRUE., seed)
-            CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
-                                  phase_seed=seed)
-          END BLOCK
-        ELSE
-          CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em)
-        END IF
+        ! MoorDyn counts the phase seed from the deck's End A, with its node tangent towards the
+        ! deck's End B: CD_Deck_VIV_Phase_Seed takes it to the model's nodes and tangent
+        BLOCK
+          REAL(wp) :: seed(model%n_dof/3)
+          CALL CD_Deck_VIV_Phase_Seed(model%l0, ln%ends_swapped, seed, zero=opts%viv_phase_zero)
+          CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
+                                phase_seed=seed)
+        END BLOCK
         IF (es == CD_MODEL_OK) CALL CD_Recompute_Model_Acceleration(model, es, em)
         IF (es /= CD_MODEL_OK) THEN
           ErrStat = CD_DECKDRV_BADINPUT
@@ -17154,6 +17149,15 @@ CONTAINS
       opts%has_max_strain = ErrStat == 0
     CASE ('vivrmswindow', 'viv_rms_window')
       CALL rd(val, opts%viv_rms_window, ErrStat, ErrMsg)
+    CASE ('vivphaseseed', 'viv_phase_seed')
+      SELECT CASE (TRIM(to_lower(val)))
+      CASE ('spread')
+        opts%viv_phase_zero = .FALSE.
+      CASE ('zero')
+        opts%viv_phase_zero = .TRUE.
+      CASE DEFAULT
+        CALL fail(ErrStat, ErrMsg, 'OPTION VIVphaseSeed "'//TRIM(val)//'" must be spread or zero')
+      END SELECT
     CASE ('streamorder', 'stream_order')
       CALL rd(val, x1, ErrStat, ErrMsg)
       IF (ErrStat == 0) THEN
@@ -38444,18 +38448,25 @@ CONTAINS
     is_id = .NOT. (ABS(cable%frame_s) > CD_ZERO .OR. ABS(cable%frame_c - CD_ONE) > CD_ZERO)
   END FUNCTION cable_frame_is_identity
 
-  PURE SUBROUTINE CD_Deck_VIV_Phase_Seed(l0, swapped, seed, deck_map)
-    !! MoorDyn's VIV phase seed i/N (phase 2 pi i/N at node i = 0 .. N counted from the deck's
-    !! End A, N the deck's segment count) at every node of a line, in the model's internal node
-    !! order (node 1 = End B; element e of length l0(e) joins nodes e and e + 1). swapped: the
-    !! reader turned the line's ends around, so the deck's End A is the model's End B. deck_map:
-    !! the mesh node (public order, End A = 1) of each deck node, on a mesh the static solve
-    !! refined; a node it added takes the seed interpolated linearly in unstretched arc length
-    !! between its two deck nodes. Without deck_map the mesh is the deck's.
+  PURE SUBROUTINE CD_Deck_VIV_Phase_Seed(l0, swapped, seed, deck_map, zero)
+    !! The initial VIV phase of every node of a line, as a fraction of a turn, in the model's
+    !! internal node order (node 1 = End B; element e of length l0(e) joins nodes e and e + 1).
+    !!
+    !! MoorDyn starts node i = 0 .. N (counted from the deck's End A, N the deck's segment count)
+    !! at the phase 2 pi i/N (MoorDyn-C; zero: at 0, where MoorDyn-F in OpenFAST v5.0.0 starts),
+    !! with the node tangent from the deck's End A to its End B. The model's node tangent runs from
+    !! its End B to its End A: against MoorDyn's on a line the reader keeps in the deck order,
+    !! which turns the lift and the cross-flow axis of the synchronisation model around. That
+    !! motion is MoorDyn's from the phases half a turn on, which the seed adds there; a line the
+    !! reader turned around (swapped: the deck's End A is the model's End B) has MoorDyn's tangent.
+    !! deck_map: the mesh node (public order, End A = 1) of each deck node, on a mesh the static
+    !! solve refined; a node it added takes the seed interpolated linearly in unstretched arc
+    !! length between its two deck nodes. Without deck_map the mesh is the deck's.
     REAL(wp), INTENT(IN) :: l0(:)
     LOGICAL, INTENT(IN) :: swapped
     REAL(wp), INTENT(OUT) :: seed(:)
     INTEGER, INTENT(IN), OPTIONAL :: deck_map(:)
+    LOGICAL, INTENT(IN), OPTIONAL :: zero
     REAL(wp) :: s(SIZE(l0) + 1), f
     INTEGER :: ne, nn, p, j, nd
     ne = SIZE(l0)
@@ -38479,6 +38490,10 @@ CONTAINS
         f = REAL(p - 1, wp)/REAL(ne, wp)
       END IF
       IF (swapped) f = CD_ONE - f
+      IF (PRESENT(zero)) THEN
+        IF (zero) f = CD_ZERO
+      END IF
+      IF (.NOT. swapped) f = MODULO(f + 0.5_wp, CD_ONE)
       seed(nn + 1 - p) = f
     END DO
   END SUBROUTINE CD_Deck_VIV_Phase_Seed

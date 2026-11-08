@@ -3886,9 +3886,12 @@ CONTAINS
     !! rho is the water density. t_window is the averaging time of the running cross-flow mean
     !! squares [s]; 0 selects MoorDyn's 500 time steps, latched at the first step. Every
     !! interior free node next to a cl > 0 element carries a lift and a shedding phase; the
-    !! phases start spread over [0, 2 pi) along the line (MoorDyn-C: 2 pi i/N at node i from
-    !! End A; phase_seed, per node, gives i/N instead, for a line whose deck End A the reader
-    !! turned around), the mean squares at 0.
+    !! phases start spread over [0, 2 pi) along the line, the mean squares at 0. MoorDyn-C starts
+    !! node i from End A at 2 pi i/N with the node tangent from End A to End B; the model's
+    !! tangent (from node nd - 1 to nd + 1) runs from End B to End A, which turns the lift and the
+    !! cross-flow axis around, so the same motion starts here from those phases plus pi.
+    !! phase_seed, per node, gives the start as a fraction of a turn instead
+    !! (CD_Deck_VIV_Phase_Seed: a line whose deck End A the reader turned around, a refined mesh).
     !! An all-zero cl leaves the model without VIV. The mesh must be the single chain the
     !! line builder makes (element e joins nodes e and e+1). The caller recomputes the
     !! acceleration if the lift should enter the initial state (CD_Recompute_Model_Acceleration).
@@ -3993,8 +3996,9 @@ CONTAINS
       model%viv_df(nd) = model%viv_df(nd)/wsum
       model%viv_dn(nd) = model%viv_dn(nd)/wsum
       ! MoorDyn: phi_i = 2 pi i/N at node i = 0..N counted from End A; the model numbers its
-      ! nodes from End B, so node nd is MoorDyn's node n_nodes - nd
-      model%viv_phi(nd) = CD_VIV_TWO_PI*REAL(n_nodes - nd, wp)/REAL(n_elem, wp)
+      ! nodes from End B, so node nd is MoorDyn's node n_nodes - nd, and its tangent runs the other
+      ! way (half a turn on)
+      model%viv_phi(nd) = CD_VIV_Wrap_Phase(CD_VIV_TWO_PI*(REAL(n_nodes - nd, wp)/REAL(n_elem, wp) + 0.5_wp))
       IF (PRESENT(phase_seed)) model%viv_phi(nd) = CD_VIV_TWO_PI*phase_seed(nd)
     END DO
     model%viv_phi_rollback = model%viv_phi

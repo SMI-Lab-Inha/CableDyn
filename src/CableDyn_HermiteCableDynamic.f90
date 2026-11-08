@@ -1050,9 +1050,12 @@ CONTAINS
     !! per element the lift coefficient cl (0: no lift) and the band df/cf, and the running-RMS
     !! averaging time t_window (s; 0 takes 500 steps of the first step). The lift acts on the
     !! wetted Gauss points of every element with cl > 0, its phase lives on the nodes of those
-    !! elements; the phases start at 2 pi i/N with node i counted from End A (the model's last
-    !! node), as MoorDyn's; phase_seed, per node, gives i/N instead (a line whose deck End A the
-    !! reader turned around, or a mesh refined from the deck's). The phase follows the drag's
+    !! elements; MoorDyn starts node i counted from End A (the model's last node) at 2 pi i/N
+    !! with its tangent from End A to End B, and the material tangent here runs from End B to
+    !! End A, which turns the lift and the cross-flow axis around: the phases start at 2 pi i/N
+    !! plus pi, the same motion. phase_seed, per node, gives the start as a fraction of a turn
+    !! instead (CD_Deck_VIV_Phase_Seed: a line whose deck End A the reader turned around, a mesh
+    !! refined from the deck's). The phase follows the drag's
     !! current and a held host field (which
     !! carries any waves); the internal wave families (Set_Waves) are refused with VIV. The
     !! committed acceleration is refreshed with the new lift; if that fails, the previous VIV
@@ -1144,7 +1147,7 @@ CONTAINS
       model%viv_node(k) = .TRUE.
       model%viv_cf(k) = model%viv_cf(k)/wsum
       model%viv_df(k) = model%viv_df(k)/wsum
-      model%viv_phi(k) = CD_VIV_TWO_PI*REAL(nn - k, wp)/REAL(ne, wp)
+      model%viv_phi(k) = CD_VIV_Wrap_Phase(CD_VIV_TWO_PI*(REAL(nn - k, wp)/REAL(ne, wp) + 0.5_wp))
       IF (PRESENT(phase_seed)) model%viv_phi(k) = CD_VIV_TWO_PI*phase_seed(k)
     END DO
     CALL viv_drag_terms(model)
