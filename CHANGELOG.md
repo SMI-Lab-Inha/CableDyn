@@ -18,12 +18,6 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
-- A `waves` or `current` row overridden by a later one no longer leaves a bound behind: an Airy
-  or stream `waves` row after a JONSWAP row was refused for that row's gamma above 1e3, and a
-  `profile` current row after a `uniform` one for that row's velocity above 1e3 m/s. The Python
-  deck validator now applies the magnitude bounds of these rows (wave height and period, JONSWAP
-  gamma, current speed and depth) to the row in effect only, as the solver does, instead of
-  refusing a deck for an out-of-range row a later row overrides.
 
 ## [0.4.1] - 2026-11-08
 
