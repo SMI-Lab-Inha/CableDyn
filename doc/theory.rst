@@ -1860,7 +1860,13 @@ mesh-sequenced route described below first and this route as its fallback):
    whose continuation or polish fails, or whose folded element the local refinement does not
    resolve, repeats the route on a mesh refined until the elements are at most
    half the bending length (when the continuation on that mesh runs out of its iteration
-   budget, on the coarser powers of two down to twice the deck mesh); a rotationally
+   budget, on the coarser powers of two down to twice the deck mesh) and, when that fails too,
+   on the deck mesh with each element split only into the power of two (at most 16) that brings
+   it to half the bending length. A uniform refinement keeps a graded deck's ratios and refines
+   its short elements with the long ones: a lazy wave meshed 4 m at its sag bend, 0.9 m over its
+   buoyant section and 10 m at its touchdown failed in an oblique current on the deck mesh and on
+   the 8x refined one, and solves on the mesh refined element by element (within 1.2e-3 of its
+   fairlead tension of the same deck on 2 m elements); a rotationally
    restrained end whose boundary layer :math:`\sqrt{EI/T}` is shorter than its element, which
    shows as a polish that does not converge or a compression at that end, repeats it on a mesh
    graded geometrically toward that end. The refined mesh is reported.

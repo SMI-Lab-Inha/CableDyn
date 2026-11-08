@@ -1913,6 +1913,8 @@ CONTAINS
     LOGICAL :: tensile_error
     CHARACTER(1024) :: note_text
     CHARACTER(1024) :: limit_text
+    ! the still-water diagnosis read its compression on elements longer than half the bending length
+    LOGICAL :: coarse_sw
     ! The geometric cause of a line with no admissible planar equilibrium clear of the seabed:
     ! too long to hang as a catenary (net-heavy), or weightless (no catenary exists at all).
     LOGICAL :: weightless_line
@@ -3115,8 +3117,13 @@ CONTAINS
       ! route diagnostics below are bounded and would cut it. A line already compressed
       ! without the current is named before that: the current starts from that layout.
       limit_text = ''
-      IF (opts%has_current) CALL still_water_compression(limit_text)
-      IF (LEN_TRIM(limit_text) > 0) THEN
+      IF (opts%has_current) CALL still_water_compression(limit_text, coarse_sw)
+      IF (LEN_TRIM(limit_text) > 0 .AND. coarse_sw) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'finite-EI cable static solve failed in the current: '// &
+                        TRIM(limit_text)//'. Catenary-continuation route: '// &
+                        TRIM(short_message(primary_msg, 360))//'. Mesh-sequenced route: '// &
+                        TRIM(short_message(sequence_msg, 360))); RETURN
+      ELSE IF (LEN_TRIM(limit_text) > 0) THEN
         CALL fail_solve(ErrStat, ErrMsg, 'finite-EI cable has no static equilibrium in the current: '// &
                         TRIM(limit_text)//'. Catenary-continuation route: '// &
                         TRIM(short_message(primary_msg, 360))//'. Mesh-sequenced route: '// &
@@ -4234,18 +4241,25 @@ CONTAINS
       END IF
     END SUBROUTINE audit_refined_state
 
-    SUBROUTINE still_water_compression(text)
+    SUBROUTINE still_water_compression(text, coarse)
       !! On a failed solve in a current: whether the same line without the current is
       !! already in axial compression (an element-mean force below -1e-3 of the peak
       !! tension, held only by the bending stiffness). Returns the diagnosis, or blank.
+      !! coarse: the still-water state is on elements longer than half the bending length
+      !! (EI/|w|)^(1/3), where the element-mean axial force of a stiff line oscillates and can
+      !! read a compression the line does not carry; the diagnosis then says so instead of
+      !! naming the layout (a lazy wave on 4 m and 10 m elements beside 0.9 m ones read
+      !! -2.8 kN where it carries about +1 kN, and solves on a mesh that resolves its bends).
       CHARACTER(*), INTENT(OUT) :: text
+      LOGICAL, INTENT(OUT) :: coarse
       TYPE(DeckOptions) :: opts_sw
       TYPE(CD_HFMF_ModuleType) :: sw_cable
       INTEGER :: sw_node, esw, e_min, wios
-      REAL(wp) :: t_min, t_max, s_min
+      REAL(wp) :: t_min, t_max, s_min, need
       CHARACTER(1024) :: emw
       CHARACTER(2048) :: sw_note
       text = ''
+      coarse = .FALSE.
       opts_sw = opts
       opts_sw%has_current = .FALSE.
       opts_sw%has_current_profile = .FALSE.
@@ -4265,10 +4279,21 @@ CONTAINS
         CALL CD_HermiteCable_Mean_Axial_Extremes(sw_cable%line%l0, sw_cable%line%EA, sw_cable%line%q, t_min, &
                                                  t_max, e_min, s_min, esw, emw)
         IF (esw == CD_HCSTAT_OK .AND. t_min < -1.0e-3_wp*t_max) THEN
-          WRITE (text, '(A,ES10.3,A,F10.2,A,ES10.3,A)', IOSTAT=wios) 'the line is already in axial '// &
-            'compression without the current (element mean ', t_min, ' N at unstretched arc length ', &
-            s_min, ' m from the anchor, peak tension ', t_max, ' N), a layout that only its bending '// &
-            'stiffness holds; the current pushes that layout further and no equilibrium follows it'
+          need = bending_refine_need(sw_cable%line%l0, sw_cable%line%EI, sw_cable%line%w)
+          coarse = need > CD_ONE
+          IF (coarse) THEN
+            WRITE (text, '(A,ES10.3,A,F10.2,A,ES10.3,A,F6.2,A)', IOSTAT=wios) 'without the current the line '// &
+              'reads an element-mean axial compression (', t_min, ' N at unstretched arc length ', s_min, &
+              ' m from the anchor, peak tension ', t_max, ' N) on elements up to ', need, ' times half the '// &
+              'bending length (EI/|w|)^(1/3), where the element-mean axial force of a stiff line oscillates '// &
+              'and can read a compression the line does not carry; refine those elements (NumSegs) to half '// &
+              'the bending length or less'
+          ELSE
+            WRITE (text, '(A,ES10.3,A,F10.2,A,ES10.3,A)', IOSTAT=wios) 'the line is already in axial '// &
+              'compression without the current (element mean ', t_min, ' N at unstretched arc length ', &
+              s_min, ' m from the anchor, peak tension ', t_max, ' N), a layout that only its bending '// &
+              'stiffness holds; the current pushes that layout further and no equilibrium follows it'
+          END IF
         END IF
       END IF
       CALL CD_HFMF_End(sw_cable)
@@ -7043,9 +7068,119 @@ CONTAINS
     END SUBROUTINE graded_restart
 
     RECURSIVE SUBROUTINE refined_restart()
-      !! Repeat the route on a uniformly refined mesh (power of two, capped) when the
-      !! deck mesh is longer than half the bending length (EI/|w|)^(1/3) somewhere. The
+      !! Repeat the route on a refined mesh when the deck mesh is longer than half the bending
+      !! length (EI/|w|)^(1/3) somewhere: uniformly refined (uniform_restart), then, when that
+      !! fails, with each element split only as far as the rule asks of it (rule_restart). The
       !! refined equilibrium is returned in the *_am outputs like an adaptive refinement.
+      CALL uniform_restart()
+      IF (ErrStat /= CD_HCSTAT_OK .AND. .NOT. inadmissible) CALL rule_restart()
+    END SUBROUTINE refined_restart
+
+    RECURSIVE SUBROUTINE rule_restart()
+      !! Repeat the route on the deck mesh with every element split into the power of two
+      !! (capped) that brings it to half its bending length (EI/|w|)^(1/3), the elements that
+      !! meet the rule kept. A uniform refinement by the largest factor keeps the deck's grading
+      !! and refines the short elements beside the long ones as well: on a lazy wave meshed
+      !! 4 m / 0.9 m / 10 m (the buoyant section refined, the sag bend and the touchdown
+      !! coarse) the long elements' axial force oscillated into compression beside the short
+      !! ones, the 8x refined mesh stalled at the start of its stiffness continuation, and the
+      !! deck failed in an oblique current although the same layout solves on 2 m elements.
+      !! Not run when the rule asks the same factor of every element (the uniform refinement
+      !! was that mesh) or more than REFINED_MAX_ELEMENTS elements.
+      INTEGER, PARAMETER :: REFINED_MAX_ELEMENTS = 4096
+      REAL(wp), ALLOCATABLE :: l0_g(:), ea_g(:), ei_g(:), w_g(:), diam_g(:), dry_g(:)
+      INTEGER, ALLOCATABLE :: fixed_g(:), parent_g(:), node_of(:), split(:)
+      LOGICAL, ALLOCATABLE :: fixed_map(:, :)
+      LOGICAL :: planar, inadm_g, walked_sub
+      INTEGER :: k, j, n_g, nf, es_g, slot, piece
+      REAL(wp) :: need
+      CHARACTER(1024) :: em_g
+      IF (PRESENT(refined_pass) .OR. fold) RETURN
+      ALLOCATE (split(ne))
+      split = 1
+      DO k = 1, ne
+        IF (.NOT. (ei(k) > CD_ZERO .AND. ABS(w(k)) > CD_ZERO)) CYCLE
+        need = l0(k)/(0.5_wp*(ei(k)/ABS(w(k)))**(CD_ONE/3.0_wp))
+        DO WHILE (REAL(split(k), wp) < need .AND. split(k) < CD_HC_REFINE_CAP)
+          split(k) = 2*split(k)
+        END DO
+      END DO
+      IF (ALL(split == 1)) RETURN
+      IF (ALL(split == MAXVAL(split))) RETURN
+      n_g = SUM(split)
+      IF (n_g > REFINED_MAX_ELEMENTS) RETURN
+      ALLOCATE (l0_g(n_g), parent_g(n_g), node_of(nnode))
+      j = 0
+      node_of(1) = 1
+      DO k = 1, ne
+        DO piece = 1, split(k)
+          j = j + 1
+          l0_g(j) = l0(k)/REAL(split(k), wp)
+          parent_g(j) = k
+        END DO
+        node_of(k + 1) = j + 1
+      END DO
+      ALLOCATE (ea_g(n_g), ei_g(n_g), w_g(n_g), diam_g(n_g), dry_g(n_g))
+      ea_g = ea(parent_g); ei_g = ei(parent_g); w_g = w(parent_g)
+      diam_g = diam(parent_g); dry_g = dry_b(parent_g)
+      ! Held DOFs: the deck nodes keep theirs; inserted nodes take the out-of-plane reduction
+      ! (y, m_y) when the deck holds it on every node (as graded_restart).
+      ALLOCATE (fixed_map(6, nnode))
+      fixed_map = .FALSE.
+      DO k = 1, SIZE(fixed_dofs)
+        fixed_map(MOD(fixed_dofs(k) - 1, 6) + 1, (fixed_dofs(k) - 1)/6 + 1) = .TRUE.
+      END DO
+      planar = ALL(fixed_map(2, :))
+      ALLOCATE (fixed_g(6*(n_g + 1)))
+      nf = 0
+      k = 1
+      DO j = 1, n_g + 1
+        IF (k <= nnode) THEN
+          IF (node_of(k) == j) THEN
+            DO slot = 1, 6
+              IF (fixed_map(slot, k)) THEN
+                nf = nf + 1; fixed_g(nf) = 6*(j - 1) + slot
+              END IF
+            END DO
+            k = k + 1
+            CYCLE
+          END IF
+        END IF
+        IF (planar) THEN
+          nf = nf + 1; fixed_g(nf) = 6*(j - 1) + 2
+          nf = nf + 1; fixed_g(nf) = 6*(j - 1) + 5
+        END IF
+      END DO
+      IF (PRESENT(bathymetry)) THEN
+        CALL hermite_static_primary(anchor, fairlead, l0_g, ea_g, ei_g, w_g, diam_g, dry_g, fixed_g(1:nf), &
+                                    contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0, endconn_mode, &
+                                    opts, static_tol, l0_am, ea_am, ei_am, w_am, q_static, curv, fixed_am, &
+                                    applied_scale, diag, res, iters, es_g, em_g, inadm_g, tolerance_note, &
+                                    kink_refined, bathymetry=bathymetry, refined_pass=.TRUE., cur_obj=cur_obj, &
+                                    walked=walked_sub, fold_walk=fold)
+      ELSE
+        CALL hermite_static_primary(anchor, fairlead, l0_g, ea_g, ei_g, w_g, diam_g, dry_g, fixed_g(1:nf), &
+                                    contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0, endconn_mode, &
+                                    opts, static_tol, l0_am, ea_am, ei_am, w_am, q_static, curv, fixed_am, &
+                                    applied_scale, diag, res, iters, es_g, em_g, inadm_g, tolerance_note, &
+                                    kink_refined, refined_pass=.TRUE., cur_obj=cur_obj, walked=walked_sub, &
+                                    fold_walk=fold)
+      END IF
+      IF (es_g == CD_HCSTAT_OK) THEN
+        ErrStat = CD_HCSTAT_OK
+        ErrMsg = ''
+        kink_refined = .TRUE.
+        inadmissible = .FALSE.
+        IF (PRESENT(walked)) walked = walked_sub
+      ELSE
+        ErrMsg = TRIM(ErrMsg)//'; on the mesh refined element by element to the bending length: '//TRIM(em_g)
+        IF (inadm_g) inadmissible = .TRUE.
+      END IF
+    END SUBROUTINE rule_restart
+
+    RECURSIVE SUBROUTINE uniform_restart()
+      !! The route on a uniformly refined mesh (power of two, capped) when the deck mesh is
+      !! longer than half the bending length somewhere (refined_restart).
       REAL(wp), ALLOCATABLE :: l0_r(:), q_r(:), q_ref_r(:), ea_r(:), ei_r(:), w_r(:), diam_r(:), dry_r(:)
       INTEGER, ALLOCATABLE :: fixed_r(:)
       INTEGER :: scale, scale_need, k, es_r, parent
@@ -7111,7 +7246,7 @@ CONTAINS
         IF (INDEX(em_r, 'iteration budget') == 0) RETURN
         scale = scale/2
       END DO
-    END SUBROUTINE refined_restart
+    END SUBROUTINE uniform_restart
 
     SUBROUTINE polish_with_floor()
       !! Polish at the tight tolerance; accept the coupled static tolerance when the

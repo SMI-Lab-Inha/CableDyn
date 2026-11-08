@@ -1788,6 +1788,21 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 900
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # A lazy wave on a strongly graded deck mesh (4 m and 10 m elements beside a refined buoyant
+  # section) in oblique and cross currents: the route is repeated on the mesh refined element by
+  # element to the bending length, and agrees with the deck on 2 m elements. PROCESSORS reserves
+  # the four driver processes the test runs at once.
+  add_test(NAME graded_mesh_statics
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_graded_mesh_statics.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --data ${CMAKE_CURRENT_SOURCE_DIR}/tests/data
+                   --output ${CMAKE_BINARY_DIR}/graded_mesh_statics)
+  set_tests_properties(graded_mesh_statics PROPERTIES
+    LABELS "python;hermite;static;robustness;attachments"
+    PROCESSORS 4
+    TIMEOUT 1500
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # Finite-EI generalised-alpha blends: force-blend dtM convergence under prescribed surge.
   add_test(NAME hermite_force_blend_dt
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hermite_force_blend_dt.py
