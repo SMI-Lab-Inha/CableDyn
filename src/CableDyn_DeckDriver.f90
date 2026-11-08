@@ -10682,15 +10682,17 @@ CONTAINS
     !! strain whose t = 0 kernel force equals its static tension, so the dynamic state starts in
     !! the static equilibrium. Tmean0 is not a state input (the fixed-end geometry and Tmax0 set
     !! the mean tension); a disagreement beyond 1 % is reported on the console.
-    !! The static solve uses secant EAs, iterated to the rest curve. A single-section line, taut
-    !! and of nearly uniform tension, takes one secant from the curve at its mean strain (the
-    !! strain the taut geometry fixes). On a composite line the tension varies along a sagging
-    !! Syrope section, so each Syrope element takes its own secant, from the curve's strain at the
-    !! element's tension: every element then starts on its rest curve, its slow strain at rest
-    !! (one secant per section would leave the elements away from the mean off the curve, and
-    !! their slow strains would settle the line after the start). The tension, which the chains'
-    !! weight and the geometry largely fix, keeps this update a contraction where a strain update
-    !! can overshoot.
+    !! The static solve uses secant EAs, iterated to the rest curve. The tension varies along a
+    !! Syrope section (a sagging section of a composite line, or the weight of a single long or
+    !! inclined taut rope), so each Syrope element takes its own secant, from the curve's strain
+    !! at the element's tension: every element then starts on its rest curve, its slow strain at
+    !! rest (one secant per section, from the curve at the mean strain, left the elements away
+    !! from the mean off the curve, and their slow strains settled the line after the start: a
+    !! 991 m single-section rope at rest moved its fairlead tension by 3.4e-4 in 1 s). A
+    !! single-section line starts the iteration from the secant at the strain its taut geometry
+    !! fixes, a composite line from the curve's alpha. The tension, which the chains' weight and
+    !! the geometry largely fix, keeps this update a contraction where a strain update can
+    !! overshoot.
     TYPE(DeckLineType), INTENT(IN) :: types(:)
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
@@ -10709,9 +10711,11 @@ CONTAINS
     TYPE(CD_SyropeType), ALLOCATABLE :: tds(:), stype(:)
     INTEGER, ALLOCATABLE :: sec_type(:), sec_nseg(:), el_sec(:)
     LOGICAL, ALLOCATABLE :: sec_syr(:), sis(:)
-    REAL(wp), ALLOCATABLE :: sec_el(:), cand_el(:), sslow(:), stmax(:), t_static(:), eps_prev(:), t_prev(:)
-    REAL(wp) :: anchor(3), fairlead(3), eps0, t_ref, total_l0, t_hist, eps_bar, t_mean_static
-    REAL(wp) :: eps_e, change, secant, cand, eps_now, d_eps, d_t, eps_r, t_r, acc
+    REAL(wp), ALLOCATABLE :: sec_el(:), cand_el(:), sslow(:), stmax(:), t_static(:), eps_prev(:), t_prev(:), &
+                             step_prev(:)
+    REAL(wp) :: anchor(3), fairlead(3), eps0, t_ref, total_l0, t_hist, t_mean_static
+    REAL(wp) :: eps_e, change, secant, eps_now, d_eps, d_t, eps_r, t_r, acc
+    LOGICAL :: have_acc
     INTEGER :: ne, e, es, n_owc, iter, nsec, j, k, isec, st
     LOGICAL :: composite, converged
     CHARACTER(1024) :: em
@@ -10784,10 +10788,11 @@ CONTAINS
     t_hist = CD_ZERO
     IF (ln%has_syrope_ic) t_hist = ln%syrope_tmax0
     ALLOCATE (sec_el(ne), cand_el(ne), stype(ne), sis(ne), sslow(ne), stmax(ne), t_static(ne), eps_prev(ne), &
-              t_prev(ne))
+              t_prev(ne), step_prev(ne))
     sis = .FALSE.
     sslow = CD_ZERO
     stmax = CD_ZERO
+    step_prev = CD_ZERO
     sec_el = CD_ZERO
     DO e = 1, ne
       IF (.NOT. sec_syr(el_sec(e))) CYCLE
@@ -10837,7 +10842,7 @@ CONTAINS
     ! current's deflection). The solve just made belongs to the current secants, which are kept
     ! once the candidates agree with them.
     converged = .FALSE.
-    DO iter = 1, MERGE(MAX_ITER_COMPOSITE, 6, composite)
+    DO iter = 1, MAX_ITER_COMPOSITE
       CALL init_one_model(ln, sections, types, points, opts, model, ErrStat, ErrMsg, bathymetry=bathymetry, &
                           syrope_secant=sec_el)
       IF (ErrStat /= CD_DECKDRV_OK) EXIT
@@ -10848,7 +10853,7 @@ CONTAINS
         ErrMsg = em
       END IF
       IF (ErrStat /= CD_MODEL_OK) EXIT
-      IF (composite) THEN
+      BLOCK
         ! each Syrope element: the curve's strain at its tension
         change = CD_ZERO
         cand_el = sec_el
@@ -10889,19 +10894,40 @@ CONTAINS
           ! equilibrium. It is taken only beyond the tension update in the same direction and
           ! at most 100 times as far, else the tension update stands.
           eps_now = t_static(e)/sec_el(e)
+          have_acc = .FALSE.
           IF (iter > 1) THEN
             d_eps = eps_now - eps_prev(e)
             d_t = t_static(e) - t_prev(e)
-            IF (d_eps*d_t < CD_ZERO) THEN
+            ! (a response of fixed strain, d_eps = 0, as of a taut rope whose geometry sets its
+            ! strain, crosses the curve at that strain)
+            IF (d_eps*d_t < CD_ZERO .OR. (.NOT. (ABS(d_eps) > CD_ZERO) .AND. ABS(d_t) > CD_ZERO)) THEN
               CALL response_root(isec, eps_now, t_static(e), d_eps, d_t, eps_r, t_r)
               IF (eps_r > CD_ZERO .AND. t_r > CD_ZERO) THEN
                 acc = t_r/eps_r
-                IF ((acc - sec_el(e))*(cand_el(e) - sec_el(e)) > CD_ZERO .AND. &
-                    ABS(acc - sec_el(e)) >= ABS(cand_el(e) - sec_el(e)) .AND. &
-                    ABS(acc - sec_el(e)) <= 100.0_wp*ABS(cand_el(e) - sec_el(e))) cand_el(e) = acc
+                have_acc = .TRUE.
               END IF
             END IF
+            ! A tension update that reverses the previous one and is not below half of it
+            ! overshot the crossing without contracting: on a curve concave enough (the secant
+            ! far above the tangent) it would cycle. The secant step then stands where it lies
+            ! between the secant and the update, else half the update. Any other update (in the
+            ! same direction as the last, as on a convex curve, or an alternating one that
+            ! contracts) keeps the rule below.
+            IF ((cand_el(e) - sec_el(e))*step_prev(e) < CD_ZERO .AND. &
+                ABS(cand_el(e) - sec_el(e)) >= 0.5_wp*ABS(step_prev(e))) THEN
+              IF (have_acc .AND. (acc - sec_el(e))*(cand_el(e) - sec_el(e)) > CD_ZERO .AND. &
+                  ABS(acc - sec_el(e)) < ABS(cand_el(e) - sec_el(e))) THEN
+                cand_el(e) = acc
+              ELSE
+                cand_el(e) = sec_el(e) + 0.5_wp*(cand_el(e) - sec_el(e))
+              END IF
+            ELSE IF (have_acc .AND. d_eps*d_t < CD_ZERO) THEN
+              IF ((acc - sec_el(e))*(cand_el(e) - sec_el(e)) > CD_ZERO .AND. &
+                  ABS(acc - sec_el(e)) >= ABS(cand_el(e) - sec_el(e)) .AND. &
+                  ABS(acc - sec_el(e)) <= 100.0_wp*ABS(cand_el(e) - sec_el(e))) cand_el(e) = acc
+            END IF
           END IF
+          step_prev(e) = cand_el(e) - sec_el(e)
           eps_prev(e) = eps_now
           t_prev(e) = t_static(e)
         END DO
@@ -10910,15 +10936,7 @@ CONTAINS
           EXIT
         END IF
         sec_el = cand_el
-      ELSE
-        eps_bar = SUM(l0*t_static)/(secant*SUM(l0))
-        CALL rest_tension(1, eps_bar, t_ref, es, em)
-        IF (es /= CD_SYROPE_OK .OR. .NOT. (t_ref > CD_ZERO .AND. eps_bar > CD_ZERO)) EXIT
-        cand = t_ref/eps_bar
-        IF (ABS(cand - secant) <= 1.0e-10_wp*secant) EXIT
-        secant = cand
-        sec_el = secant
-      END IF
+      END BLOCK
     END DO
     IF (ErrStat /= CD_MODEL_OK) THEN
       CALL release_syrope(.TRUE.)
@@ -10926,8 +10944,8 @@ CONTAINS
       IF (ErrStat /= CD_DECKDRV_BADINPUT) ErrStat = CD_DECKDRV_SOLVEFAIL
       RETURN
     END IF
-    IF (composite) THEN
-      ! a composite line starts only from converged secants, every Syrope element on its
+    BLOCK
+      ! a Syrope line starts only from converged secants, every Syrope element on its
       ! curve's table
       IF (.NOT. converged) THEN
         CALL release_syrope(.TRUE.)
@@ -10951,7 +10969,7 @@ CONTAINS
           RETURN
         END IF
       END DO
-    END IF
+    END BLOCK
     ! Per Syrope element: the running maximum is the history's (raised to the element's static
     ! tension where that exceeds it, i.e. the element sits on the OWC; without SYROPE IC
     ! every element is a virgin rope at its own static tension), and the slow strain
