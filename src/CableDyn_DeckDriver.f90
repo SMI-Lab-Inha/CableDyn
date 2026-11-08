@@ -22589,8 +22589,9 @@ CONTAINS
       ! A cable in the monolithic step is restored and stepped again from the same start at every
       ! coupling iteration; within-step tangent reuse (OPTIONS modified_newton) made each of those
       ! steps dearer than a full Newton one (mixed_body_rods_points.dat: 7.0 s against 5.8 s), so
-      ! such a cable keeps full Newton; the other solvers of the deck keep the option.
-      IF (mb%cab_imp(c) .AND. opts%dynamic_modified_newton) THEN
+      ! such a cable keeps full Newton; the other solvers of the deck keep the option. The
+      ! staggered march (bodyScheme staggered) steps each cable once per step and keeps it.
+      IF (mb%implicit .AND. mb%cab_imp(c) .AND. opts%dynamic_modified_newton) THEN
         CALL CD_HFMF_Set_ModifiedNewton(mb%cables(c), .FALSE., ErrStat, ErrMsg)
         IF (ErrStat /= CD_HFMF_OK) GOTO 900
       END IF
