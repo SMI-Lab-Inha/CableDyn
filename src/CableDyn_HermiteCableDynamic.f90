@@ -373,9 +373,14 @@ MODULE CableDyn_HermiteCableDynamic
     REAL(wp), ALLOCATABLE :: ws_elem_f(:, :, :), ws_stash_q(:), ws_stash_v(:)
     REAL(wp) :: ws_stash_t = CD_ZERO
     LOGICAL :: ws_stash_ok = .FALSE.
-    ! Whether the last step's predictor went on to a tangent: only then does the next predictor
-    ! keep its element tangents (a step that converges at its predictor assembles none).
-    LOGICAL :: ws_stash_hint = .TRUE.
+    ! The Newton solves of the last committed step (1 before the first): the predictor, which the
+    ! first iteration's tangent follows at the same state, keeps its element tangents when the
+    ! last step made a solve (did not converge at its predictor).
+    INTEGER :: ws_stash_solves = 1
+    ! The tangents the last committed step's line searches assembled at their accepted trial: the
+    ! full step of a full-Newton line search keeps its element tangents while the step has
+    ! assembled fewer.
+    INTEGER :: ws_stash_ls = 0
     REAL(wp) :: alpha_m = CD_ZERO, alpha_f = CD_ZERO, beta = CD_ZERO, gamma = CD_ZERO
     ! Optional Morison drag (transverse + tangential quadratic drag on the submerged cable, relative
     ! to a uniform fluid velocity). Off by default; wired in via CD_HermiteCable_Dyn_Set_Drag.
@@ -857,7 +862,8 @@ CONTAINS
               model%ws_elem_Kv(12, 12, ne), model%ws_elem_Kwave(12, 12, ne), model%ws_elem_Kheld(12, 12, ne), &
               model%ws_elem_es(ne), model%ws_elem_em(ne), model%ws_stash_q(ndof), model%ws_stash_v(ndof))
     model%ws_stash_ok = .FALSE.
-    model%ws_stash_hint = .TRUE.
+    model%ws_stash_solves = 1
+    model%ws_stash_ls = 0
 
     ! state: at-rest seed, v = 0, consistent a0
     ALLOCATE (model%q(ndof), model%v(ndof), model%a(ndof))
@@ -3707,6 +3713,7 @@ CONTAINS
 
     INTEGER :: ndof, it, es, i, np, ip, ls, gdof, nsolve_step, axial_element, axial_es
     INTEGER :: axial_worst_element, iv, attempt, n_attempt
+    INTEGER :: n_ls_tan  ! tangents the step's line searches assembled at their accepted trial
     REAL(wp) :: c_a, c_v, c_a2, am, af, bt, gm, rnorm, fscale, rnt, lambda, chosen, lam_ok, cw, t_alpha, dth_lin
     REAL(wp) :: e_bal, e_ma, tors_theta_new, tors_mt_new
     REAL(wp) :: axial_qe(12), axial_min
@@ -4103,18 +4110,18 @@ CONTAINS
     ! A carried factor starts the iteration already factored (and stale).
     mn_factored = xs_active
     mn_fresh = .FALSE.
+    n_ls_tan = 0
     ! The first iteration assembles its tangent at the predictor unless a carried factor is
     ! reused, so the predictor evaluation keeps its element tangents for it (stash), unless the
-    ! last step converged at its predictor (which then needed none). Either way every result
-    ! is the same: only where the element kernels run changes.
+    ! last step converged at its predictor (made no solve). Either way every result is the same:
+    ! only where the element kernels run changes.
     CALL eval_res(model%ws_qk, .FALSE., rnorm, es, em2, &
-                  stash=model%ws_stash_hint .AND. .NOT. ((mn .OR. xs_active) .AND. mn_factored))
+                  stash=nsolve_step < model%ws_stash_solves .AND. .NOT. ((mn .OR. xs_active) .AND. mn_factored))
     IF (es /= CD_HCDYN_OK) THEN
       ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2)
       IF (attempt < n_attempt) CYCLE predict
       RETURN
     END IF
-    model%ws_stash_hint = .NOT. (rnorm < MERGE(XS_TOL_FACTOR*tol, tol, xs_active))
 
     DO it = 1, max_iter
       IF (PRESENT(residual_history)) residual_history(it) = rnorm
@@ -4287,7 +4294,11 @@ CONTAINS
           model%ws_qtrial(iv) = model%ws_qk(iv) + lambda*model%ws_dq(iv)
         END DO
         IF (model%tw_active) CALL tw_trial(lambda)
-        CALL eval_res(model%ws_qtrial, .TRUE., rnt, es, em2)
+        ! The full step of a full-Newton iteration keeps its element tangents while this step's
+        ! line searches have assembled fewer tangents than the last step's (an accepted trial that
+        ! iterates again assembles its tangent below, at this state).
+        CALL eval_res(model%ws_qtrial, .TRUE., rnt, es, em2, &
+                      stash=ls == 1 .AND. .NOT. (mn .OR. xs_active) .AND. n_ls_tan < model%ws_stash_ls)
         IF (es == CD_HCDYN_OK) THEN
           lam_ok = lambda                                 ! loop shrinks lambda, so this ends smallest
           IF (rnt < rnorm) THEN
@@ -4313,7 +4324,7 @@ CONTAINS
             END IF
             IF (prof_enabled) CALL SYSTEM_CLOCK(pc0)
             CALL assemble_residual(model, model%ws_qa, model%ws_va, t_alpha, .FALSE., .TRUE., es, em2, &
-                                   endconn_direction_eval=step_endconn_eval)
+                                   endconn_direction_eval=step_endconn_eval, use_stash=.TRUE.)
             IF (prof_enabled) THEN
               CALL SYSTEM_CLOCK(pc1)
               prof_n_tan = prof_n_tan + 1
@@ -4321,6 +4332,7 @@ CONTAINS
             END IF
             IF (es == CD_HCDYN_OK) THEN
               have_tangent = .TRUE.
+              n_ls_tan = n_ls_tan + 1
               chosen = lambda; EXIT
             END IF
           END IF
@@ -4440,6 +4452,8 @@ CONTAINS
     END DO
     EXIT predict
     END DO predict
+    model%ws_stash_solves = nsolve_step
+    model%ws_stash_ls = n_ls_tan
 
     ! Force blend: the committed force F_{n+1} enters every later step through af F_n, so the
     ! accepted state is taken one Newton correction beyond the tolerance, with the factor of
