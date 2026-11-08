@@ -67,6 +67,21 @@ ROPES = [
 ]
 
 
+# A short vertical rope on a strongly concave curve, T = 1e6 eps^0.4: its secant lies far above
+# its tangent, so the per-element tension update overshoots the curve's crossing and reverses
+# (it cycled between about 108 and 560 kN and the statics failed); the reversed updates take
+# the secant step, and the rope must start at rest in its weight's equilibrium.
+CONCAVE = dict(alpha="1.0e8", beta="15.9308", bas="2.28256e10", bad="4.81630e5", a="0.0 0.0 -29.6",
+               b="0.0 0.0 -50.0", length="20.0", n=2, depth="50.0", kbot="1.0e5")
+
+
+def concave_table() -> str:
+    rows = ["Strain Tension", "(-) (N)"]
+    for k in range(61):
+        rows.append("%r %r" % (0.001 * k, 1.0e6 * (0.001 * k) ** 0.4))
+    return "\n".join(rows) + "\n"
+
+
 def owc_table() -> str:
     rows = ["Strain Tension", "(-) (N)"]
     for k in range(30):
@@ -83,13 +98,17 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     (out / "syrope_settings.dat").write_text(SETTINGS, encoding="utf-8", newline="\n")
     (out / "syrope_owc.dat").write_text(owc_table(), encoding="utf-8", newline="\n")
+    (out / "syrope_settings_concave.dat").write_text(SETTINGS.replace("syrope_owc.dat", "syrope_owc_concave.dat"),
+                                                     encoding="utf-8", newline="\n")
+    (out / "syrope_owc_concave.dat").write_text(concave_table(), encoding="utf-8", newline="\n")
     env = dict(os.environ)
     env.setdefault("OPENBLAS_NUM_THREADS", "1")
     failures = []
-    for k, rope in enumerate(ROPES):
-        name = "rope_%d" % k
+    cases = [("rope_%d" % k, DECK.format(**rope)) for k, rope in enumerate(ROPES)]
+    cases.append(("rope_concave", DECK.format(**CONCAVE).replace("syrope_settings.dat", "syrope_settings_concave.dat")))
+    for name, text in cases:
         deck = out / (name + ".dat")
-        deck.write_text(DECK.format(**rope), encoding="utf-8", newline="\n")
+        deck.write_text(text, encoding="utf-8", newline="\n")
         root = out / name
         p = subprocess.run([a.exe, str(deck), str(root)], capture_output=True, text=True, env=env, cwd=str(out))
         if p.returncode != 0:
@@ -102,7 +121,7 @@ def main() -> int:
             drift = max(abs(v[j] - t0) for v in vals) / abs(t0)
             if drift > 1.0e-6:
                 failures.append("%s: %s drifts by %.3e of its static value" % (name, ch, drift))
-    print("taut Syrope ropes at rest: %d ropes, %d failures" % (len(ROPES), len(failures)))
+    print("taut Syrope ropes at rest: %d ropes, %d failures" % (len(cases), len(failures)))
     for f in failures:
         print("FAIL:", f)
     return 1 if failures else 0
