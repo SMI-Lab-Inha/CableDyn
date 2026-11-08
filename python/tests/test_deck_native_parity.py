@@ -2573,3 +2573,143 @@ def test_static_check_clock_gets_the_native_verdict(text, accepted, tmp_path):
     )
     assert python_accepts == accepted
     assert (completed.returncode == 0) == accepted, completed.stdout + completed.stderr
+
+
+# --------------------------------------------------------------- deck rules of the native routes
+
+_STIFF = "stiff 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0\n"
+_CHAIN_TYPE = "chain 0.252 390.0 1.674e9 -1.0 0.0 1.37 0.64 1.0 0.0\n"
+# _HELD with a second (finite-EI) line type and its line 1 split between both types
+_SPLIT_LINE = _edit(
+    _HELD,
+    (_CHAIN_TYPE, _CHAIN_TYPE + _STIFF),
+    ("1 chain 410.0 41\n", "1 chain 200.0 20\n1 stiff 210.0 21\n"),
+)
+# ... and a second, EI=0 line beside it (the standalone mixed route)
+_SPLIT_LINE_AND_CHAIN = _edit(
+    _SPLIT_LINE,
+    (
+        "2 Coupled 0.0 0.0 0.0 0 0 0 0\n",
+        "2 Coupled 0.0 0.0 0.0 0 0 0 0\n3 Fixed -400.0 0.0 -50.0 0 0 0 0\n",
+    ),
+    ("1 2 1 -\n", "1 2 1 -\n2 2 3 -\n"),
+    ("1 stiff 210.0 21\n", "1 stiff 210.0 21\n2 chain 410.0 41\n"),
+)
+# a finite-EI line on its own
+_FINITE = _edit(_HELD, (_CHAIN_TYPE, _CHAIN_TYPE.replace(" 0.0 1.37", " 1.0e4 1.37")))
+# a finite-EI line from Coupled point 2 beside an EI=0 line from Coupled point 4 (the mixed route)
+_FINITE_AND_CHAIN = _edit(
+    _HELD,
+    (_CHAIN_TYPE, _CHAIN_TYPE + _STIFF),
+    (
+        "2 Coupled 0.0 0.0 0.0 0 0 0 0\n",
+        "2 Coupled 0.0 0.0 0.0 0 0 0 0\n"
+        "3 Fixed -400.0 0.0 -50.0 0 0 0 0\n4 Coupled -10.0 0.0 0.0 0 0 0 0\n",
+    ),
+    ("1 2 1 -\n", "1 2 1 -\n2 4 3 -\n"),
+    ("1 chain 410.0 41\n", "1 stiff 410.0 41\n2 chain 410.0 41\n"),
+)
+# the submerged Rigid6 buoy of the examples with finite-EI legs (the standalone multibody march)
+_BUOY_FINITE_LEGS = _example(
+    "rigid6_buoy.dat",
+    ("5.0e7      -1.0       0.0 ", "5.0e7      -1.0       1.0e3 "),
+    ("60.0                 TMax", "0.04                 TMax"),
+)
+_BUOY_FORCES = _edit(
+    _BUOY_FINITE_LEGS,
+    ('"Point1px"\n"Point1pz"\n"Point2pz"\n"Point3pz"\n', '"Point1Fx"\n"Point2Fz"\n'),
+)
+
+
+_NO_SEABED_TDP = _edit(_STATIC, ("50.0 WtrDpth\n", ""), ("FairTen1\n", "FairTen1\nTDP1s\n"))
+_FINITE_POINT_POSITIONS = _edit(_FINITE, ("FairTen1\n", "FairTen1\nPoint2px\nPoint1pz\nPoint2Fz\n"))
+_MIXED_CABLE_POINT = _edit(_FINITE_AND_CHAIN, ("FairTen1\n", "FairTen1\nPoint2px\n"))
+_MIXED_CHAIN_POINT = _edit(_FINITE_AND_CHAIN, ("FairTen1\n", "FairTen1\nPoint4px\nPoint2Fz\n"))
+# (name, deck, caller_driven, message): None accepts
+_ROUTE_RULE_CASES = [
+    # TDP<L> channels need a seabed on the standalone routes (a host gives the depth)
+    ("tdp-no-seabed", _NO_SEABED_TDP, False, r"TDP channels of line 1 need a seabed"),
+    ("tdp-no-seabed-host", _NO_SEABED_TDP, True, None),
+    ("tdp-seabed", _edit(_STATIC, ("FairTen1\n", "FairTen1\nTDP1s\n")), False, None),
+    # a finite-EI line needs mass, on every route
+    ("finite-mass-0", _edit(_FINITE, (" 390.0 ", " 0 ")), False, r"MassDenInAir must be > 0"),
+    ("finite-mass-neg", _edit(_FINITE, (" 390.0 ", " -1 ")), False, r"MassDenInAir must be > 0"),
+    (
+        "finite-mass-neg-host",
+        _edit(_FINITE, (" 390.0 ", " -1 ")),
+        True,
+        r"MassDenInAir must be > 0",
+    ),
+    ("finite-mass-small", _edit(_FINITE, (" 390.0 ", " 1e-3 ")), False, None),
+    # the standalone finite-EI march takes lines whose sections all have a finite EI
+    ("split-line", _SPLIT_LINE, False, r"LINE 1 combines EI=0 and finite-EI sections"),
+    (
+        "split-line-static",
+        _static_check(_SPLIT_LINE, keep_dtm=True),
+        False,
+        r"LINE 1 combines EI=0 and finite-EI sections",
+    ),
+    ("split-line-host", _SPLIT_LINE, True, None),
+    ("split-line-mixed-route", _SPLIT_LINE_AND_CHAIN, False, None),
+    # Point<P>p channels are read from the EI=0 system: on the aggregate a Coupled point of
+    # finite-EI lines alone has no live entry there, and a multibody march with no EI=0 line
+    # has no system at all
+    ("finite-point-channels", _FINITE_POINT_POSITIONS, False, None),
+    (
+        "finite-cable-point-host",
+        _edit(_FINITE, ("FairTen1\n", "FairTen1\nPoint2px\n")),
+        True,
+        r"targets a cable-only point",
+    ),
+    (
+        "finite-fixed-point-host",
+        _edit(_FINITE, ("FairTen1\n", "FairTen1\nPoint1pz\nPoint2Fz\n")),
+        True,
+        None,
+    ),
+    ("mixed-cable-point", _MIXED_CABLE_POINT, False, r"targets a cable-only point"),
+    ("mixed-chain-point", _MIXED_CHAIN_POINT, False, None),
+    ("buoy-finite-legs-forces", _BUOY_FORCES, False, None),
+    (
+        "buoy-finite-legs-positions",
+        _BUOY_FINITE_LEGS,
+        False,
+        r"Point channels need an EI=0 mooring system",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "caller_driven", "message"),
+    [pytest.param(*case[1:], id=case[0]) for case in _ROUTE_RULE_CASES],
+)
+def test_route_rules_of_the_native_reader(text, caller_driven, message):
+    if message is None:
+        DeckFile.from_text(text, caller_driven=caller_driven)
+    else:
+        _rejects(text, message, caller_driven=caller_driven)
+
+
+@pytest.mark.skipif(
+    not _PARITY_DRIVER or not Path(_PARITY_DRIVER).is_file(),
+    reason="set CABLEDYN_TEST_DRIVER to a built native driver to run the route-rule parity",
+)
+@pytest.mark.parametrize(
+    "text",
+    [pytest.param(case[1], id=case[0]) for case in _ROUTE_RULE_CASES if not case[2]],
+)
+def test_route_rules_match_the_driver(text, tmp_path):
+    deck = tmp_path / "rules.dat"
+    deck.write_text(text, encoding="utf-8")
+    completed = subprocess.run(
+        [_PARITY_DRIVER, str(deck), str(tmp_path / "rules")],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        cwd=tmp_path,
+        timeout=600,
+        env={**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"},
+        check=False,
+    )
+    assert completed.returncode in (0, 1), completed.stderr[-600:]
+    assert _accepted(deck) == (completed.returncode == 0), completed.stderr[-600:]

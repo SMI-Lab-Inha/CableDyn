@@ -4792,6 +4792,17 @@ class DeckFile:
                 f"{self._label}: a mixed-topology deck (bodies, rods, dynamic points, EI=0 and "
                 "finite-EI lines together) does not support motionFile coupling"
             )
+        if deck_driver_route and not needs_multibody:
+            # native CD_Run_Deck_Driver: the standalone finite-EI march builds every line as a
+            # finite-EI cable, so a line's sections all need a finite EI
+            for line_id, section_types in section_types_by_line.items():
+                finite_sections = [line_type_meta[name][3] > 0.0 for name in section_types]
+                if any(finite_sections) and not all(finite_sections):
+                    raise DeckFormatError(
+                        f"{self._label}: LINE {line_id} combines EI=0 and finite-EI sections, "
+                        "which the standalone finite-EI march does not take: give every section "
+                        "of the line a finite EI"
+                    )
         if deck_driver_route and needs_multibody and (has_dtm or has_tmax):
             self._check_multibody_cable_ends(
                 finite_line_ids,
@@ -4927,6 +4938,13 @@ class DeckFile:
             if diameter <= 0.0:
                 raise DeckFormatError(
                     f"{self._label}: used LINE TYPE {line_type!r} requires Diam > 0"
+                )
+            # native finalize_checks: a finite-EI line carries its mass in the bending dynamics
+            # and its weight in the statics
+            if ei > 0.0 and mass <= 0.0:
+                raise DeckFormatError(
+                    f"{self._label}: used LINE TYPE {line_type!r}: MassDenInAir must be > 0 on a "
+                    "finite-EI line"
                 )
             damping, coefficient = line_type_scales[line_type]
             if (
@@ -5100,6 +5118,27 @@ class DeckFile:
         # Native check_channel: ids are digit strings compared by value, so leading zeros
         # are accepted (FairTen01 is FairTen1).
         stiffened_lines = {str(_native_int(row.tokens[0])) for row in self._rows("STIFFENERS")}
+        # Point<P>p channels are read from the EI=0 system's point store. The aggregate
+        # (a host route, or the standalone mixed deck) has no live entry for a Coupled/Vessel
+        # point that only finite-EI lines reach (native validate_aggregate_point_channels);
+        # the standalone multibody march has no system without an EI=0 line.
+        finite_line_set = set(finite_line_ids)
+        cable_points = {
+            end
+            for line_id, ends in normalized_line_endpoints.items()
+            if line_id in finite_line_set
+            for end in ends
+        }
+        chain_points = {
+            end
+            for line_id, ends in normalized_line_endpoints.items()
+            if line_id not in finite_line_set
+            for end in ends
+        }
+        aggregate_points = self.caller_driven or mixed_route
+        multibody_without_system = (
+            deck_driver_route and needs_multibody and line_ids and all(finite_lines)
+        )
         for channel in channels:
             lowered = channel.lower()
             endpoint_channel = re.fullmatch(
@@ -5108,9 +5147,9 @@ class DeckFile:
                 lowered,
             )
             # Con<P>p{x,y,z} is the native alias of Point<P>p{x,y,z} (MoorDyn v1 spelling).
-            point_channel = re.fullmatch(r"(?:point|con)([0-9]+)p([xyz])", lowered)
+            position_channel = re.fullmatch(r"(?:point|con)([0-9]+)p([xyz])", lowered)
             # Point<P>F{x,y,z,H}: resultant of the line-end forces on the point.
-            point_channel = point_channel or re.fullmatch(r"point([0-9]+)f([xyzh])", lowered)
+            point_channel = position_channel or re.fullmatch(r"point([0-9]+)f([xyzh])", lowered)
             # MoorDyn-F body/rod channels (native parse_object_channel, OBJ_QTY)
             body_channel = re.fullmatch(r"body([0-9]+)(?:p|r|v|rv|a|ra|f|m)[xyz]", lowered)
             rod_channel = re.fullmatch(
@@ -5179,6 +5218,23 @@ class DeckFile:
                     raise DeckFormatError(
                         f"{self._label}: OUTPUT {channel!r} references an unknown point"
                     )
+                position = position_channel is not None
+                if (
+                    position
+                    and aggregate_points
+                    and point_id in cable_points
+                    and point_id not in chain_points
+                    and point_types.get(point_id) in {"coupled", "vessel"}
+                ):
+                    raise DeckFormatError(
+                        f"{self._label}: aggregate OUTPUT {channel!r} targets a cable-only point; "
+                        "use the finite-EI cable line-node position channel instead"
+                    )
+                if position and multibody_without_system:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r}: Point channels need an EI=0 mooring "
+                        "system (a cable-endpoint Point channel is not supported)"
+                    )
                 continue
             # TDP<L>{s,x,y,z,Lay,Exc,Grd}: the touchdown point of line L (native
             # CD_Parse_TDP_Channel)
@@ -5187,6 +5243,14 @@ class DeckFile:
                 if _channel_id(touchdown_channel.group(1)) not in line_ids:
                     raise DeckFormatError(
                         f"{self._label}: OUTPUT {channel!r} references an unknown line"
+                    )
+                # native CD_Range_Setup: the touchdown point lies on a seabed, which a standalone
+                # deck states itself (a host gives its own water depth)
+                if not self.caller_driven and not (has_depth or has_bathymetry):
+                    raise DeckFormatError(
+                        f"{self._label}: TDP channels of line "
+                        f"{_channel_id(touchdown_channel.group(1))} need a seabed (WtrDpth or a "
+                        "bathymetry file)"
                     )
                 continue
             if lowered.startswith(("torq", "twist")):
