@@ -28,7 +28,7 @@ MODULE CableDyn_CAPI
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig
   USE CableDyn_Linalg, ONLY: CD_Blas_Runtime_Check, CD_LINALG_OK
   USE CableDyn_Model, ONLY: CD_ModelType, CD_Init_Model, CD_End_Model, CD_MODEL_OK, CD_MODEL_BADINPUT, &
-                            CD_MODEL_SOLVEFAIL, CD_MODEL_ALLOCFAIL
+                            CD_MODEL_SOLVEFAIL, CD_MODEL_ALLOCFAIL, CD_Update_Model_Hydro_Fields
   USE CableDyn_OpenFAST, ONLY: CD_FAST_ModuleType, CD_FAST_End, CD_FAST_Init_From_Models, &
                                CD_FAST_UpdateStates, CD_FAST_Step, CD_FAST_CalcOutput, &
                                CD_FAST_CalcOutputDerivatives, CD_FAST_GetCoupledMotion, CD_FAST_IsInitialized, &
@@ -1354,9 +1354,15 @@ CONTAINS
     INTEGER(C_INT), INTENT(OUT) :: n_iter, err_stat
     TYPE(CD_C_Handle), POINTER :: h
     REAL(C_DOUBLE), POINTER :: q_c(:), v_c(:), a_c(:)
-    LOGICAL :: conv_f, stall_f
+    LOGICAL :: conv_f, stall_f, sampled
     INTEGER :: es, nit
     CHARACTER(CD_C_MSG_LEN) :: em
+    ! the point route's drag fields before the step's current sample, put back by a step that
+    ! does not commit
+    TYPE :: held_fluid
+      REAL(wp), ALLOCATABLE :: velocity(:, :), waterline(:)
+    END TYPE held_fluid
+    TYPE(held_fluid), ALLOCATABLE :: held(:)
 
     converged = .FALSE._C_BOOL
     stalled = .FALSE._C_BOOL
@@ -1398,16 +1404,22 @@ CONTAINS
       h%v_work(1:INT(n_coupled_dof)) = REAL(v_c, wp)
       h%a_work(1:INT(n_coupled_dof)) = REAL(a_c, wp)
     END IF
-    ! the deck's steady current at the step-start node positions, held over the step
-    IF (CD_Deck_Current_Active(h%pt_current)) THEN
+    ! the deck's steady current at the step-start node positions, held over the step; a step
+    ! that does not commit (refused input or a hard failure) puts back the fields it replaced,
+    ! so the model's loads are those before the call
+    sampled = CD_Deck_Current_Active(h%pt_current)
+    IF (sampled) THEN
+      CALL hold_point_fluid()
       CALL CD_Deck_Current_Sample_System(h%pt_current, h%fast%system, CD_ZERO, es, em)
       IF (es /= CD_DECKDRV_OK) THEN
+        CALL restore_point_fluid()
         CALL set_status(h, CD_C_SOLVE_FAIL, 'CableDyn_Step: '//TRIM(em), err_stat)
         RETURN
       END IF
     END IF
     CALL CD_FAST_Step(h%fast, REAL(dt, wp), h%q_work(1:INT(n_coupled_dof)), h%v_work(1:INT(n_coupled_dof)), &
                       h%a_work(1:INT(n_coupled_dof)), conv_f, stall_f, nit, es, em)
+    IF (sampled .AND. es /= CD_FAST_OK) CALL restore_point_fluid()
     converged = LOGICAL(conv_f, C_BOOL)
     stalled = LOGICAL(stall_f, C_BOOL)
     n_iter = INT(nit, C_INT)
@@ -1416,6 +1428,34 @@ CONTAINS
     CALL clear_failed_step_flags()
 
   CONTAINS
+
+    SUBROUTINE hold_point_fluid()
+      !! Keep each line's drag fluid velocity and waterline.
+      INTEGER :: il
+      ALLOCATE (held(SIZE(h%fast%system%lines)))
+      DO il = 1, SIZE(held)
+        IF (ALLOCATED(h%fast%system%lines(il)%fluid_velocity)) &
+          held(il)%velocity = h%fast%system%lines(il)%fluid_velocity
+        IF (ALLOCATED(h%fast%system%lines(il)%drag_waterline_z)) &
+          held(il)%waterline = h%fast%system%lines(il)%drag_waterline_z
+      END DO
+    END SUBROUTINE hold_point_fluid
+
+    SUBROUTINE restore_point_fluid()
+      !! Put back the fields hold_point_fluid kept (the values the model held, so they pass the
+      !! setter's checks).
+      INTEGER :: il, es_r
+      CHARACTER(CD_C_MSG_LEN) :: em_r
+      IF (.NOT. ALLOCATED(held)) RETURN
+      DO il = 1, SIZE(held)
+        IF (ALLOCATED(held(il)%velocity) .AND. ALLOCATED(held(il)%waterline)) THEN
+          CALL CD_Update_Model_Hydro_Fields(h%fast%system%lines(il), es_r, em_r, fluid_velocity=held(il)%velocity, &
+                                            drag_waterline_z=held(il)%waterline)
+        ELSE IF (ALLOCATED(held(il)%velocity)) THEN
+          CALL CD_Update_Model_Hydro_Fields(h%fast%system%lines(il), es_r, em_r, fluid_velocity=held(il)%velocity)
+        END IF
+      END DO
+    END SUBROUTINE restore_point_fluid
 
     SUBROUTINE clear_failed_step_flags()
       !! A step that did not commit reports converged = stalled = false and n_iter = 0 on

@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import os
 import subprocess
+from ctypes import POINTER, byref, c_bool, c_double, c_int
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 try:
-    from cabledyn import _lib  # noqa: F401
+    from cabledyn._lib import _lib
 except OSError as exc:
     pytest.skip(f"CableDyn shared library not available: {exc}", allow_module_level=True)
 
@@ -75,6 +76,51 @@ def test_held_line_stays_at_rest(deck: Path) -> None:
         end = model.channels(CHANNELS)
     scale = abs(start[0])
     assert np.max(np.abs(end - start)) < 1.0e-6 * scale, (start, end)
+
+
+def test_a_refused_step_leaves_the_loads(deck: Path) -> None:
+    # After the fairlead has moved, the field the next step samples differs from the held one.
+    # A step the library refuses (dt <= 0, or a non-finite motion: both bypass the binding's own
+    # checks here) commits nothing, so the loads after it are those before it, bit for bit.
+    with CableDyn(deck) as model:
+        q0, _, _ = model.get_coupled_motion()
+        dt, n = 0.02, 20
+        for k in range(1, n + 1):
+            s = k / n
+            shape = s * s * (3.0 - 2.0 * s)  # smooth 2 m surge, at rest at both ends
+            rate = 6.0 * s * (1.0 - s) / (n * dt)
+            accel = 6.0 * (1.0 - 2.0 * s) / (n * dt) ** 2
+            q = q0.copy()
+            q[0] += 2.0 * shape
+            v = np.zeros_like(q0)
+            v[0] = 2.0 * rate
+            a = np.zeros_like(q0)
+            a[0] = 2.0 * accel
+            model.step(dt, q, v, a)
+        before = model.calc_output()
+        channels = model.channels(CHANNELS)
+        nan_q = q.copy()
+        nan_q[0] = float("nan")
+        for step_dt, motion in ((-1.0, q), (dt, nan_q)):
+            qa = np.ascontiguousarray(motion, dtype=np.float64)
+            va = np.zeros_like(qa)
+            aa = np.zeros_like(qa)
+            conv, stall, nit, status = c_bool(), c_bool(), c_int(), c_int()
+            _lib.CableDyn_Step(
+                model._handle,
+                step_dt,
+                qa.ctypes.data_as(POINTER(c_double)),
+                va.ctypes.data_as(POINTER(c_double)),
+                aa.ctypes.data_as(POINTER(c_double)),
+                qa.size,
+                byref(conv),
+                byref(stall),
+                byref(nit),
+                byref(status),
+            )
+            assert status.value != 0
+            assert np.array_equal(model.calc_output(), before)
+            assert np.array_equal(model.channels(CHANNELS), channels)
 
 
 @pytest.mark.skipif(
