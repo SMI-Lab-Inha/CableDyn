@@ -45,6 +45,11 @@ LAPACK are those of [v0.3.0](RELEASE_0_3_0.md); the OpenFAST patch set grows fro
 | OpenFAST linearisation (`validation/scripts/openfast_lin_ab.py`, IEA-15 MW UMaine twin decks and a mixed cable deck) | passed with the release `openfast.exe` (single precision): CableDyn mooring block symmetric to 7.2e-6; surge stiffness 7.721e4 N/m against MoorDyn-F's 7.716e4 N/m; fairlead blocks to 1.1e-3 and the platform 6×6 stiffness to 1.0e-3 of MoorDyn-F's quasi-static reduction; the lowest nine line-mode frequencies to 0.3 %; the mixed cable deck's point stiffness to its static solves to 1.1e-4 |
 | Wall time of the shipped examples, v0.3.0 vs dev during the release checks (GNU, same host, one thread, OpenBLAS Haswell kernel) | over the 51 decks both run, the geometric-mean ratio is 0.938 and the total falls from 213.0 to 196.5 s |
 
+**Correction (2026-11-08):** the round-off fragility row above overstates its evidence. SkylakeX
+was not run (the Windows OpenBLAS ran Haswell in its place) and the example scan could not see the
+relaxed-tolerance note. The corrected checks pass on the same examples; see
+[the v0.4.1 record](RELEASE_0_4_1.md#correction-to-the-v040-record).
+
 ## Windows executable gates
 
 Every gate of `build_static_windows.ps1` passed in the release workflow (`release-windows-static.yml`,
