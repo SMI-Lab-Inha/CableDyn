@@ -33016,7 +33016,7 @@ CONTAINS
     TYPE(ModalLineResult), INTENT(IN) :: res(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: unit, ios, li, part, nn, k, dpn, src, dst
+    INTEGER :: unit, ios, li, part, nn, k, dpn, src, dst, n_neg
     REAL(wp), ALLOCATABLE :: q_a(:), shapes_a(:, :), polar(:)
     CHARACTER(1) :: tb
     LOGICAL :: twist
@@ -33077,6 +33077,17 @@ CONTAINS
       END DO
     END DO
     CLOSE (unit)
+    ! A mode with omega^2 < 0 is an instability of the static state: it is written with a
+    ! negative frequency, and the run says so.
+    DO li = 1, SIZE(lines)
+      n_neg = 0
+      IF (ALLOCATED(res(li)%omega2) .AND. res(li)%n_found > 0) &
+        n_neg = COUNT(res(li)%omega2(1:res(li)%n_found) < CD_ZERO)
+      IF (n_neg > 0) CALL print_note(output_unit, '  ', 'line '//TRIM(int_to_str(lines(li)%id))//': '// &
+                                     TRIM(int_to_str(n_neg))//' of its modes have omega^2 < 0, so its static state '// &
+                                     'is unstable in them; '//TRIM(out_root)//'.modes.out gives each a negative '// &
+                                     'frequency, -sqrt(|omega^2|)/(2 pi), and a period of 0')
+    END DO
   END SUBROUTINE write_modes_file
 
   SUBROUTINE resolve_deck_friction(opts, ErrStat, ErrMsg)

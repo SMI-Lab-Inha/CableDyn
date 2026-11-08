@@ -18,6 +18,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- Modal analysis about an unstable static state: a mode with omega^2 < 0 was written to
+  `modes.out` as a negative frequency with period 0 without a word in the run or the manual.
+  The run now notes the line and the number of such modes, and the Outputs page documents the
+  signed values (`Omega` = -sqrt(|omega^2|), `Frequency` = `Omega`/2 pi).
 
 ## [0.4.1] - 2026-11-08
 
