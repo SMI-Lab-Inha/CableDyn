@@ -218,7 +218,8 @@ finite-EI line of the run:
        stiffener); written as 0 by the ``EI = 0`` static route
    * - ``Declination``
      - ``(deg)``
-     - axial-tangent angle from +Z (0 = up, 90 = horizontal, 180 = down)
+     - axial-tangent angle from +Z (0 = up, 90 = horizontal, 180 = down); the
+       :ref:`node tangent <outputs-node-tangent>`
    * - ``Inclination``
      - ``(deg)``
      - signed inclination below horizontal, ``Declination − 90``
@@ -608,7 +609,8 @@ Line-end channels
        availability; for an anchor that holds one line it equals ``Point<P>FH``
      - N
    * - ``FairIncl<L>`` / ``AnchIncl<L>``
-     - signed inclination of the End-A / End-B tangent below horizontal
+     - signed inclination of the End-A / End-B tangent (:ref:`node tangent <outputs-node-tangent>`)
+       below horizontal
        (``Decl − 90``: 0 = horizontal, +90 = pointing down, −90 = pointing up)
      - deg
    * - ``FairDecl<L>`` / ``AnchDecl<L>``
@@ -751,7 +753,8 @@ Line-node channels
      - node acceleration component (0 on a static run)
      - m/s²
    * - ``L<L>N<J>Dec``
-     - declination of the node's axial tangent from +Z (0 = up, 90 = horizontal, 180 = down)
+     - declination of the node's axial tangent from +Z (0 = up, 90 = horizontal, 180 = down);
+       the :ref:`node tangent <outputs-node-tangent>`
      - deg
    * - ``L<L>N<J>Azi``
      - azimuth of the node's axial tangent from +X toward +Y, in the line's range
@@ -943,6 +946,21 @@ by name, and its motion is reported by the ``Point<P>`` channels of that point.
 The axial tangent of every orientation channel points from End A toward End B (OrcaFlex's node
 ``Ez`` axis). Curvature, declination and azimuth are evaluated from the solved geometry on
 every route (static, ``EI = 0`` dynamic, finite-EI dynamic, rod and Rigid6 decks).
+
+.. _outputs-node-tangent:
+
+The tangent of a node is the line's own direction there. On a finite-EI line it is the node's
+tangent degree of freedom :math:`\mathbf r_{,s}` of the cubic-Hermite centreline, normalised: at
+an end clamped by an ``END CONNECTIONS`` ``Rigid`` row it is the direction the connection holds,
+at an end on a rotational spring the direction the spring lets the line take, and at every other
+node the tangent of the solution, continuous through the node. On an ``EI = 0`` line, whose segments are straight, it is the direction from
+the previous to the next node (from the end node to its neighbour at an end). The
+``L<L>N<J>Dec``/``Azi`` channels, ``FairDecl``/``AnchDecl``, ``FairIncl``/``AnchIncl`` and
+their aliases, the ``Declination``, ``Inclination`` and ``Azimuth`` columns of ``.static.out``,
+the ``Declination`` envelope of the range graph and the ``line tangent`` of the initialisation
+reports all take it, on every route (the standalone driver, the mixed and multibody routes, the
+C API and Python, and OpenFAST). :func:`cabledyn.line_geometry` is a post-processing estimate from
+the node positions alone.
 
 Validation of channel names
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

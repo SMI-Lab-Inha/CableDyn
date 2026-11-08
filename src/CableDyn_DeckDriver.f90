@@ -36621,12 +36621,28 @@ CONTAINS
 
   PURE REAL(wp) FUNCTION line_geom_value(kind, deck_node, nnode, q_flat, stride, signed) RESULT(v)
     !! Shared evaluator for the GEOMETRIC output channels so every writer computes them
-    !! identically. `q_flat` holds the line node positions in INTERNAL order
-    !! (anchor->fairlead) with `stride` reals per node (3 for EI=0, 6 for finite-EI).
+    !! identically. `q_flat` holds the line node states in INTERNAL order
+    !! (anchor->fairlead) with `stride` reals per node (3 for EI=0: the position; 6 for
+    !! finite-EI: the position and the tangent DOF m = dr/ds).
     !! kind: 5 curvature, 7 declination, 8 azimuth. Bend moment is NOT geometric -- it is
     !! the MATERIAL moment EI*(kappa - kappa_0), computed per path (zero on EI=0 lines;
     !! eval_cable_channel and range_sample_cable on finite-EI lines), so it is not handled here and
-    !! kind = 6 returns 0. signed: the line's azimuth range (DeckLine%azi_signed).
+    !! kind = 6 returns 0. signed: the line's azimuth range (DeckLine%azi_signed). The
+    !! declination and azimuth of a finite-EI node are those of its tangent DOF
+    !! (cable_node_tangent), of an EI = 0 node those of the difference of node positions
+    !! (deck_node_tangent).
+    INTEGER, INTENT(IN) :: kind, deck_node, nnode, stride
+    REAL(wp), INTENT(IN) :: q_flat(:)
+    LOGICAL, INTENT(IN), OPTIONAL :: signed
+    IF (stride >= 6 .AND. (kind == 7 .OR. kind == 8)) THEN
+      v = cable_tangent_angle(kind, cable_node_tangent(q_flat, stride, nnode, deck_node), signed)
+    ELSE
+      v = position_geom_value(kind, deck_node, nnode, q_flat, stride, signed)
+    END IF
+  END FUNCTION line_geom_value
+
+  PURE REAL(wp) FUNCTION position_geom_value(kind, deck_node, nnode, q_flat, stride, signed) RESULT(v)
+    !! line_geom_value from the node positions alone (line_geom_from_r), q_flat as there.
     INTEGER, INTENT(IN) :: kind, deck_node, nnode, stride
     REAL(wp), INTENT(IN) :: q_flat(:)
     LOGICAL, INTENT(IN), OPTIONAL :: signed
@@ -36638,20 +36654,55 @@ CONTAINS
       r(:, j) = q_flat(base + 1:base + 3)
     END DO
     v = line_geom_from_r(kind, r, nnode, deck_node, signed)
-  END FUNCTION line_geom_value
+  END FUNCTION position_geom_value
 
   PURE SUBROUTINE line_geom_values(kind, nnode, stride, q, signed, values)
     !! line_geom_value at every deck node of a line. q(:, n) is internal node n's state, its first
-    !! three entries the position; the deck-ordered positions are read in place, not copied.
+    !! three entries the position (and on a finite-EI line, stride 6, the next three its tangent
+    !! DOF); the deck-ordered positions are read in place, not copied.
     INTEGER, INTENT(IN) :: kind, nnode, stride
     REAL(wp), INTENT(IN) :: q(stride, nnode)
     LOGICAL, INTENT(IN) :: signed
     REAL(wp), INTENT(OUT) :: values(nnode)
     INTEGER :: j
+    IF (stride >= 6 .AND. (kind == 7 .OR. kind == 8)) THEN
+      DO j = 1, nnode
+        ! deck node j is internal node nnode + 1 - j, whose tangent runs End B -> End A
+        values(j) = cable_tangent_angle(kind, -q(4:6, nnode + 1 - j), signed)
+      END DO
+      RETURN
+    END IF
     DO j = 1, nnode
       values(j) = line_geom_from_r(kind, q(1:3, nnode:1:-1), nnode, j, signed)
     END DO
   END SUBROUTINE line_geom_values
+
+  PURE FUNCTION cable_node_tangent(q_flat, stride, nnode, deck_node) RESULT(t)
+    !! The axial tangent of a finite-EI line at a deck node, oriented End A -> End B: its tangent
+    !! DOF m = dr/ds (q_flat in internal order, anchor -> fairlead, stride reals per node, the
+    !! position then m), reversed, as the internal arc length runs from End B. It is the line's
+    !! own direction at the node: the direction an END CONNECTIONS row holds at a restrained
+    !! end, continuous through the node, where a difference of node positions is the direction
+    !! of a chord.
+    REAL(wp), INTENT(IN) :: q_flat(:)
+    INTEGER, INTENT(IN) :: stride, nnode, deck_node
+    REAL(wp) :: t(3)
+    INTEGER :: base
+    base = stride*(nnode - MIN(MAX(deck_node, 1), nnode))
+    t = -q_flat(base + 4:base + 6)
+  END FUNCTION cable_node_tangent
+
+  PURE REAL(wp) FUNCTION cable_tangent_angle(kind, t, signed) RESULT(v)
+    !! kind 7: the declination [deg] of the tangent t; 8: its azimuth, in the line's range.
+    INTEGER, INTENT(IN) :: kind
+    REAL(wp), INTENT(IN) :: t(3)
+    LOGICAL, INTENT(IN), OPTIONAL :: signed
+    IF (kind == 7) THEN
+      v = tangent_declination_deg(t)
+    ELSE
+      v = tangent_azimuth_deg(t, signed)
+    END IF
+  END FUNCTION cable_tangent_angle
 
   PURE REAL(wp) FUNCTION line_geom_from_r(kind, r, nnode, deck_node, signed) RESULT(v)
     !! Geometric channel value (kind: 5 curvature, 7 declination, 8 azimuth) from the
@@ -37222,13 +37273,10 @@ CONTAINS
     IF (cable%line%nn /= nn .OR. cable%line%ne /= ne .OR. SIZE(cable%line%q) < 6*nn) THEN
       CALL fail_solve(ErrStat, ErrMsg, 'range-graph sample: cable state not available'); RETURN
     END IF
-    DO j = 1, nn
-      inode = nn + 1 - j
-      rl%r(:, j) = cable%line%q(6*(inode - 1) + 1:6*(inode - 1) + 3)
-    END DO
     IF (rl%want_range) THEN
+      ! the declination of each node's tangent DOF (cable_node_tangent), as L<L>N<J>Dec
       DO j = 1, nn
-        rl%val(CD_RQ_DECLINATION, j) = line_geom_from_r(7, rl%r, nn, j)
+        rl%val(CD_RQ_DECLINATION, j) = cable_tangent_angle(7, cable_node_tangent(cable%line%q, 6, nn, j))
       END DO
     END IF
     DO j = 1, nn

@@ -758,7 +758,7 @@ CONTAINS
     REAL(wp), PARAMETER :: DT = 0.05_wp, EI_BARE = 1.99e4_wp
     REAL(wp) :: vFairTen2, vAnchTen2, vCurv1N5, vFairAngle1, vBendMom1N5, vTen1N10
     REAL(wp) :: vFairDecl1, vFairIncl1
-    REAL(wp) :: r1(3), r2(3), kexp, decexp
+    REAL(wp) :: kexp, decexp
     REAL(wp), ALLOCATABLE :: tension(:), exact_curvature(:)
 
     CALL write_mixed_channels_deck('agg_channels.dat')
@@ -859,10 +859,10 @@ CONTAINS
     END BLOCK
     CALL CD_HermiteCable_Dyn_Set_Output_Recovery(agg%cables(1)%line, .FALSE.)
 
-    ! (c) cable FairAngle1 == declination of the End-A one-sided tangent (deck nodes 1,2).
-    base = 6*(nnode - 1); r1 = agg%cables(1)%line%q(base + 1:base + 3)
-    base = 6*(nnode - 2); r2 = agg%cables(1)%line%q(base + 1:base + 3)
-    decexp = tangent_declination_deg(r2 - r1)
+    ! (c) cable FairAngle1 == declination of the End-A tangent: the tangent DOF of deck node 1
+    ! (internal node nnode), reversed to point End A -> End B.
+    base = 6*(nnode - 1)
+    decexp = tangent_declination_deg(-agg%cables(1)%line%q(base + 4:base + 6))
     CALL require(ABS(vFairAngle1 - decexp) <= 1.0e-9_wp + 1.0e-6_wp*ABS(decexp), 'chan:FairAngle1-matches-driver')
     CALL require(vFairDecl1 >= 0.0_wp .AND. vFairDecl1 <= 180.0_wp, 'chan:AnchDecl1-declination-range')
     CALL require(ABS(vFairIncl1 - (decexp - 90.0_wp)) <= 1.0e-9_wp + 1.0e-6_wp*ABS(decexp), &
