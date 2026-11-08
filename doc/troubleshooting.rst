@@ -568,6 +568,18 @@ but a few geometries are genuinely hard:
   sparse long section is not over-coarsened merely because the deck also contains many short
   elements. Flat-bed installed lines with an already supported anchor retain their grounded-tail
   branch homotopy and are still accepted only after exact-mesh residual and kink checks.
+- **A long, light finite-EI line that solves at one orientation and not at another.** Turning a
+  deck about the vertical (its end points, current and seabed with it) leaves the physics
+  unchanged, but not the arithmetic: the static solve of a long line from its seed is a long
+  descent whose path the last digits of the input can change. Azimuths, declinations and the
+  global frame are defined in :doc:`conventions`; check that the deck's are the intended ones
+  before anything else. A descent from the seed runs on while its residual keeps falling and
+  stops when it has stalled (:doc:`theory`, Static equilibrium), so such a line normally solves
+  at every orientation; one that still fails, or that reaches a different shape at a nearby
+  orientation, is near a branch boundary of its own geometry. Inspect the static profile
+  (``.static.out``: positions, tension and curvature along the line), compare it with the deck at
+  a refined mesh, and judge whether the shape is the one the line would take. CableDyn does not
+  choose between physically admissible branches for you.
 - **A very slack cable on a frictionless flat bed.** If its rest length exceeds the vertical-plus-
   horizontal L-shaped path between the endpoints, a smooth single-touchdown equilibrium may not
   exist: the surplus must fold or form another contact region. CableDyn rejects a resulting
