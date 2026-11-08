@@ -76,7 +76,8 @@ mean absolute percentage error of 3.11%, a mean bias of +0.47 N, a Pearson corre
 conditions, halving the nominal element length and the time step changes the mean cycle maximum
 by no more than 0.29% and 0.27%, respectively. The phase-averaged force histories had RMSEs
 of 5.93% and 2.56% of the measured force range with 0.3.0; that comparison was not rerun for
-0.4.0 (its waveform files and metrics are the 0.3.0 run's, `provenance.json`). The line's upper
+0.4.0 or 0.4.1 (its waveform files and metrics are the 0.3.0 run's, `provenance.json`). The
+0.4.1 rerun reproduces the 0.4.0 force maxima, metrics and refinement summaries byte for byte. The line's upper
 end lies 0.3 m above the still-water level, so 0.4.0's dry weight of the part above the surface
 changed the results: the RMSE from 1.583 N to 1.577 N and the mean absolute percentage
 error from 3.13% to 3.11%. The waveform CSVs carry the measured phase averages computed from the
