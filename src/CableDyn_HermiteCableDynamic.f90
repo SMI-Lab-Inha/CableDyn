@@ -7257,15 +7257,18 @@ CONTAINS
     END IF
   END FUNCTION unit_tangent
 
-  SUBROUTINE node_contact_normal(model, node, fc, ErrStat, ErrMsg)
+  SUBROUTINE node_contact_normal(model, node, fc, ErrStat, ErrMsg, clearance)
     !! Frictionless seabed contact force on a node at the committed state, exactly as
     !! assemble_contact applies it: the normal force with its damping and, in a rounded crease
     !! of the bathymetry, the elastic increment of the penalty potential (crease_contact_increment).
+    !! clearance is the node's normal distance above the height at which the contact law engages:
+    !! negative on the floor, positive above it.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: node
     REAL(wp), INTENT(OUT) :: fc(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: clearance
     REAL(wp) :: z_floor, gx, gy, xg, yg, gxg, gyg, sfac, nvec(3), gap, normal, normal_gap, vn, gate, gate_gap
     REAL(wp) :: curv_g(3), fcrease(3), kcrease(3, 3)
     INTEGER :: iz, es
@@ -7273,6 +7276,7 @@ CONTAINS
     CHARACTER(200) :: em2
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     fc = CD_ZERO
+    IF (PRESENT(clearance)) clearance = HUGE(CD_ONE)
     iz = 6*(node - 1) + 3
     IF (model%has_contact) THEN
       z_floor = model%seabed_z
@@ -7293,6 +7297,7 @@ CONTAINS
       sfac = SQRT(CD_ONE + gx*gx + gy*gy)
       nvec = [-gx, -gy, CD_ONE]/sfac
       gap = (z_floor - model%q(iz))/sfac
+      IF (PRESENT(clearance)) clearance = -gap - CD_SEABED_CONTACT_BLEND
       CALL CD_Seabed_Normal_Law(gap, model%contact_kn(node), normal, normal_gap)
       CALL CD_Seabed_Contact_Gate(gap, gate, gate_gap)
       IF (normal <= CD_ZERO .AND. gate <= CD_ZERO) RETURN
@@ -7308,6 +7313,7 @@ CONTAINS
       END IF
     ELSE IF (model%kn > CD_ZERO) THEN
       gap = model%seabed_z - model%q(iz)
+      IF (PRESENT(clearance)) clearance = -gap
       IF (gap > CD_ZERO) fc(3) = model%kn*gap*model%trib(node)
     END IF
   END SUBROUTINE node_contact_normal
@@ -7364,7 +7370,7 @@ CONTAINS
     INTEGER, PARAMETER :: ZS(4) = [3, 6, 9, 12]
     REAL(wp) :: qe(12), ve(12), ae(12), fe(12), fx(12), energy, fdry(4), kdry(4, 4)
     REAL(wp) :: dry_wl, dry_b, dry_r, hf_mid(3), l0, fca(3), fcb(3), c, a4(4), m4(4, 4)
-    REAL(wp) :: support(3), dsupport(3), nin(3)
+    REAL(wp) :: support(3), dsupport(3), nin(3), xa, xb, ca(4), cb(4)
     INTEGER :: es, k, inode
     LOGICAL :: dry
     CHARACTER(200) :: em2
@@ -7465,20 +7471,22 @@ CONTAINS
     ! Seabed contact acts at the nodes; spread over the grounded line next to each node it is the
     ! distributed floor reaction it stands for. Its consistent share is taken out of the element,
     ! so a line resting on the floor carries no fixed-end moment of its own weight. A node's
-    ! reaction is shared by the half-elements beside it whose far node is on the floor as well
-    ! (grounded elements), by length. The touchdown element, on the floor at one end only, is
-    ! mostly suspended and takes none of it; spreading the reaction onto it understated the
-    ! tension of the last suspended node by the floor reaction of half an element (5 % on a
-    ! 10 m lazy-wave mesh). A node with no grounded element beside it (a node just touching
-    ! down, or an isolated contact) shares its reaction by tributary length.
+    ! reaction is spread uniformly over the grounded part of its two half-elements and shared
+    ! between them by that length (grounded_share). The touchdown element, on the floor at one
+    ! end only, is grounded from that end to the touchdown point, located on it from the two
+    ! nodes' clearances; it takes the reaction of that stretch alone (spreading the reaction over
+    ! its half understated the tension of the last suspended node by the floor reaction of half
+    ! an element, 5 % on a 10 m lazy-wave mesh). The grounded stretch grows to the half-element
+    ! as the suspended node reaches the floor, so the spread, and the node outputs, change
+    ! continuously as nodes ground and lift off.
     IF (model%has_contact .OR. model%kn > CD_ZERO) THEN
       CALL node_contact_normal(model, e, fca, es, em2)
       IF (es /= CD_HCDYN_OK) GOTO 900
       CALL node_contact_normal(model, e + 1, fcb, es, em2)
       IF (es /= CD_HCDYN_OK) GOTO 900
-      CALL grounded_share(e, e, fca, es)
+      CALL grounded_share(e, e, fca, xa, es)
       IF (es /= CD_HCDYN_OK) GOTO 900
-      CALL grounded_share(e + 1, e, fcb, es)
+      CALL grounded_share(e + 1, e, fcb, xb, es)
       IF (es /= CD_HCDYN_OK) GOTO 900
       ! A held end whose end element lies on the floor (assemble_residual): the seabed carries the
       ! element's weight with its consistent end moment, which the held end node's own contact
@@ -7486,18 +7494,23 @@ CONTAINS
       ! end half of that element is the support share of its weight, uniform with the reaction
       ! of the neighbouring node, so that a laid end element carries no fixed-end moment.
       IF (e == 1) THEN
-        IF (held_end_floor_support(model, model%q, 1, support, dsupport, inode, nin)) &
-          fca = (model%w(1)*l0)*support
+        IF (held_end_floor_support(model, model%q, 1, support, dsupport, inode, nin)) THEN
+          fca = (0.5_wp*model%w(1)*l0)*support; xa = 0.5_wp
+        END IF
       END IF
       IF (e == model%ne) THEN
-        IF (held_end_floor_support(model, model%q, 2, support, dsupport, inode, nin)) &
-          fcb = (model%w(e)*l0)*support
+        IF (held_end_floor_support(model, model%q, 2, support, dsupport, inode, nin)) THEN
+          fcb = (0.5_wp*model%w(e)*l0)*support; xb = 0.5_wp
+        END IF
       END IF
-      ! integrals of the four shapes over xi in [0, 1/2] (fca) and [1/2, 1] (fcb)
-      g(1:3) = g(1:3) - (0.40625_wp*fca + 0.09375_wp*fcb)
-      g(4:6) = g(4:6) - l0*(0.0572916666666666667_wp*fca + 0.0260416666666666667_wp*fcb)
-      g(7:9) = g(7:9) - (0.09375_wp*fca + 0.40625_wp*fcb)
-      g(10:12) = g(10:12) + l0*(0.0260416666666666667_wp*fca + 0.0572916666666666667_wp*fcb)
+      ! the loads fca and fcb spread uniformly over xi in [0, xa] and [1 - xb, 1]: the integrals
+      ! of the four shapes over those stretches per unit length of xi (spread_shapes)
+      ca = spread_shapes(xa)
+      cb = spread_shapes(xb)
+      g(1:3) = g(1:3) - (ca(1)*fca + cb(3)*fcb)
+      g(4:6) = g(4:6) - l0*(ca(2)*fca - cb(4)*fcb)
+      g(7:9) = g(7:9) - (ca(3)*fca + cb(1)*fcb)
+      g(10:12) = g(10:12) - l0*(ca(4)*fca - cb(2)*fcb)
     END IF
     ae(1:6) = model%a(6*(e - 1) + 1:6*e); ae(7:12) = model%a(6*e + 1:6*(e + 1))
     IF (ANY(ABS(ae) > CD_ZERO)) THEN
@@ -7529,39 +7542,67 @@ CONTAINS
 
   CONTAINS
 
-    SUBROUTINE grounded_share(node, el, fc, esx)
-      !! Scale the floor reaction fc of node (an end of element el) to el's share of it, as the
-      !! factor l0(el)/(grounded length beside the node) that the half-element shape integrals
-      !! below expect: zero when el is not grounded but another element beside the node is, the
-      !! tributary-length share when no element beside the node is grounded.
+    SUBROUTINE grounded_share(node, el, fc, x, esx)
+      !! Element el's share of the floor reaction fc of node (an end of el), and the grounded
+      !! stretch x of el's half beside the node (a fraction of el, at most 1/2) that it is
+      !! spread over. Each half-element beside the node is grounded over x = 1/2 when its far
+      !! node is on the floor as well, and otherwise up to the touchdown point, where the
+      !! clearance interpolated linearly between the node (on the floor) and the far node (above
+      !! it) reaches the contact onset; the reaction is shared between the two halves by the
+      !! grounded length x l0. The touchdown point reaches the far node as that node reaches
+      !! the floor and the node itself as it lifts off (its reaction then vanishing), so the
+      !! share and the stretch are continuous in the configuration. A node off the floor with a
+      !! reaction (a held end the floor supports) keeps the tributary-length share over the
+      !! half-element.
       INTEGER, INTENT(IN) :: node, el
       REAL(wp), INTENT(INOUT) :: fc(3)
+      REAL(wp), INTENT(OUT) :: x
       INTEGER, INTENT(OUT) :: esx
-      REAL(wp) :: grounded_len
-      LOGICAL :: on_el, grounded
-      INTEGER :: k
+      REAL(wp) :: ext, ext_el, grounded_len, c_node, c_far, fdum(3)
+      LOGICAL :: grounded
+      INTEGER :: k, far
       esx = CD_HCDYN_OK
+      x = 0.5_wp
       IF (.NOT. ANY(ABS(fc) > CD_ZERO)) RETURN
+      CALL node_contact_normal(model, node, fdum, esx, em2, clearance=c_node)
+      IF (esx /= CD_HCDYN_OK) RETURN
       grounded_len = CD_ZERO
-      on_el = .FALSE.
+      ext_el = CD_ZERO
       DO k = MAX(1, node - 1), MIN(model%ne, node)
         CALL element_on_floor(k, grounded, esx)
         IF (esx /= CD_HCDYN_OK) RETURN
         IF (grounded) THEN
-          grounded_len = grounded_len + 0.5_wp*model%l0(k)
-          IF (k == el) on_el = .TRUE.
+          ext = 0.5_wp
+        ELSE
+          far = MERGE(k, k + 1, k == node - 1)
+          CALL node_contact_normal(model, far, fdum, esx, em2, clearance=c_far)
+          IF (esx /= CD_HCDYN_OK) RETURN
+          ext = CD_ZERO
+          IF (c_node < CD_ZERO .AND. c_far > c_node) ext = MIN(0.5_wp, -c_node/(c_far - c_node))
         END IF
+        grounded_len = grounded_len + ext*model%l0(k)
+        IF (k == el) ext_el = ext
       END DO
       IF (grounded_len > CD_ZERO) THEN
-        IF (on_el) THEN
-          fc = fc*model%l0(el)/grounded_len
-        ELSE
-          fc = CD_ZERO
-        END IF
+        fc = fc*(ext_el*model%l0(el)/grounded_len)
+        x = ext_el
       ELSE IF (model%trib(node) > CD_ZERO) THEN
-        fc = fc*model%l0(el)/model%trib(node)
+        fc = fc*(0.5_wp*model%l0(el)/model%trib(node))
       END IF
     END SUBROUTINE grounded_share
+
+    PURE FUNCTION spread_shapes(xs) RESULT(cs)
+      !! Integrals of the cubic Hermite shapes H1, H2/l0, H3, H4/l0 over xi in [0, xs], divided
+      !! by xs: the consistent loads of a unit load spread uniformly over that stretch (a point
+      !! load at xi = 0 as xs goes to zero). A stretch [1 - xs, 1] at the other end takes
+      !! [cs(3), -cs(4), cs(1), -cs(2)].
+      REAL(wp), INTENT(IN) :: xs
+      REAL(wp) :: cs(4)
+      cs(1) = CD_ONE - xs*xs + 0.5_wp*xs**3
+      cs(2) = 0.5_wp*xs - 2.0_wp*xs*xs/3.0_wp + 0.25_wp*xs**3
+      cs(3) = xs*xs - 0.5_wp*xs**3
+      cs(4) = -xs*xs/3.0_wp + 0.25_wp*xs**3
+    END FUNCTION spread_shapes
 
     SUBROUTINE element_on_floor(k, grounded, esx)
       !! Element k is grounded when both its nodes are on the floor (node_on_floor).

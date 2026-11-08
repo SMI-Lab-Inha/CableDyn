@@ -314,11 +314,22 @@ end residual
 
 holds only the element's own distributed loads: consistent submerged weight, the buoyancy lost
 above the free surface, drag, Froude-Krylov force, structural and added-mass inertia, and the
-seabed reaction of its end nodes, each nodal reaction spread uniformly over the node's tributary
-length (the distributed floor reaction it stands for; without it a line resting on the floor
-would report the fixed-end moment :math:`w L_0^2/12` of its own weight; at a held line end whose
-end element lies on the floor, the reaction of the end half is the floor-support share of the
-weight, the share that the static and dynamic residuals carry on the end tangent rows).
+seabed reaction of its end nodes, each nodal reaction spread uniformly over the grounded part of
+the node's tributary length (the distributed floor reaction it stands for; without it a line
+resting on the floor would report the fixed-end moment :math:`w L_0^2/12` of its own weight; at a
+held line end whose end element lies on the floor, the reaction of the end half is the
+floor-support share of the weight, the share that the static and dynamic residuals carry on the
+end tangent rows). A half-element whose far node is on the floor is grounded whole; the
+touchdown element, on the floor at one end only, is grounded from that end to the touchdown
+point, where the clearance interpolated linearly between its two nodes reaches the contact onset
+height (at most its half). The grounded stretch reaches the half-element as the suspended node
+reaches the floor, and vanishes with the reaction as the grounded node lifts off, so the node
+outputs vary continuously as nodes ground and lift off. With the reaction of the first grounded
+node spread over its grounded half-element alone, the tension near touchdown carried a local
+error that depended on where the touchdown point fell in its element and fell only at the first
+order (at most 4.3, 1.9 and 1.0 N at 1.6, 0.8 and 0.4 m elements on the lazy-wave cable of
+``lazy_wave_buoyancy_smeared.dat``, line tension 270 N there; 2.1, 0.7 and 0.2 N with the
+grounded stretch), and it stepped as each node grounded.
 :math:`\mathbf{g}_e`
 is the generalised force the two end nodes exert on the element: its position rows at the
 End-B side of the internal arc are the section force :math:`\mathbf{F}_j^-` just before node
