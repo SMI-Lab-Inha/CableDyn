@@ -1185,6 +1185,13 @@ has one direction :math:`\beta_i = \beta`. The rows of a ``WaveKin 7`` table may
 their own: a short-crested sea, whose elevation and kinematics are the sums of those of its
 directions, stretched by the one total elevation.
 
+The mean :math:`\bar\eta` of an elevation history, or the ``omega = 0`` row of a ``WaveKin 7``
+table, is a steady level. A WaterKin history raises the still-water level by it: the wave numbers
+are those of the depth :math:`h + \bar\eta`, and the stretching maps the water column under the
+raised level. A MoorDyn-C file (``WaveKin 3`` or ``7``) adds it to the elevation alone, as
+MoorDyn-C does: the wave numbers stay those of :math:`h`, and the stretching maps
+:math:`[-h,\ \bar\eta + \eta]` onto :math:`[-h,\ 0]`.
+
 Every point sums every component of the elevation. The sums run in interleaved partial sums
 added up in a fixed order, so a result does not depend on the vector width or the thread
 count, and each point is a function of its position and time alone: nothing carries from one

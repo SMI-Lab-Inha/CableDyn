@@ -2321,6 +2321,12 @@ file(GLOB CD_WAVEKIN_MDC_FILES RELATIVE ${CMAKE_SOURCE_DIR}/tests/data/wavekin_m
 foreach(f IN LISTS CD_WAVEKIN_MDC_FILES)
   configure_file(tests/data/wavekin_mdc/${f} ${CMAKE_BINARY_DIR}/wavekin_mdc/${f} COPYONLY)
 endforeach()
+# the same with a mean level (an omega = 0 row, a raised record), against MoorDyn-C v2.7.2
+file(GLOB CD_WAVEKIN_MDC_MEAN_FILES RELATIVE ${CMAKE_SOURCE_DIR}/tests/data/wavekin_mdc_mean
+     ${CMAKE_SOURCE_DIR}/tests/data/wavekin_mdc_mean/*)
+foreach(f IN LISTS CD_WAVEKIN_MDC_MEAN_FILES)
+  configure_file(tests/data/wavekin_mdc_mean/${f} ${CMAKE_BINARY_DIR}/wavekin_mdc_mean/${f} COPYONLY)
+endforeach()
 add_executable(test_wavekin_modes tests/test_wavekin_modes.f90)
 target_link_libraries(test_wavekin_modes PRIVATE cabledyn_core)
 add_test(NAME wavekin_modes COMMAND test_wavekin_modes WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

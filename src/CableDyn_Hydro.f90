@@ -2239,7 +2239,8 @@ CONTAINS
   SUBROUTINE CD_Component_Wave_Kinematics(x, y, z, t, depth, direction_deg, stretch, &
                                           omega_comp, k_comp, amplitude, phase, &
                                           eta, velocity, acceleration, ErrStat, ErrMsg, inputs_validated, &
-                                          amplitude_scale, pdyn, exp_m2kd, tail_sums, comp_cos, comp_sin)
+                                          amplitude_scale, pdyn, exp_m2kd, tail_sums, comp_cos, comp_sin, &
+                                          eta_offset)
     !! Evaluate linear irregular-wave kinematics from a CALLER-SUPPLIED component table:
     !! the general (arbitrary length, explicit per-component phase) form of the fixed-size
     !! deterministic-phase JONSWAP evaluator above, sharing its conventions exactly --
@@ -2278,6 +2279,10 @@ CONTAINS
     !! comp_cos and comp_sin, given together, hold the cosine and sine of each component's own
     !! direction, in place of the one direction_deg of a long-crested table: a short-crested
     !! table. The bound of tail_sums holds for any direction, since it bounds the magnitude.
+    !! eta_offset is a steady level added to the surface elevation the stretching maps and eta
+    !! returns, the components' wave numbers staying those of depth: the zero-frequency row of a
+    !! MoorDyn-C kinematics file, which MoorDyn-C adds to the elevation alone. It is not scaled
+    !! by amplitude_scale.
     REAL(wp), INTENT(IN) :: x, y, z, t, depth, direction_deg
     LOGICAL, INTENT(IN) :: stretch
     REAL(wp), INTENT(IN) :: omega_comp(:), k_comp(:), amplitude(:), phase(:)
@@ -2290,8 +2295,9 @@ CONTAINS
     ! (omega^2/k) a cosh(k(z+h))/sinh(kh) cos(theta)), as in CD_Airy_Wave_Kinematics_Precomputed
     REAL(wp), INTENT(OUT), OPTIONAL :: pdyn
     REAL(wp), INTENT(IN), OPTIONAL :: exp_m2kd(:), tail_sums(:, :), comp_cos(:), comp_sin(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: eta_offset
     INTEGER :: n
-    REAL(wp) :: cb, sb, scl
+    REAL(wp) :: cb, sb, scl, offset
     LOGICAL :: trust_inputs
 
     eta = CD_ZERO
@@ -2356,6 +2362,12 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'point, time, and direction must be finite')
       RETURN
     END IF
+    offset = CD_ZERO
+    IF (PRESENT(eta_offset)) offset = eta_offset
+    IF (.NOT. CD_Is_Finite(offset)) THEN
+      CALL fail(ErrStat, ErrMsg, 'eta_offset must be finite')
+      RETURN
+    END IF
     ! Preserve the regular-wave reduction as an executable identity, independent of
     ! compiler reassociation choices in the general summation loop. Besides making the
     ! documented one-component contract portable, this avoids loop setup in a common
@@ -2364,7 +2376,8 @@ CONTAINS
     ! a unit scale is exact, so the unscaled table is reproduced bit for bit
     scl = CD_ONE
     IF (PRESENT(amplitude_scale)) scl = amplitude_scale
-    IF (n == 1 .AND. ABS(phase(1)) <= CD_ZERO .AND. scl*amplitude(1) > CD_ZERO .AND. .NOT. PRESENT(comp_cos)) THEN
+    IF (n == 1 .AND. ABS(phase(1)) <= CD_ZERO .AND. scl*amplitude(1) > CD_ZERO .AND. .NOT. PRESENT(comp_cos) &
+        .AND. ABS(offset) <= CD_ZERO) THEN
       CALL CD_Airy_Wave_Kinematics_Precomputed(x, y, z, t, 2.0_wp*(scl*amplitude(1)), omega_comp(1), k_comp(1), &
                                                depth, direction_deg, stretch, eta, velocity, acceleration, &
                                                ErrStat, ErrMsg, pdyn)
@@ -2372,19 +2385,20 @@ CONTAINS
     END IF
     cb = COS(direction_deg*DEG2RAD)
     sb = SIN(direction_deg*DEG2RAD)
-    CALL component_sums(n, x, y, z, t, depth, stretch, scl, cb, sb, omega_comp, k_comp, amplitude, phase, eta, &
-                        velocity, acceleration, ErrStat, ErrMsg, pdyn, exp_m2kd, tail_sums, comp_cos, comp_sin)
+    CALL component_sums(n, x, y, z, t, depth, stretch, scl, offset, cb, sb, omega_comp, k_comp, amplitude, phase, &
+                        eta, velocity, acceleration, ErrStat, ErrMsg, pdyn, exp_m2kd, tail_sums, comp_cos, comp_sin)
   END SUBROUTINE CD_Component_Wave_Kinematics
 
-  SUBROUTINE component_sums(n, x, y, z, t, depth, stretch, scl, cb, sb, omega_comp, k_comp, amplitude, phase, eta, &
-                            velocity, acceleration, ErrStat, ErrMsg, pdyn, exp_m2kd, tail_sums, comp_cos, comp_sin)
+  SUBROUTINE component_sums(n, x, y, z, t, depth, stretch, scl, offset, cb, sb, omega_comp, k_comp, amplitude, phase, &
+                            eta, velocity, acceleration, ErrStat, ErrMsg, pdyn, exp_m2kd, tail_sums, comp_cos, comp_sin)
     !! The sums of CD_Component_Wave_Kinematics, on explicit-shape tables: their blocks pass to
     !! the block kernels without a copy, and the loops run at unit stride. A long-crested table
     !! forms each phase from the one distance along its direction and sums the horizontal
     !! velocity and acceleration once, for cb and sb to multiply; a short-crested one (comp_cos,
     !! comp_sin) forms each phase from the component's own direction and sums x and y apart.
+    !! offset (eta_offset) is added to the summed elevation before the stretching.
     INTEGER, INTENT(IN) :: n
-    REAL(wp), INTENT(IN) :: x, y, z, t, depth, scl, cb, sb
+    REAL(wp), INTENT(IN) :: x, y, z, t, depth, scl, offset, cb, sb
     LOGICAL, INTENT(IN) :: stretch
     REAL(wp), INTENT(IN) :: omega_comp(n), k_comp(n), amplitude(n), phase(n)
     REAL(wp), INTENT(INOUT) :: eta, velocity(3), acceleration(3)
@@ -2432,7 +2446,7 @@ CONTAINS
         CALL add_elevation_lanes(nk, amplitude(i0:i1), bc, lane_eta)
       END IF
     END DO
-    eta = scl*CD_Wave_Sum_Lanes(lane_eta, lanes)
+    eta = scl*CD_Wave_Sum_Lanes(lane_eta, lanes) + offset
 
     IF (stretch) THEN
       IF (z > eta) RETURN

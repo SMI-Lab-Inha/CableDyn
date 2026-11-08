@@ -1385,10 +1385,13 @@ time-varying and of a sheared current to MoorDyn-C's within 0.9 % on a 70 m rope
 ([options](options.rst)) are an extension of CableDyn and no part of MoorDyn-C or MoorDyn-F: a
 deck with them is not a plain MoorDyn deck, and a MoorDyn solver would not place the phases there.
 
-A non-zero `omega = 0` row raises the still-water level. CableDyn then takes every wave number at
-the depth `WtrDpth` plus that level, as it does for the mean of an elevation record, where
-MoorDyn-C keeps `WtrDpth` and adds the level to the elevation alone. The two differ by the order
-of the level over the depth in the long components.
+A mean level, a non-zero `omega = 0` row or the mean of `wave_elevation.txt`, is added to the
+elevation alone, as MoorDyn-C does: every wave number stays that of `WtrDpth`, and the Wheeler
+stretching maps the water column under the total elevation, the level included. The
+`wavekin_modes` test holds both files with a 0.8 m level, under six `WaveKin 7` components in
+six directions, to MoorDyn-C v2.7.2: `WaveKin 7` to `1e-8` of its scale and `WaveKin 3` to the
+tolerances above. The mean of a WaterKin `WaveKinMod 1` record raises the still-water level
+instead ([below](#moordyn-f-waterkin-file-modes)).
 
 (waterkin-file-modes)=
 ### MoorDyn-F `WaterKin` file modes
@@ -1405,6 +1408,11 @@ A MoorDyn-F deck may select a WaterKin file (grammar in [Auxiliary file formats]
 | `CurrentMod = 0` | no current |
 | `CurrentMod = 1` | N-level WaterKin depth table, interpolated at structural nodes |
 | `CurrentMod = 2` | current from the coupled host SeaState field |
+
+The mean of a `WaveKinMod 1` record raises the still-water level: its wave numbers are those of
+`WtrDpth` plus the mean, and the stretching maps the water column under the raised level.
+MoorDyn-F instead drops the record's mean, and its Nyquist bin, so a record whose mean is not zero
+puts the surface of the two codes apart by that mean.
 
 **`WaveKinMod 1`** is standalone-only. It needs a `WaveKinFile` of at least four finite
 `time elevation` rows starting at `t = 0` with strictly increasing times, a positive `dtWave`, a

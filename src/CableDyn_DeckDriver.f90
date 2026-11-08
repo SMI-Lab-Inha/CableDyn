@@ -675,7 +675,8 @@ MODULE CableDyn_DeckDriver
     ! irregular seas; wave_eta_mean carries the zero-frequency waterline offset.
     REAL(wp), ALLOCATABLE :: wave_component_omega(:), wave_component_k(:)
     REAL(wp), ALLOCATABLE :: wave_component_amplitude(:), wave_component_phase(:)
-    ! exp(-2 k (wtrdpth + wave_eta_mean)) and the tail_sums of the table (CD_Component_Wave_Kinematics)
+    ! exp(-2 k d) at the depth d of the wave numbers (wtrdpth, plus wave_eta_mean for a WaterKin
+    ! record: component_level_shift) and the tail_sums of the table (CD_Component_Wave_Kinematics)
     REAL(wp), ALLOCATABLE :: wave_component_e2kd(:), wave_component_tail(:, :)
     ! a short-crested table (WaveKin 7 rows of different directions): each component's direction
     ! cosine and sine, in ascending frequency; unallocated when all share wave_direction
@@ -14305,6 +14306,8 @@ CONTAINS
     !!    is the mean-level offset and its beta has no effect. Rows that share one direction are
     !!    a long-crested table in file order; rows that differ a short-crested table in ascending
     !!    frequency, the order the tail bound of the sums needs.
+    !!  The mean level of either file is added to the elevation alone, which the stretching then
+    !!  maps, and the wave numbers stay those of WtrDpth, as in MoorDyn-C (component_level_shift).
     !!  - Currents 1, current_profile.txt (`z ux uy uz` rows after its header rows): the steady
     !!    profile, linear in z and held beyond its ends, as MoorDyn-C's current grid.
     !!  - Currents 2, current_profile_dynamic.txt (constructDynamicCurrentGrid of MoorDyn-C's
@@ -32751,7 +32754,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(OUT), OPTIONAL :: pdyn
-    REAL(wp) :: ramp, ramp_rate
+    REAL(wp) :: ramp, ramp_rate, shift
 
     IF (opts%has_wave .AND. .NOT. opts%wave_cache_ready) THEN
       CALL fail(ErrStat, ErrMsg, 'deck wave kinematics called before wave precompute')
@@ -32787,26 +32790,29 @@ CONTAINS
       CALL CD_Stream_Kinematics(opts%stream, x, y, z, time, ramp, eta, velocity, acceleration, ErrStat, ErrMsg, &
                                 pdyn)
     CASE (WAVE_COMPONENTS)
+      ! the mean of a WaterKin record raises the still-water level (shift); that of a MoorDyn-C
+      ! file is added to the surface alone (eta_offset), the wave numbers staying at WtrDpth
+      shift = component_level_shift(opts)
       IF (ramp < CD_ONE) THEN
-        CALL CD_Component_Wave_Kinematics(x - opts%wave_ref_x, y - opts%wave_ref_y, z - opts%wave_eta_mean, time, &
-                                          opts%wtrdpth + opts%wave_eta_mean, opts%wave_direction, .TRUE., &
+        CALL CD_Component_Wave_Kinematics(x - opts%wave_ref_x, y - opts%wave_ref_y, z - shift, time, &
+                                          opts%wtrdpth + shift, opts%wave_direction, .TRUE., &
                                           opts%wave_component_omega, opts%wave_component_k, &
                                           opts%wave_component_amplitude, opts%wave_component_phase, &
                                           eta, velocity, acceleration, ErrStat, ErrMsg, inputs_validated=.TRUE., &
                                           amplitude_scale=ramp, pdyn=pdyn, exp_m2kd=opts%wave_component_e2kd, &
                                           tail_sums=opts%wave_component_tail, comp_cos=opts%wave_component_cos, &
-                                          comp_sin=opts%wave_component_sin)
+                                          comp_sin=opts%wave_component_sin, eta_offset=opts%wave_eta_mean - shift)
       ELSE
-        CALL CD_Component_Wave_Kinematics(x - opts%wave_ref_x, y - opts%wave_ref_y, z - opts%wave_eta_mean, time, &
-                                          opts%wtrdpth + opts%wave_eta_mean, opts%wave_direction, .TRUE., &
+        CALL CD_Component_Wave_Kinematics(x - opts%wave_ref_x, y - opts%wave_ref_y, z - shift, time, &
+                                          opts%wtrdpth + shift, opts%wave_direction, .TRUE., &
                                           opts%wave_component_omega, opts%wave_component_k, &
                                           opts%wave_component_amplitude, opts%wave_component_phase, &
                                           eta, velocity, acceleration, ErrStat, ErrMsg, inputs_validated=.TRUE., &
                                           pdyn=pdyn, exp_m2kd=opts%wave_component_e2kd, &
                                           tail_sums=opts%wave_component_tail, comp_cos=opts%wave_component_cos, &
-                                          comp_sin=opts%wave_component_sin)
+                                          comp_sin=opts%wave_component_sin, eta_offset=opts%wave_eta_mean - shift)
       END IF
-      eta = eta + opts%wave_eta_mean
+      eta = eta + shift
     CASE DEFAULT
       eta = CD_ZERO
       velocity = CD_ZERO
@@ -32817,6 +32823,15 @@ CONTAINS
     IF (ErrStat == CD_HYDRO_OK .AND. ramp > CD_ZERO .AND. ramp < CD_ONE) &
       acceleration = acceleration + (ramp_rate/ramp)*velocity
   END SUBROUTINE deck_wave_kinematics
+
+  PURE REAL(wp) FUNCTION component_level_shift(opts) RESULT(shift)
+    !! The rise of the still-water level under a component table: the mean of a WaterKin
+    !! WaveKinMod 1 record, so its wave numbers are those of WtrDpth plus the mean; zero for a
+    !! MoorDyn-C kinematics file (WaveKin 3, 7), whose mean MoorDyn-C adds to the elevation alone.
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    shift = opts%wave_eta_mean
+    IF (opts%mdc_wave_kin > 0) shift = CD_ZERO
+  END FUNCTION component_level_shift
 
   PURE SUBROUTINE deck_wave_ramp(ramp_time, time, ramp, ramp_rate)
     !! Half-cosine start-up ramp r(t) = (1 - cos(pi*t/T))/2 on [0, T], 1 afterwards, and
@@ -33193,12 +33208,12 @@ CONTAINS
       END IF
       DO k = 1, SIZE(opts%wave_component_omega)
         CALL CD_Solve_Dispersion_Wavenumber(opts%wave_component_omega(k), &
-                                            opts%wtrdpth + opts%wave_eta_mean, opts%g, &
+                                            opts%wtrdpth + component_level_shift(opts), opts%g, &
                                             opts%wave_component_k(k), ErrStat, ErrMsg)
         IF (ErrStat /= CD_DECKDRV_OK) EXIT
       END DO
       IF (ErrStat == CD_DECKDRV_OK) THEN
-        opts%wave_component_e2kd = EXP(-2.0_wp*(opts%wave_component_k*(opts%wtrdpth + opts%wave_eta_mean)))
+        opts%wave_component_e2kd = EXP(-2.0_wp*(opts%wave_component_k*(opts%wtrdpth + component_level_shift(opts))))
         CALL set_component_tail(opts%wave_component_omega, opts%wave_component_k, opts%wave_component_amplitude, &
                                 opts%wave_component_tail)
       END IF
