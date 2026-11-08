@@ -82,6 +82,7 @@ none      waves             - Wave model and parameters (m, s, deg) {none; airy;
 -- 0.5     frictionMuAxial  - Seabed friction along the line axis {>=0} [default: frictionMu]
 -- 0.5     frictionMuLateral - Seabed friction across the line axis {>=0} [default: frictionMu]
 -- asLaid  staticsFriction  - Statics seabed friction policy {none; asLaid} [default: none]
+-- mode1   axialDampingRatio - A negative BA is the damping ratio of {segment=each segment; mode1=the first axial mode} [default: segment]
 -- 0.0     layAzimuth       - Lay azimuth of every line from +x toward +y (deg) [default: anchor -> fairlead]
 -- 225.0   layAzimuth2      - Lay azimuth of line 2 alone (deg) [default: layAzimuth]
 -- 0.0     asLaidTension    - As-laid effective tension of every line (N) [default: 0]
@@ -108,6 +109,7 @@ none      waves             - Wave model and parameters (m, s, deg) {none; airy;
 --   layAzimuth = lay_azimuth; asLaidTension = as_laid_tension
 --   dtM = dt; rhoInf = rho_inf; modified_newton = modifiedNewton; adaptive_mesh = adaptiveMesh
 --   cable_statics = cableStatics; alpha_force_blend = alphaForceBlend; OutputRecovery = output_recovery
+--   axialDampingRatio = axial_damping_ratio
 --   maxStrain = max_strain; WaveSeed = wave_seed; rampTime = ramp_time = tRamp
 --   RangeStart = range_start
 --   cable_load_feedback = cableLoadFeedback; tensile_safety = tensileSafety

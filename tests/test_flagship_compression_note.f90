@@ -16,6 +16,8 @@ PROGRAM test_flagship_compression_note
   !! projected on the nodal tangent. It stays within the end tensions instead of the pointwise
   !! spikes at the touchdown.
   !!
+  !! The chains' negative BA, a damping ratio per segment, carries the axial-damping note only.
+  !!
   !! A deck whose finite-EI elements are shorter than sqrt(EI/EA) (the conditioning limit
   !! of the static Newton system) carries the fine-mesh note; the flagship does not.
   !!
@@ -57,7 +59,8 @@ PROGRAM test_flagship_compression_note
     DO i = 1, SIZE(agg%init_lines)
       IF (LEN_TRIM(agg%init_lines(i)%note) > 0) WRITE (*, '(A,I0,2A)') '  line ', agg%init_lines(i)%line_id, &
         ' note: ', TRIM(agg%init_lines(i)%note)
-      CALL check(LEN_TRIM(agg%init_lines(i)%note) == 0, 'no static-initialisation note on any line')
+      ! the chains' negative BA is a damping ratio per segment: only that note of the run
+      CALL check(only_damping_note(agg%init_lines(i)%note), 'no static-initialisation note on any line')
     END DO
   END IF
 
@@ -233,6 +236,21 @@ CONTAINS
     END IF
     CALL CD_AGG_End(light, es_l, em_l)
   END SUBROUTINE case_weightless_bow_note
+
+  LOGICAL FUNCTION only_damping_note(note) RESULT(ok)
+    !! Every line of note is the axial-damping note of a negative BA (axial_damping_note).
+    CHARACTER(*), INTENT(IN) :: note
+    INTEGER :: a, b, n
+    ok = .TRUE.
+    n = LEN_TRIM(note)
+    a = 1
+    DO WHILE (a <= n)
+      b = INDEX(note(a:n), NEW_LINE('a'))
+      IF (b == 0) b = n - a + 2
+      IF (INDEX(note(a:a + b - 2), 'its negative BA is a damping ratio per segment') == 0) ok = .FALSE.
+      a = a + b
+    END DO
+  END FUNCTION only_damping_note
 
   SUBROUTINE check(ok, label)
     LOGICAL, INTENT(IN) :: ok

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import subprocess
@@ -117,6 +118,21 @@ def test_the_notes_of_a_deck_on_both_routes(tmp_path):
         assert "rhoInf = 0.990 leaves almost no numerical dissipation" in notes
         assert "line nodes are numbered from 1 = End A" in notes
         assert "LINE 1: dtM = 0.1000 s resolves its axial period" in notes
+
+
+@pytest.mark.parametrize("ei", [0.0, 1.0e6], ids=["point", "aggregate"])
+def test_the_axial_damping_note_reaches_an_in_process_host(tmp_path, ei):
+    # BA = -1 is a damping ratio per segment: the note gives the first-mode ratio of the mesh
+    with CableDyn(_deck(tmp_path, ei=ei)) as model:
+        notes = [note for note in model.init_notes if "damping ratio per segment" in note]
+    assert len(notes) == 1
+    match = re.search(r"at ([0-9.]+) % of critical on its ([0-9]+) elements", notes[0])
+    assert match is not None, notes[0]
+    # zeta pi/(2N) on the uniform chain, N its final mesh
+    expected = 100.0 * math.pi / (2 * int(match.group(2)))
+    assert float(match.group(1)) == pytest.approx(expected, rel=1e-3)
+    with CableDyn(_deck(tmp_path, "mode1 axialDampingRatio", ei=ei, name="mode1.dat")) as model:
+        assert not [note for note in model.init_notes if "damping ratio per segment" in note]
 
 
 def test_a_note_of_the_parse_is_kept_once(tmp_path):

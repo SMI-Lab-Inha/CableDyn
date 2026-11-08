@@ -18,6 +18,19 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+### Added
+
+- OPTION `axialDampingRatio` (`segment` or `mode1`): under `mode1` a negative `BA` is the damping
+  ratio of the line's first axial mode, the same on any mesh (BA = 2 zeta EA / omega_1, omega_1
+  from the line's sections). `segment`, MoorDyn's damping ratio per segment, stays the default.
+- An initialisation note for every line with a negative `BA` per segment: the damping ratio this
+  gives the line's first axial mode on its mesh, about zeta pi/(2N) on N elements.
+
+### Fixed
+
+- A negative `BA` of an `EI = 0` line of several sections is resolved with the length, `EA` and
+  mass of its own element. It took those of the element at the mirrored position from the other
+  end, so the line types of an asymmetric composite line exchanged their axial damping.
 
 ## [0.4.1] - 2026-11-08
 

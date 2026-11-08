@@ -811,9 +811,31 @@ so the element-scale modes (:math:`n \approx N`) are damped at up to :math:`(\pi
 ``BA``), while the line's global axial modes are damped much less, and less again on a finer
 mesh: ``BA = -1`` on 100 elements gives the first axial mode 1.6 %, and 0.8 % on 200 elements.
 Results that depend on the axial damping (tension peaks of snatch loads, the decay of axial
-oscillations) therefore change with the mesh. For mesh-independent damping give ``BA`` in N·s:
-a material damping ratio :math:`\zeta_1` of the first axial mode of a line of length :math:`L` is
-:math:`BA = 2\,\zeta_1\,EA/\omega_1` with :math:`\omega_1 = (\pi/L)\sqrt{EA/\rho_A}`.
+oscillations) therefore change with the mesh. The initialisation of a dynamic run notes, for every
+line with a negative ``BA``, the damping ratio this gives its first axial mode on its final mesh:
+the Rayleigh quotient :math:`\zeta_1 = \mathbf u^\mathsf T\mathbf C\mathbf u /
+(2\,\omega_1\,\mathbf u^\mathsf T\mathbf M\mathbf u)` of the first mode :math:`\mathbf u` of the
+line's axial chain with both ends held (element stiffness :math:`EA/L_0`, damping
+:math:`BA/L_0`, the dry mass lumped at the nodes), which is :math:`\zeta\sin(\pi/(2N))` on a
+uniform line and holds for a composite one.
+
+**First-mode damping ratio** (``mode1 axialDampingRatio``, :doc:`options`). A negative ``BA`` is
+then the damping ratio of the line's first axial mode, the same on any mesh:
+
+.. math::
+
+   BA = \frac{2\,\zeta\,EA}{\omega_1}
+
+on every element, with :math:`\omega_1` the first axial natural frequency of the line with both
+ends held, from its sections' unstretched lengths, ``EA`` and dry mass per length (the first mode
+of the axial chain on a fixed internal mesh of 2048 elements, so independent of the line's mesh;
+:math:`\omega_1 = (\pi/L)\sqrt{EA/\rho_A}` on a uniform line, to 1e-7). The damping is then
+proportional to the stiffness, :math:`\mathbf C = (2\zeta/\omega_1)\,\mathbf K`, so the first
+axial mode of a composite line is damped at :math:`\zeta` too and the mode :math:`n` at
+:math:`\zeta\,\omega_n/\omega_1`. Added mass and the tension are left out of :math:`\omega_1`. A
+viscoelastic or Syrope section has no single ``EA`` that sets the first mode, so a line with one
+and a negative ``BA`` is refused under this option; ``BA`` in N·s is used as given under both
+conventions.
 
 Viscoelastic rope (MoorDyn ``ElasticMod`` 2 and 3)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

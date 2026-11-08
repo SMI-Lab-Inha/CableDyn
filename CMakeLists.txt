@@ -2831,6 +2831,15 @@ if(Python3_Interpreter_FOUND)
     LABELS "python;driver;integration;static;outputs"
     TIMEOUT 600
     ENVIRONMENT "${_cabledyn_python_test_environment}")
+  # A negative BA damps the first axial mode of a line at zeta pi/(2N) per segment (the
+  # default), and at zeta on every mesh under axialDampingRatio mode1, uniform and composite.
+  add_test(NAME driver_axial_damping_ratio
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_axial_damping_ratio.py
+                   $<TARGET_FILE:cabledyn>)
+  set_tests_properties(driver_axial_damping_ratio PROPERTIES
+    LABELS "python;driver;integration;dynamic;validation"
+    TIMEOUT 600
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
 endif()
 # The scan of the round-off CI job: it must flag a fallback note, a failed run and a forced
 # BLAS kernel that did not take effect, or a clean scan would prove nothing.
