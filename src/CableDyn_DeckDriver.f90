@@ -1874,6 +1874,8 @@ CONTAINS
     LOGICAL :: bathymetry_flat, require_3d_static, sym_broken, planar_unstable, saddle_kept
     ! whether the line would be solved in 3D without its torsion (a twisted line always is)
     LOGICAL :: require_3d_untwisted
+    ! the deck current has a component across the vertical plane of the chord
+    LOGICAL :: cross_current
     ! A planar equilibrium in a current that is a saddle out of its plane (see route_pass).
     REAL(wp), ALLOCATABLE :: l0_saddle(:), ea_saddle(:), ei_saddle(:), w_saddle(:), q_saddle(:), curv_saddle(:)
     INTEGER, ALLOCATABLE :: fixed_saddle(:)
@@ -1916,6 +1918,10 @@ CONTAINS
     ! smeared equivalent first), and the attachment nodes on the final mesh.
     LOGICAL :: has_att
     REAL(wp), ALLOCATABLE :: w_bare_deck(:), l0_deck_att(:), w_bare(:)
+    ! In a current across the line's plane, the line's own drag coefficients (cur_obj, deck mesh),
+    ! to which the attachments' drag smeared into cur_obj (smear_attachment_drag) returns in the
+    ! polish; unallocated when no attachment drag is smeared.
+    REAL(wp), ALLOCATABLE :: att_cdn_bare(:), att_cdt_bare(:)
     INTEGER, ALLOCATABLE :: att_node(:)
     ! STIFFENERS: the cable's own bending stiffness per element (internal order), without the
     ! sleeve, for the cable's share of the bend moment (allocated only on a stiffened line)
@@ -2116,6 +2122,7 @@ CONTAINS
     ! A current with a component across the vertical plane of the chord pushes the line out
     ! of that plane, which the dynamics (endpoints held, every other DOF free) follow: the
     ! static equilibrium is then solved in 3D as well.
+    cross_current = .FALSE.
     IF (opts%has_current) THEN
       IF (opts%has_current_grid) THEN
         ! a current grid (Currents 2 and 5): the static start takes its t = 0 sample, every point
@@ -2129,7 +2136,7 @@ CONTAINS
                 IF (ABS(-frame_cs(2)*opts%current_grid%velocity(1, ix, iy, iz, 1) + &
                         frame_cs(1)*opts%current_grid%velocity(2, ix, iy, iz, 1)) > &
                     64.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, NORM2(opts%current_grid%velocity(:, ix, iy, iz, 1)))) &
-                  require_3d_static = .TRUE.
+                  cross_current = .TRUE.
               END DO
             END DO
           END DO
@@ -2138,13 +2145,14 @@ CONTAINS
         DO i = 1, SIZE(opts%current_profile_z)
           IF (ABS(-frame_cs(2)*opts%current_profile_velocity(1, i) + frame_cs(1)*opts%current_profile_velocity(2, i)) &
               > 64.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, NORM2(opts%current_profile_velocity(:, i)))) &
-            require_3d_static = .TRUE.
+            cross_current = .TRUE.
         END DO
       ELSE IF (ABS(-frame_cs(2)*opts%current_velocity(1) + frame_cs(1)*opts%current_velocity(2)) > &
                64.0_wp*EPSILON(CD_ONE)*MAX(CD_ONE, NORM2(opts%current_velocity))) THEN
-        require_3d_static = .TRUE.
+        cross_current = .TRUE.
       END IF
     END IF
+    IF (cross_current) require_3d_static = .TRUE.
     ! A lay azimuth across the vertical plane of the chord puts the as-laid friction
     ! reference, and the friction it holds, out of that plane: solved in 3D as well. This is
     ! decided here, before the held (planar) DOFs below are chosen.
@@ -2439,6 +2447,24 @@ CONTAINS
         IF (ALLOCATED(cur_obj%profile_z)) DEALLOCATE (cur_obj%profile_z)
         IF (ALLOCATED(cur_obj%profile_velocity)) DEALLOCATE (cur_obj%profile_velocity)
         IF (ALLOCATED(cur_obj%grid)) DEALLOCATE (cur_obj%grid)
+      END IF
+      ! In a current across the vertical plane of the chord the smeared start carries the
+      ! attachments' drag as well as their weight, spread over the same elements
+      ! (smear_attachment_drag), and the polish moves it to the nodes with the weight. Without
+      ! it the polish applied the whole attachment drag to the smeared state, which that drag
+      ! pushes out of its plane: on a frictional seabed its damped Newton solves diverged as
+      ! the grounded run slid metres sideways (25 modules on a lazy wave in 0.3 m/s across its
+      ! plane). A current along the plane does not move the line out of it, and the polish
+      ! carries the attachment drag as before: carried by the smeared start instead, it stopped
+      ! the current stepping on a coarse deck mesh at the grounded-run compression check (a lazy
+      ! wave restrained in torsion in 0.5 m/s along its plane, whose discrete state the polish
+      ! reaches).
+      IF (has_att .AND. cur_obj%drag .AND. cross_current) THEN
+        IF (ANY(ln%att(4, :) > CD_ZERO .OR. ln%att(6, :) > CD_ZERO)) THEN
+          att_cdn_bare = cur_obj%cdn
+          att_cdt_bare = cur_obj%cdt
+          CALL smear_attachment_drag(cur_obj%cdn, cur_obj%cdt, cur_obj%diam, l0, att_node, ln%att)
+        END IF
       END IF
       IF (as_laid) THEN
         CALL as_laid_reference(es, em)
@@ -3276,7 +3302,12 @@ CONTAINS
       CALL attachment_static_polish(l0, ea, ei, w_bare, w, diam, att_node, ln%att, q_static, fixed_dofs, &
                                     contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
                                     endconn_mode, opts, static_tol, ErrStat, ErrMsg, bathymetry, cur_obj, &
-                                    fell_back=att_fell_back)
+                                    fell_back=att_fell_back, cdn_bare=att_cdn_bare, cdt_bare=att_cdt_bare)
+      ! the discrete equilibrium carries the line's own drag (the attachments' at their nodes)
+      IF (ALLOCATED(att_cdn_bare)) THEN
+        cur_obj%cdn = att_cdn_bare
+        cur_obj%cdt = att_cdt_bare
+      END IF
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       ! A discrete state the damped Newton solves did not reach alone (pseudo-transient
       ! continuation, line search or smaller load steps) passes the acceptance checks the
@@ -5471,15 +5502,51 @@ CONTAINS
     END DO
   END SUBROUTINE smear_attachments
 
+  SUBROUTINE smear_attachment_drag(cdn, cdt, diam, l0, node, att)
+    !! Spread each attachment's drag areas over the elements next to its node, as
+    !! smear_attachments spreads its net weight: the normal drag area CdA and the axial drag area
+    !! CdAx become per-metre drag coefficients of those elements (Cd_n d per metre and
+    !! pi Cd_t d per metre, the line's own Morison law), so that the smeared line carries the
+    !! attachments' current drag as well as their weight.
+    REAL(wp), INTENT(INOUT) :: cdn(:), cdt(:)
+    REAL(wp), INTENT(IN) :: diam(:), l0(:), att(:, :)
+    INTEGER, INTENT(IN) :: node(:)
+    INTEGER :: k, j, ne
+    ne = SIZE(l0)
+    DO k = 1, SIZE(node)
+      j = node(k)
+      IF (j == 1) THEN
+        CALL add_share(1, CD_ONE)
+      ELSE IF (j == ne + 1) THEN
+        CALL add_share(ne, CD_ONE)
+      ELSE
+        CALL add_share(j - 1, 0.5_wp)
+        CALL add_share(j, 0.5_wp)
+      END IF
+    END DO
+  CONTAINS
+    SUBROUTINE add_share(e, share)
+      INTEGER, INTENT(IN) :: e
+      REAL(wp), INTENT(IN) :: share
+      cdn(e) = cdn(e) + share*att(4, k)/(diam(e)*l0(e))
+      cdt(e) = cdt(e) + share*att(6, k)/(4.0_wp*QUARTER_PI*diam(e)*l0(e))
+    END SUBROUTINE add_share
+  END SUBROUTINE smear_attachment_drag
+
   SUBROUTINE attachment_static_polish(l0, ea, ei, w_bare, w_smear, diam, node, att, q, fixed_dofs, &
                                       contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0, endconn_mode, &
-                                      opts, tol, ErrStat, ErrMsg, bathymetry, cur_obj, fell_back)
+                                      opts, tol, ErrStat, ErrMsg, bathymetry, cur_obj, fell_back, cdn_bare, &
+                                      cdt_bare)
     !! Homotopy from the smeared-attachment equilibrium q to the discrete one: in warm-started
     !! Newton solves the element weights move from w_smear to w_bare while the lumped nodal
     !! forces -(m - rho V) g e_z (-m g e_z for an attachment above the still-water level,
     !! attachment_static_weight) and, in a deck current, the attachment current drag grow from
     !! zero to full, with the contact, dry-buoyancy, end-connection and line current terms of
-    !! the builder's static problem. The drag depends on the node's position (profile current,
+    !! the builder's static problem. With cdn_bare and cdt_bare (the line's own drag
+    !! coefficients of cur_obj, whose cdn and cdt carry the attachments' drag smeared,
+    !! smear_attachment_drag) the element drag coefficients move from those of cur_obj to them
+    !! with the weights, so the smeared drag passes to the nodes as the smeared weight does.
+    !! The drag depends on the node's position (profile current,
     !! current grid) and line tangent, and the weight on the side of the surface the node is on,
     !! so each solve takes them at its incoming state and the full-load solve is repeated with
     !! those of the last solution until the solution stops moving and no attachment changes
@@ -5495,12 +5562,12 @@ CONTAINS
     !! and still advances at the smaller size. At most MAX_FAILED_STEPS load steps may fail in
     !! all, a backstop that a steady homotopy does not reach (16 failures at worst, at
     !! MIN_STEP); with at most 1/MIN_STEP converged steps this bounds the polish.
-    !! The smeared state carries no attachment drag, and on a frictional seabed, whose
-    !! regularised friction force turns from its sticking stiffness to its sliding capacity
-    !! over a short slip, the Newton update for a cross-flow drag can overshoot far from the
-    !! equilibrium and diverge (even in load steps of 1/64), which the pseudo-transient
-    !! regularisation avoids. Once a damped Newton solve has failed, the
-    !! later ones get NEWTON_RETRY_ITER iterations before the fallbacks take over. A polish
+    !! On a frictional seabed, whose regularised friction force turns from its sticking
+    !! stiffness to its sliding capacity over a short slip, the Newton update for a cross-flow
+    !! drag can overshoot far from the equilibrium and diverge, which the pseudo-transient
+    !! regularisation avoids (from a smeared state without the attachment drag, which the polish
+    !! then applied whole, even load steps of 1/64 diverged). Once a damped Newton solve has
+    !! failed, the later ones get NEWTON_RETRY_ITER iterations before the fallbacks take over. A polish
     !! whose damped Newton solves all converge takes exactly the solves it took before.
     !! fell_back (optional out) reports that a damped Newton solve failed, so that the state
     !! was reached with the fallbacks (and the caller re-runs its acceptance checks on it).
@@ -5517,6 +5584,7 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     TYPE(CD_HermiteStaticCurrentType), INTENT(IN), OPTIONAL :: cur_obj
     LOGICAL, INTENT(OUT), OPTIONAL :: fell_back
+    REAL(wp), INTENT(IN), OPTIONAL :: cdn_bare(:), cdt_bare(:)
     INTEGER, PARAMETER :: NSTEP = 8, MAX_FIXED_POINT = 60
     ! Smallest load-fraction step: 1/NSTEP halved seven times. Newton budget once a damped
     ! Newton solve of this polish has failed (a converging one takes well under it). Budget
@@ -5538,9 +5606,23 @@ CONTAINS
     ! The damped Newton failure of the first failed solve, and of the last one.
     CHARACTER(1024) :: first_msg, last_msg
     CHARACTER(48) :: step_buf, lam_buf
+    ! the current of the solves (cur_obj with the element drag coefficients of the load
+    ! fraction; unallocated without cur_obj) and cur_obj's smeared coefficients
+    TYPE(CD_HermiteStaticCurrentType), ALLOCATABLE :: cur_l
+    REAL(wp), ALLOCATABLE :: cdn_smear(:), cdt_smear(:)
+    LOGICAL :: blend_drag
 
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     IF (PRESENT(fell_back)) fell_back = .FALSE.
+    blend_drag = .FALSE.
+    IF (PRESENT(cur_obj)) THEN
+      ALLOCATE (cur_l, SOURCE=cur_obj)
+      blend_drag = PRESENT(cdn_bare) .AND. PRESENT(cdt_bare)
+      IF (blend_drag) THEN
+        cdn_smear = cur_obj%cdn
+        cdt_smear = cur_obj%cdt
+      END IF
+    END IF
     first_msg = ''
     last_msg = ''
     newton_failed = .FALSE.
@@ -5568,6 +5650,10 @@ CONTAINS
     DO WHILE (lam_done < CD_ONE)
       lam = MIN(CD_ONE, lam_done + dlam)
       wl = w_bare + (CD_ONE - lam)*(w_smear - w_bare)
+      IF (blend_drag) THEN
+        cur_l%cdn = cdn_bare + (CD_ONE - lam)*(cdn_smear - cdn_bare)
+        cur_l%cdt = cdt_bare + (CD_ONE - lam)*(cdt_smear - cdt_bare)
+      END IF
       CALL solve_with(lam, converged)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       IF (converged) THEN
@@ -5692,7 +5778,7 @@ CONTAINS
                                             bending_quadrature_order=opts%bending_quadrature_order, &
                                             endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                             endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
-                                            water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                            water_weight=opts%rhoW*opts%g, current=cur_l, &
                                             backtracking=mode == MERIT, merit_line_search=mode == MERIT, &
                                             pseudo_transient=mode == PSEUDO_TRANSIENT)
         ELSE
@@ -5703,7 +5789,7 @@ CONTAINS
                                             bending_quadrature_order=opts%bending_quadrature_order, &
                                             endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
                                             endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
-                                            water_weight=opts%rhoW*opts%g, current=cur_obj, &
+                                            water_weight=opts%rhoW*opts%g, current=cur_l, &
                                             backtracking=mode == MERIT, merit_line_search=mode == MERIT, &
                                             pseudo_transient=mode == PSEUDO_TRANSIENT)
         END IF
