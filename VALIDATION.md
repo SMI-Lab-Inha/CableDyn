@@ -507,7 +507,7 @@ scripts, results, and source provenance are in
 
 The measurements below were made on 2026-11-08 on one host (AMD Ryzen Threadripper PRO 7965WX,
 Windows 11 Pro) with one thread per code, as the median of three runs after one warm-up. They
-come from [`validation/scripts/performance_records.py`](validation/scripts/performance_records.py),
+come from [`validation/scripts/performance_records.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/performance_records.py),
 which also checks each timed model against its reference response. CableDyn is timed with the
 Windows release driver (IFX, the shipped binary) and with a GNU Release build of `dev`. Their
 versions and hashes, the ranges and the timing definitions are in
