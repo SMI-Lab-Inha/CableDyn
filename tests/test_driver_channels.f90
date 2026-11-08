@@ -323,8 +323,12 @@ CONTAINS
     ! of every node of the initial state is tensile.
     CALL require(min_static_tension('chan_fin.static.out') > 0.0_wp, &
                  'opt-in tensile safety leaves a tensile element-mean state before initialisation')
-    ! declination channel matches the reported tangent.
-    CALL require(ABS(v(18) - ref_dec(n4 - n2)) < 1.0e-3_wp, 'finite-EI L1N3Dec matches tangent')
+    ! The declination channel is the cable's tangent at the node (its tangent DOF), the
+    ! Declination of the static profile; the chord of the neighbouring nodes is only close to it
+    ! on this 20-element arch (1.2 deg off).
+    CALL require(ABS(v(18) - static_declination('chan_fin.static.out', 3)) < 1.0e-5_wp, &
+                 'finite-EI L1N3Dec is the static profile tangent')
+    CALL require(ABS(v(18) - ref_dec(n4 - n2)) < 2.0_wp, 'finite-EI L1N3Dec is close to the chord')
     ! acceleration channel is finite on a dynamic run.
     CALL require(IEEE_IS_FINITE(v(15)) .AND. IEEE_IS_FINITE(v(16)) .AND. IEEE_IS_FINITE(v(17)), &
                  'finite-EI acceleration channel is finite')
@@ -381,6 +385,33 @@ CONTAINS
     CALL require(v(2) > 1.0e5_wp, 'straight finite-EI line is taut')
     CALL require(ABS(v(3)) <= 1.0e-6_wp*2.0e5_wp, 'reference-relative BendMom = 0 when the shape equals its reference')
   END SUBROUTINE test_finite_straight_bendmom
+
+  REAL(wp) FUNCTION static_declination(path, want_node) RESULT(dec)
+    !! The Declination of node want_node of line 1 in a static.out profile; HUGE when unreadable.
+    CHARACTER(*), INTENT(IN) :: path
+    INTEGER, INTENT(IN) :: want_node
+    INTEGER :: u, ios, lineid, node
+    REAL(wp) :: s, x, y, z, tn, curv, bend, d
+    CHARACTER(2048) :: buf
+    dec = HUGE(1.0_wp)
+    OPEN (NEWUNIT=u, FILE=path, STATUS='OLD', ACTION='READ', IOSTAT=ios)
+    IF (ios /= 0) RETURN
+    DO node = 1, 3
+      READ (u, '(A)', IOSTAT=ios) buf
+    END DO
+    DO
+      READ (u, '(A)', IOSTAT=ios) buf
+      IF (ios /= 0) EXIT
+      IF (LEN_TRIM(buf) == 0) CYCLE
+      READ (buf, *, IOSTAT=ios) lineid, node, s, x, y, z, tn, curv, bend, d
+      IF (ios /= 0) EXIT
+      IF (lineid == 1 .AND. node == want_node) THEN
+        dec = d
+        EXIT
+      END IF
+    END DO
+    CLOSE (u)
+  END FUNCTION static_declination
 
   REAL(wp) FUNCTION min_static_tension(path) RESULT(tmin)
     !! Smallest node Tension (segment tension) of a static.out profile; -HUGE when unreadable.

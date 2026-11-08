@@ -1284,6 +1284,12 @@ add_executable(test_static_dry_weight tests/test_static_dry_weight.f90)
 target_link_libraries(test_static_dry_weight PRIVATE cabledyn_core)
 add_test(NAME static_dry_weight COMMAND test_static_dry_weight WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(static_dry_weight PROPERTIES LABELS "fortran;integration;static;openfast")
+# The tangent channels of a finite-EI line read its tangent DOF: at a clamped end the clamp's
+# angles, at a pinned end and every other node the solution's tangent.
+add_executable(test_end_tangent_channels tests/test_end_tangent_channels.f90)
+target_link_libraries(test_end_tangent_channels PRIVATE cabledyn_core)
+add_test(NAME end_tangent_channels COMMAND test_end_tangent_channels WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(end_tangent_channels PROPERTIES LABELS "fortran;integration;static;outputs" TIMEOUT 600)
 
 add_executable(test_viv_kernels tests/test_viv_kernels.f90)
 target_link_libraries(test_viv_kernels PRIVATE cabledyn_core)
@@ -2815,6 +2821,15 @@ if(Python3_Interpreter_FOUND)
   set_tests_properties(driver_curvature_stretch PROPERTIES
     LABELS "python;driver;integration;static;validation"
     SKIP_RETURN_CODE 77
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+  # The end tangent outputs of a clamped finite-EI line (channels, static profile, range graph,
+  # initialisation reports on the finite-EI and mixed routes) are the clamp's angles.
+  add_test(NAME driver_end_tangent_channels
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_end_tangent_channels.py
+                   $<TARGET_FILE:cabledyn>)
+  set_tests_properties(driver_end_tangent_channels PROPERTIES
+    LABELS "python;driver;integration;static;outputs"
+    TIMEOUT 600
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 endif()
 # The scan of the round-off CI job: it must flag a fallback note, a failed run and a forced

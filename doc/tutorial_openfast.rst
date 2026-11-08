@@ -339,7 +339,7 @@ seabed. Copy it into the case folder and point a copy of the ``.fst`` at it:
       ...
       Line 4 fairlead effective tension: 11922 N
          force [Fx, Fy, Fz]: [1230, 0, -11858] N, inclination=84.078 deg
-         line tangent: inclination=83.943 deg, declination=173.94 deg, azimuth=0 deg
+         line tangent: inclination=83.973 deg, declination=173.97 deg, azimuth=0 deg
       ...
          Curv4N38 = 9.01822E-02 (1/m)
          BendMom4N38 = 1794.6 (N.m)
