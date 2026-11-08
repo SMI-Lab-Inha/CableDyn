@@ -18,7 +18,7 @@ and the ``examples`` folder (from the release's **Source code (zip)**) side by s
 .. code-block:: powershell
 
    Set-Location C:\CableDyn
-   .\CableDyn_driver.exe --version        # prints the v0.4.0 banner, exit code 0
+   .\CableDyn_driver.exe --version        # prints the v0.4.1 banner, exit code 0
 
 2. Solve a mooring line
 -----------------------
@@ -38,7 +38,7 @@ The run takes well under a second:
 .. code-block:: text
 
     ===================================================================
-      CableDyn  v0.4.0
+      CableDyn  v0.4.1
       Geometrically exact finite-element statics and dynamics of
       mooring lines and dynamic power cables for floating offshore wind
     -------------------------------------------------------------------

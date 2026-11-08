@@ -81,8 +81,9 @@ on `t + dt` and the host time grid is unchanged. In OpenFAST the module may adva
 The public header declares the complete interface of C ABI version 1, including the object
 queries of its minor extension 1 (ABI 1.1; check `CableDyn_GetAbiMinor() >= 1` before calling
 them), the host-coupling calls of its minor extension 2 (ABI 1.2; check
-`CableDyn_GetAbiMinor() >= 2`) and the host-rotation calls of its minor extension 3 (ABI 1.3;
-check `CableDyn_GetAbiMinor() >= 3`). Signatures and examples are in the [C API guide](capi.rst),
+`CableDyn_GetAbiMinor() >= 2`), the host-rotation calls of its minor extension 3 (ABI 1.3;
+check `CableDyn_GetAbiMinor() >= 3`) and the host-fluid calls, initialisation notes and section
+curvature of its minor extension 4 (ABI 1.4; check `CableDyn_GetAbiMinor() >= 4`). Signatures and examples are in the [C API guide](capi.rst),
 whose section "Coupling a host (CFD) solver" gives the call sequence of a CFD host.
 
 | Group | Functions |
@@ -92,10 +93,11 @@ whose section "Coupling a host (CFD) solver" gives the call sequence of a CFD ho
 | Initialisation | `CableDyn_InitDeck` (a supported `EI = 0` point-system deck, through the deck parser and static solve, or a deck with finite-EI lines, free bodies or rods on the coupled aggregate); `CableDyn_InitLine` (one meshed `EI = 0` line); `CableDyn_InitLines` (several lines with a compact coupled-DOF map) |
 | Stepping | `CableDyn_UpdateStates` (set coupled kinematics and recompute internal accelerations), `CableDyn_UpdatePointFluidFields`, `CableDyn_Step` |
 | Output | `CableDyn_CalcOutput`, `CableDyn_CalcOutputDerivatives`, `CableDyn_GetCoupledMotion` |
-| Queries | `CableDyn_NCoupledDOF`, `CableDyn_NPoints`, `CableDyn_NLines`, `CableDyn_GetLastError`, `CableDyn_GetInitNotes` |
+| Queries | `CableDyn_NCoupledDOF`, `CableDyn_NPoints`, `CableDyn_NLines`, `CableDyn_GetLastError` |
 | Object queries (ABI 1.1) | `CableDyn_GetAbiMinor`, `CableDyn_NObjects`, `CableDyn_GetObjectInfo`, `CableDyn_GetLineValues`, `CableDyn_GetPointState`, `CableDyn_GetBodyState`, `CableDyn_GetRodState`, `CableDyn_EvalChannel`: the model's lines, points, bodies and rods, their committed state, and any `OUTPUTS` channel |
 | Host coupling (ABI 1.2) | `CableDyn_InitDeckAt` (`CableDyn_InitDeck` with the statics solved at the host's positions of the `Coupled` points), `CableDyn_SaveState`, `CableDyn_RestoreState` (a one-slot in-memory save of the whole model for outer correctors), `CableDyn_GetCoupledLayout` (the deck point id and type of every block of the coupled vector) |
 | Host rotations (ABI 1.3) | `CableDyn_InitDeckRotating` (`CableDyn_InitDeck` for a host that turns its coupled points, so torsion and `Rigid` end connections turn with it), `CableDyn_UpdateRotations` (each coupled point's global-to-body DCM, angular velocity and acceleration), `CableDyn_GetCoupledMoments` (the moments the lines apply to the host) |
+| Host fluid and notes (ABI 1.4) | `CableDyn_SetHostFluid` (before the initialisation: the host supplies the ambient fluid), `CableDyn_NFluidNodes`, `CableDyn_GetFluidNodePositions`, `CableDyn_UpdateFluidFields` (the fluid at every line node), `CableDyn_GetInitNotes` (the notes of the last deck initialisation), and the line quantity `CD_C_LINE_SECTION_CURVATURE` of `CableDyn_GetLineValues` |
 
 Rules shared by every entry point:
 
@@ -115,7 +117,7 @@ Rules shared by every entry point:
 
 The interface ships as the versioned shared library `libcabledyn` (`cabledyn.dll` in an Intel
 Fortran and MSVC build; CMake target `cabledyn_shared`) with the installed header; it reports
-CableDyn 0.4.0 and C ABI version 1, minor extension 3. The Python package uses the same library.
+CableDyn 0.4.1 and C ABI version 1, minor extension 4. The Python package uses the same library.
 
 ### Concurrency
 
