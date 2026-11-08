@@ -1874,6 +1874,9 @@ CONTAINS
     LOGICAL :: polish_ready
     ! Set when the attachment polish needed its fallbacks (attachment_fallback_checks).
     LOGICAL :: att_fell_back
+    ! The relative residual of the discrete attachment equilibrium when a residual floor kept it
+    ! above the tight static tolerance (0 otherwise).
+    REAL(wp) :: att_floor_res
     LOGICAL :: bathymetry_flat, require_3d_static, sym_broken, planar_unstable, saddle_kept
     ! whether the line would be solved in 3D without its torsion (a twisted line always is)
     LOGICAL :: require_3d_untwisted
@@ -3305,7 +3308,8 @@ CONTAINS
       CALL attachment_static_polish(l0, ea, ei, w_bare, w, diam, att_node, ln%att, q_static, fixed_dofs, &
                                     contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
                                     endconn_mode, opts, static_tol, ErrStat, ErrMsg, bathymetry, cur_obj, &
-                                    fell_back=att_fell_back, cdn_bare=att_cdn_bare, cdt_bare=att_cdt_bare)
+                                    fell_back=att_fell_back, cdn_bare=att_cdn_bare, cdt_bare=att_cdt_bare, &
+                                    tol_floor=COUPLED_STATIC_TOL, floor_res=att_floor_res)
       ! the discrete equilibrium carries the line's own drag (the attachments' at their nodes)
       IF (ALLOCATED(att_cdn_bare)) THEN
         cur_obj%cdn = att_cdn_bare
@@ -3325,6 +3329,12 @@ CONTAINS
         CALL report_note('line '//TRIM(int_to_str(ln%id))//': the discrete attachment equilibrium was reached '// &
                          'after a failed Newton solve (pseudo-transient continuation, line search or smaller '// &
                          'load steps) and passed the acceptance checks of the smeared state')
+      END IF
+      IF (att_floor_res > CD_ZERO) THEN
+        WRITE (note_text, '(A,I0,A,ES9.2,A,ES9.2)') 'line ', ln%id, ': static residual floor above the '// &
+          'dynamic tolerance ', static_tol_target, '; discrete attachment equilibrium accepted at the relative '// &
+          'residual ', att_floor_res
+        CALL report_note(note_text)
       END IF
       ! On the final mesh, with the bare weights the polished state carries; the bending-length
       ! rule of the note uses the smeared section weights w. A line restrained in torsion starts
@@ -5535,7 +5545,7 @@ CONTAINS
   SUBROUTINE attachment_static_polish(l0, ea, ei, w_bare, w_smear, diam, node, att, q, fixed_dofs, &
                                       contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0, endconn_mode, &
                                       opts, tol, ErrStat, ErrMsg, bathymetry, cur_obj, fell_back, cdn_bare, &
-                                      cdt_bare)
+                                      cdt_bare, tol_floor, floor_res)
     !! Homotopy from the smeared-attachment equilibrium q to the discrete one: in warm-started
     !! Newton solves the element weights move from w_smear to w_bare while the lumped nodal
     !! forces -(m - rho V) g e_z (-m g e_z for an attachment above the still-water level,
@@ -5572,6 +5582,11 @@ CONTAINS
     !! was reached with the fallbacks (and the caller re-runs its acceptance checks on it).
     !! A failure names the load fraction of the first failed solve and, when the homotopy
     !! stops, the load fraction it reached.
+    !! tol_floor (optional, > tol) is the tolerance of a residual floor: a solve whose Newton
+    !! iteration stalls above tol is repeated at tol_floor, from the same incoming state, before
+    !! the next update rule, as the line's own static solve accepts a floor at the coupled static
+    !! tolerance; floor_res (optional out) is the relative residual of the returned state when it
+    !! lies above tol, and 0 otherwise.
     REAL(wp), INTENT(IN) :: l0(:), ea(:), ei(:), w_bare(:), w_smear(:), diam(:), att(:, :)
     INTEGER, INTENT(IN) :: node(:), fixed_dofs(:), endconn_mode(2)
     REAL(wp), INTENT(INOUT) :: q(:)
@@ -5583,8 +5598,11 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
     TYPE(CD_HermiteStaticCurrentType), INTENT(IN), OPTIONAL :: cur_obj
     LOGICAL, INTENT(OUT), OPTIONAL :: fell_back
-    REAL(wp), INTENT(IN), OPTIONAL :: cdn_bare(:), cdt_bare(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: cdn_bare(:), cdt_bare(:), tol_floor
+    REAL(wp), INTENT(OUT), OPTIONAL :: floor_res
     INTEGER, PARAMETER :: NSTEP = 8, MAX_FIXED_POINT = 60
+    ! the update rules of a solve (solve_with, static_solve)
+    INTEGER, PARAMETER :: NEWTON = 1, PSEUDO_TRANSIENT = 2, MERIT = 3
     ! Smallest load-fraction step: 1/NSTEP halved seven times. Newton budget once a damped
     ! Newton solve of this polish has failed (a converging one takes well under it). Budget
     ! of failed load steps: each takes at most NEWTON_RETRY_ITER + 400 Newton iterations
@@ -5610,9 +5628,16 @@ CONTAINS
     TYPE(CD_HermiteStaticCurrentType), ALLOCATABLE :: cur_l
     REAL(wp), ALLOCATABLE :: cdn_smear(:), cdt_smear(:)
     LOGICAL :: blend_drag
+    ! the looser tolerance of a residual floor, and the number of tolerances a solve may take
+    REAL(wp) :: tol_loose
+    INTEGER :: n_tol
 
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     IF (PRESENT(fell_back)) fell_back = .FALSE.
+    IF (PRESENT(floor_res)) floor_res = CD_ZERO
+    tol_loose = tol
+    IF (PRESENT(tol_floor)) tol_loose = MAX(tol, tol_floor)
+    n_tol = MERGE(2, 1, tol_loose > tol)
     blend_drag = .FALSE.
     IF (PRESENT(cur_obj)) THEN
       ALLOCATE (cur_l, SOURCE=cur_obj)
@@ -5748,8 +5773,8 @@ CONTAINS
       REAL(wp), INTENT(IN) :: scale
       LOGICAL, INTENT(OUT) :: ok
       REAL(wp), INTENT(OUT), OPTIONAL :: dq_max
-      INTEGER, PARAMETER :: NEWTON = 1, PSEUDO_TRANSIENT = 2, MERIT = 3
-      INTEGER :: it, es, mode, max_it(3)
+      INTEGER :: it, es, mode, max_it(3), k_tol
+      REAL(wp) :: tol_k
       CHARACTER(1024) :: em
       CHARACTER(48) :: num_buf
       ok = .FALSE.
@@ -5768,34 +5793,18 @@ CONTAINS
         END IF
       END IF
       DO mode = NEWTON, MERIT
-        IF (contact_enabled) THEN
-          CALL CD_HermiteCable_Static_Solve(l0, ea, ei, wl, q, fixed_dofs, contact_z, CD_ZERO, 1, max_it(mode), &
-                                            tol, 0.7_wp, q_out, curv, res, it, es, em, &
-                                            f_nodal=scale*(f_att + f_drag), n_buoy_steps=1, contact_kn=knnode, &
-                                            bathymetry=bathymetry, contact_frame_cs=frame_cs, &
-                                            axial_quadrature_order=opts%axial_quadrature_order, &
-                                            bending_quadrature_order=opts%bending_quadrature_order, &
-                                            endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
-                                            endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
-                                            water_weight=opts%rhoW*opts%g, current=cur_l, &
-                                            backtracking=mode == MERIT, merit_line_search=mode == MERIT, &
-                                            pseudo_transient=mode == PSEUDO_TRANSIENT)
-        ELSE
-          CALL CD_HermiteCable_Static_Solve(l0, ea, ei, wl, q, fixed_dofs, contact_z, CD_ZERO, 1, max_it(mode), &
-                                            tol, 0.7_wp, q_out, curv, res, it, es, em, &
-                                            f_nodal=scale*(f_att + f_drag), n_buoy_steps=1, &
-                                            axial_quadrature_order=opts%axial_quadrature_order, &
-                                            bending_quadrature_order=opts%bending_quadrature_order, &
-                                            endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
-                                            endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
-                                            water_weight=opts%rhoW*opts%g, current=cur_l, &
-                                            backtracking=mode == MERIT, merit_line_search=mode == MERIT, &
-                                            pseudo_transient=mode == PSEUDO_TRANSIENT)
-        END IF
-        IF (es == CD_HCSTAT_OK .AND. res <= tol) THEN
-          ok = .TRUE.
-          EXIT
-        END IF
+        ! A solve that stalls on a residual floor above the tight tolerance is repeated at the
+        ! looser one from the same incoming state, as the line's own static solve is
+        DO k_tol = 1, n_tol
+          tol_k = MERGE(tol, tol_loose, k_tol == 1)
+          CALL static_solve(mode, tol_k, scale, max_it, it, es, em)
+          IF (es == CD_HCSTAT_OK .AND. res <= tol_k) THEN
+            ok = .TRUE.
+            EXIT
+          END IF
+          IF (es == CD_HCSTAT_BADINPUT .OR. INDEX(em, 'Newton did not converge') == 0) EXIT
+        END DO
+        IF (ok) EXIT
         IF (mode == NEWTON) THEN
           ! numbers into a local buffer: an internal WRITE into the caller's ErrMsg would abort
           ! on a short buffer
@@ -5814,7 +5823,42 @@ CONTAINS
       IF (.NOT. ok) RETURN
       IF (PRESENT(dq_max)) dq_max = MAXVAL(ABS(q_out - q))
       q = q_out
+      ! the residual of the state the polish returns, when it lies above the tight tolerance
+      IF (PRESENT(floor_res)) floor_res = MERGE(res, CD_ZERO, res > tol)
     END SUBROUTINE solve_with
+
+    SUBROUTINE static_solve(mode_s, tol_s, scale, max_it, it, es, em)
+      !! One warm-started static solve of solve_with at load fraction scale with the update rule
+      !! mode_s (pseudo_transient 2, merit 3) and the tolerance tol_s, from q into q_out, curv, res.
+      INTEGER, INTENT(IN) :: mode_s, max_it(3)
+      REAL(wp), INTENT(IN) :: tol_s, scale
+      INTEGER, INTENT(OUT) :: it, es
+      CHARACTER(*), INTENT(OUT) :: em
+      IF (contact_enabled) THEN
+        CALL CD_HermiteCable_Static_Solve(l0, ea, ei, wl, q, fixed_dofs, contact_z, CD_ZERO, 1, max_it(mode_s), &
+                                          tol_s, 0.7_wp, q_out, curv, res, it, es, em, &
+                                          f_nodal=scale*(f_att + f_drag), n_buoy_steps=1, contact_kn=knnode, &
+                                          bathymetry=bathymetry, contact_frame_cs=frame_cs, &
+                                          axial_quadrature_order=opts%axial_quadrature_order, &
+                                          bending_quadrature_order=opts%bending_quadrature_order, &
+                                          endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
+                                          endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
+                                          water_weight=opts%rhoW*opts%g, current=cur_l, &
+                                          backtracking=mode_s == MERIT, merit_line_search=mode_s == MERIT, &
+                                          pseudo_transient=mode_s == PSEUDO_TRANSIENT)
+      ELSE
+        CALL CD_HermiteCable_Static_Solve(l0, ea, ei, wl, q, fixed_dofs, contact_z, CD_ZERO, 1, max_it(mode_s), &
+                                          tol_s, 0.7_wp, q_out, curv, res, it, es, em, &
+                                          f_nodal=scale*(f_att + f_drag), n_buoy_steps=1, &
+                                          axial_quadrature_order=opts%axial_quadrature_order, &
+                                          bending_quadrature_order=opts%bending_quadrature_order, &
+                                          endconn_stiffness=endconn_k, endconn_direction=endconn_d0, &
+                                          endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
+                                          water_weight=opts%rhoW*opts%g, current=cur_l, &
+                                          backtracking=mode_s == MERIT, merit_line_search=mode_s == MERIT, &
+                                          pseudo_transient=mode_s == PSEUDO_TRANSIENT)
+      END IF
+    END SUBROUTINE static_solve
   END SUBROUTINE attachment_static_polish
 
   SUBROUTINE attachment_static_drag(q, node, att, opts, frame_cs, f, ErrStat, ErrMsg)

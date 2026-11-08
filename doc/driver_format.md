@@ -1046,7 +1046,9 @@ Behaviour:
   then carried to the discrete loads by continuation. The current drag
   depends on the node's position and line direction, and the weight on the side of the surface
   an attachment is on, so the final solve is repeated until the node positions change by less
-  than 1e-9 m and no attachment changes side. On a line restrained in torsion the torsion stage
+  than 1e-9 m and no attachment changes side. A residual floor above the tight static tolerance
+  is accepted at the coupled static tolerance 1e-6, as on a line without attachments, and noted
+  with the residual reached. On a line restrained in torsion the torsion stage
   (the imposed twist) follows on the discrete equilibrium, with the attachments' net weights
   and drag as nodal loads (the drag again to a fixed point), so a run starts in the twisted
   equilibrium. An attachment adds no polar inertia to the line's twist.

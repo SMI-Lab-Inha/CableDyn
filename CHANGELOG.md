@@ -18,6 +18,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- Finite-EI statics with discrete `ATTACHMENTS`: a solve of the attachment polish that stalled on
+  a residual floor above the tight static tolerance (a few times 1e-8, on a fine or locally
+  refined mesh) went on to the fallbacks and halved its load steps until the static start
+  failed, although the line's own static solve accepts such a floor at the coupled static
+  tolerance 1e-6. A clamped cable arriving at its anchor in a tight bend with one clump failed
+  for every clump mass and position tried. The polish now repeats a stalled solve at 1e-6 from
+  the same state before its fallbacks, and the run notes the residual of the discrete
+  equilibrium when it lies above the tight tolerance.
 
 ## [0.4.1] - 2026-11-08
 
