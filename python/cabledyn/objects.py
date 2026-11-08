@@ -494,6 +494,9 @@ def eval_channel(model: CableDyn, token: str) -> float:
     """Evaluate one OUTPUTS token (the caller holds the model lock)."""
     if not isinstance(token, str):
         raise TypeError(f"channel token must be a string; got {type(token).__name__}")
+    if "\0" in token:
+        # the library ends a token at its first NUL, so "FairTen1\0x" would read as FairTen1
+        raise ValueError(f"channel token must not contain a NUL character; got {token!r}")
     try:
         raw = token.strip().encode("ascii")
     except UnicodeEncodeError:
