@@ -18,10 +18,6 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
-- A time step below 1e-100 s is refused by name (`dtM`, `CableDyn_Step` and the OpenFAST glue
-  `DT`): the time integration divides by its square, which overflowed near 1e-155 s inside the
-  line solve ("banded model load q/v must be finite", "non-finite Jacobian"). The Python deck
-  validator applies the `dtM` bound.
 
 ## [0.4.1] - 2026-11-08
 
