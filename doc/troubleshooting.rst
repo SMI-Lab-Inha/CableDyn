@@ -857,7 +857,8 @@ Warnings and notes that do not stop a run
        elements; or the continuation or polish failed on a deck mesh with elements longer than
        half the bending length :math:`(EI/|w|)^{1/3}`, and the route was repeated on the whole
        line refined uniformly by a power of two, up to the factor at which every element meets
-       that length (or, at a rotationally
+       that length, and then on the deck mesh with only its long elements split to that length
+       (or, at a rotationally
        restrained end, on end elements halved toward the end down to its boundary layer). See
        :doc:`theory`, Static equilibrium. The run uses the refined mesh, statics and dynamics
        alike, and its profile and per-line outputs have that many segments; the refinement
