@@ -1368,7 +1368,7 @@ CONTAINS
   END SUBROUTINE CD_Init_Deck_Models
 
   SUBROUTINE CD_Init_Deck_System(deck_path, system, dtM, gravity, rho_water, ErrStat, ErrMsg, caller_driven, &
-                                 env_gravity, env_rho_water, env_wtrdpth, line_ids, coupled_positions)
+                                 env_gravity, env_rho_water, env_wtrdpth, line_ids, coupled_positions, deck_current)
     !! Parse a supported EI=0 deck and initialize one persistent multi-line
     !! CableDyn system with product-facing points and endpoint bindings.
     !! caller_driven (default .FALSE.): the host marches the system, so the deck's
@@ -1390,6 +1390,9 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: env_gravity, env_rho_water, env_wtrdpth
     INTEGER, ALLOCATABLE, INTENT(OUT), OPTIONAL :: line_ids(:)
     REAL(wp), INTENT(IN), OPTIONAL :: coupled_positions(:, :)
+    ! The deck's steady current, for the caller to sample at the node positions before every
+    ! step (CD_Deck_Current_Sample_System); inactive without a deck current.
+    TYPE(CD_DeckCurrentRuntimeType), INTENT(OUT), OPTIONAL :: deck_current
 
     TYPE(DeckLineType), ALLOCATABLE :: types(:)
     TYPE(DeckBody), ALLOCATABLE :: bodies(:)
@@ -1401,6 +1404,7 @@ CONTAINS
     TYPE(DeckOptions) :: opts
     CHARACTER(NAMELEN), ALLOCATABLE :: channels(:)
     TYPE(CD_BathymetryType) :: bathymetry
+    TYPE(HydroUpdateWorkspace) :: current_work
     LOGICAL :: ext_march
     INTEGER :: i
     ErrStat = CD_DECKDRV_OK
@@ -1479,6 +1483,18 @@ CONTAINS
       CALL CD_End_Bathymetry(bathymetry)
     ELSE
       CALL init_deck_system_from_parsed(types, points, lines, sections, opts, system, ErrStat, ErrMsg)
+    END IF
+    ! A line model takes its drag's fluid velocity at the nodes of its straight seed; the static
+    ! solve samples a depth profile or grid at its own node positions. The field is sampled
+    ! again at the static nodes (the t = 0 state), as the standalone march does before its first
+    ! step, so the end loads at the start are those of the static state and a caller stepping
+    ! the system at rest stays at rest. A uniform current is the same at every node.
+    IF (ErrStat == CD_DECKDRV_OK .AND. opts%has_current) THEN
+      CALL update_system_line_hydro(system, opts, CD_ZERO, current_work, ErrStat, ErrMsg, initial_condition=.TRUE.)
+      IF (ErrStat == CD_DECKDRV_OK .AND. PRESENT(deck_current)) THEN
+        deck_current%active = .TRUE.
+        deck_current%opts = opts
+      END IF
     END IF
     IF (PRESENT(line_ids) .AND. ErrStat == CD_DECKDRV_OK) THEN
       ALLOCATE (line_ids(SIZE(lines)))

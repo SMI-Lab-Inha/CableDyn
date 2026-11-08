@@ -1363,7 +1363,9 @@ every node's position and time as MoorDyn-C interpolates them. Standalone decks 
 - a grid holds at most 2e6 resampled points in space and time (every static solve holds a copy,
   48 MB at the limit);
 - the C API and the OpenFAST point-system shells have no simulation clock: they apply a current
-  constant in time as a steady field, as `Currents 1`, and refuse one that varies in time;
+  constant in time as a steady field, as `Currents 1`, sampled at the nodes of the static state
+  and, through the C API, at the step-start nodes before every step, and refuse one that varies
+  in time;
 - `current_profile_4d.txt` is read as MoorDyn-C documents it, which MoorDyn-C v2.7.1 does not
   quite do: it reads its rows from line 7, so a row on line 6 leaves that grid point at zero, and
   it matches a row to the grid by the text of its coordinates, so a row writing `-0` for `0` or
