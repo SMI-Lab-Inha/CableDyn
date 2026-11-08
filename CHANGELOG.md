@@ -18,6 +18,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- A bend stiffener over an element that two STIFFENERS rows share no longer gives it a negative
+  EI: their covered lengths can sum past the element length by round-off, which a soft cable's EI
+  (1e-12 N m^2 and below) turned into a negative compliance, and the static solve then failed
+  with an internal message. STIFFENERS `RootOD` and `TipOD` are now at most 1e3 m, the bound of a
+  line type's `Diam`, in the solver and the Python deck validator.
 
 ## [0.4.1] - 2026-11-08
 
