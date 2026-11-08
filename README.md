@@ -23,9 +23,9 @@ The current stable release is `v0.4.1`; interfaces are versioned and may change 
 ## What CableDyn does
 
 - **Finite-element cables with real bending stiffness.** Cubic-Hermite elements carry position
-  and tangent at every node, so curvature is continuous along the line and converges at fourth
-  order with the mesh (measured slope 3.99). Tension-only `EI = 0` elements serve chains, wire
-  and fibre ropes in the same model.
+  and tangent at every node, so the slope is continuous along the line, and the deflection of a
+  beam under its weight converges at fourth order with the mesh (measured slope 3.99).
+  Tension-only `EI = 0` elements serve chains, wire and fibre ropes in the same model.
 - **An implicit solver.** Generalised-alpha integration with consistent mass and automatic step
   subdivision: a snap load stays within 1.5 % of a 0.5 ms reference at a 20 ms step, where an
   explicit lumped-mass step must stay near 1 ms.
