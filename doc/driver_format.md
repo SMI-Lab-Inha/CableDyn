@@ -306,10 +306,10 @@ and `BA = BA_s|BA_d`:
   waves, host fluid fields and VIV of any `EI = 0` line, and active line control of a Syrope
   segment on the OpenFAST route ([CONTROL](#control-optional-openfast-line-control)).
 - The static start solves each Syrope element on the rest curve of its load history (the OWC, or
-  the `Tmax0` working curve under `SYROPE IC`). A single-section line takes one secant EA from the
-  curve at its mean strain; on a composite line, where the tension varies along a sagging Syrope
-  section, every Syrope element takes its own secant at its own tension, so every element starts
-  on its curve and the dynamics start in the static equilibrium.
+  the `Tmax0` working curve under `SYROPE IC`). The tension varies along a Syrope section (a
+  sagging section of a composite line, or the weight of a long or inclined taut rope), so every
+  Syrope element takes its own secant EA at its own tension: every element starts on its curve
+  and the dynamics start in the static equilibrium.
 
 The settings-file grammar is in [Auxiliary file formats](file_formats.rst).
 

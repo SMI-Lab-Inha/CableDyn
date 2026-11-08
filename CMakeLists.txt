@@ -1877,6 +1877,17 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 300
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # Taut single-section Syrope ropes whose tension varies along them start at rest: every element
+  # takes its own secant on its working curve.
+  add_test(NAME syrope_taut_rest
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_syrope_taut_rest.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --output ${CMAKE_BINARY_DIR}/syrope_taut_rest)
+  set_tests_properties(syrope_taut_rest PROPERTIES
+    LABELS "python;syrope;static;dynamic"
+    TIMEOUT 300
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # The note on grounded lines that a current moves over a seabed without friction: once per run
   # on every standalone route, and never without a grounded node, a current, or a march, or
   # with friction.

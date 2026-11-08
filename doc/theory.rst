@@ -958,15 +958,16 @@ ratchets and regenerates the working curve when the mean tension exceeds it.
 **Initial condition.** The static solve uses the rest curve of the initial load history: the
 OWC for a virgin rope, or, with ``SYROPE IC``, the working curve regenerated at
 :math:`T_\text{max,0}` (zero tension below its zero-tension strain, the OWC above its top
-strain :math:`\varepsilon_\text{OWC}(T_\text{max,0})`). A single secant axial stiffness of that
-curve is iterated to the solved mean strain, the line otherwise built as any ``EI = 0`` line
+strain :math:`\varepsilon_\text{OWC}(T_\text{max,0})`). Each element's secant axial stiffness of
+that curve is iterated to the curve's strain at its solved tension, the line otherwise built as
+any ``EI = 0`` line
 (its drag in a deck current included). Each element then starts with the running maximum
 :math:`\max(T_\text{max,0}, T_e)` (:math:`T_e` for a virgin rope), where :math:`T_e` is its
 static tension, and with the slow strain whose kernel tension at the static strain and zero
 strain rate equals :math:`T_e`. The dynamic state therefore starts in the static equilibrium,
-with no initial transient. Where the static strain lies on the rest curve, that slow strain is
-the curve's rest point. Elsewhere, for example along a sagging line, it creeps at
-:math:`(T_e - T_\text{mean})/BA_s`. With fixed line ends the mean tension follows from the
+with no initial transient: every element's static strain lies on the rest curve, where that slow
+strain is the curve's rest point. (With one secant for a whole section, an element away from the
+mean tension sat off the curve and its slow strain crept at :math:`(T_e - T_\text{mean})/BA_s`.) With fixed line ends the mean tension follows from the
 geometry and :math:`T_\text{max,0}`, so :math:`T_\text{mean,0}` does not enter the state. A
 value that differs from the static mean tension by more than 1 % is reported on the console.
 A strain below the working curve's zero-tension strain (a slack rope on that history) stops at

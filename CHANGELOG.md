@@ -18,6 +18,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- Syrope lines of one section: the static start took one secant EA from the working curve at
+  the line's mean strain, so where the tension varies along the rope (its weight on a long or
+  inclined taut line) the elements away from the mean started off their curve and their slow
+  strains settled the line at rest (a 991 m rope moved its fairlead tension by 3.4e-4 in 1 s;
+  63 of 125 random Syrope lines drifted by more than 1e-5). Every Syrope element now takes its
+  own secant at its own tension, as on a composite line: the same lines start at rest to 1e-6,
+  and their static tensions move by up to 3e-4.
 
 ## [0.4.1] - 2026-11-08
 
