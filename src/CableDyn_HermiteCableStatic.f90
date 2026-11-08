@@ -6743,7 +6743,9 @@ CONTAINS
     ! move toward the compression, so it is given two more.
     INTEGER :: max_axial_stall_passes
     INTEGER, PARAMETER :: AXIAL_BUDGET_FLOOR = 2048
-    INTEGER :: axial_budget, axial_stall, wios
+    INTEGER :: axial_budget, axial_stall, axial_flat, wios
+    ! A violation within this share of the previous pass's is flat: refinement does not move it.
+    REAL(wp), PARAMETER :: AXIAL_FLAT_REL = 1.0e-3_wp
     REAL(wp) :: axial_prev, end_res_prev
     LOGICAL :: end_min, end_prev, end_settled
     CHARACTER(400) :: axial_stop
@@ -6754,6 +6756,7 @@ CONTAINS
     applied_scale = 1
     local_passes = 0
     axial_stall = 0
+    axial_flat = 0
     axial_prev = CD_ZERO
     end_prev = .FALSE.
     end_res_prev = CD_ZERO
@@ -7048,6 +7051,14 @@ CONTAINS
         ELSE
           axial_stall = axial_stall + 1
         END IF
+        ! A compression that two successive passes leave where it was (to 0.1 %) is the
+        ! equilibrium's, not the mesh's: splitting the elements around it further only grows
+        ! the mesh to its budget. (A mesh compression falls as its elements are split.)
+        IF (ABS(diag_out%axial_violation - axial_prev) <= AXIAL_FLAT_REL*axial_prev) THEN
+          axial_flat = axial_flat + 1
+        ELSE
+          axial_flat = 0
+        END IF
       END IF
       needs_refinement = (must_be_tensile .AND. diag_out%axial_compression) .OR. &
                          (refine_other .AND. refinable(diag_out))
@@ -7055,6 +7066,10 @@ CONTAINS
                     .NOT. (refine_other .AND. refinable(diag_out))
       IF (needs_refinement .AND. local_axial .AND. axial_stall >= max_axial_stall_passes) THEN
         axial_stop = 'the minimum axial strain stopped improving'
+        EXIT
+      END IF
+      IF (needs_refinement .AND. local_axial .AND. axial_flat >= 2) THEN
+        axial_stop = 'two passes left the compression where it was: it is the equilibrium''s, not the mesh''s'
         EXIT
       END IF
       IF (needs_refinement .AND. local_axial .AND. end_settled) THEN
