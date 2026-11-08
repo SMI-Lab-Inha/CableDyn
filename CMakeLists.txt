@@ -1758,9 +1758,8 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 600
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
-  # Discrete buoyancy modules on a lazy wave in a cross current (the attachment polish falls
-  # back from diverging Newton steps on the frictional seabed): the static solve converges and
-  # its end tensions match the equivalent smeared section.
+  # Discrete buoyancy modules on a lazy wave in a cross current on a frictional seabed: the static
+  # solve converges without a fallback and its end tensions match the equivalent smeared section.
   add_test(NAME attachment_cross_current
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_attachment_cross_current.py
                    --exe $<TARGET_FILE:cabledyn>
@@ -1967,8 +1966,23 @@ if(Python3_Interpreter_FOUND)
       LABELS "python;integration;static;dynamic;capi"
       TIMEOUT 600
       ENVIRONMENT "${_cabledyn_python_test_environment}")
+    # Discrete buoyancy modules in oblique and cross currents (speed, heading, module count and
+    # mesh refinement swept): the attachment polish converges without its fallbacks on a frictional
+    # seabed, and a mid-water lazy wave's end forces balance its weight, buoyancy and drag (C API).
+    # PROCESSORS reserves the four driver processes the test runs at once.
+    add_test(NAME attachment_polish_current
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_attachment_polish_current.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --library ${_node_channels_library}
+                     --source ${CMAKE_CURRENT_SOURCE_DIR}
+                     --output ${CMAKE_BINARY_DIR}/attachment_polish_current)
+    set_tests_properties(attachment_polish_current PROPERTIES
+      LABELS "python;hermite;static;robustness;attachments;capi"
+      PROCESSORS 4
+      TIMEOUT 900
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
   else()
-    message(STATUS "node_channels_refined_line: skipped (numpy not importable in ${Python3_EXECUTABLE})")
+    message(STATUS "node_channels_refined_line, attachment_polish_current: skipped (numpy not importable in ${Python3_EXECUTABLE})")
   endif()
 
   # The arbiter imports numpy + scipy at load time; only register the test when they are

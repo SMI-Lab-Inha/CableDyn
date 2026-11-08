@@ -1041,8 +1041,9 @@ Behaviour:
   with the same drag law at rest, so a run in a current starts in equilibrium.
   An attachment above the free surface carries its weight only, in the static initial condition
   too. Attachments have no seabed contact of their own; the node's contact acts on the line.
-- The static equilibrium is solved first with each attachment's net weight spread over the two
-  elements at its node, then carried to the discrete loads by continuation. The current drag
+- The static equilibrium is solved first with each attachment's net weight, and in a current
+  across the vertical plane of the line its drag areas, spread over the two elements at its node,
+  then carried to the discrete loads by continuation. The current drag
   depends on the node's position and line direction, and the weight on the side of the surface
   an attachment is on, so the final solve is repeated until the node positions change by less
   than 1e-9 m and no attachment changes side. On a line restrained in torsion the torsion stage

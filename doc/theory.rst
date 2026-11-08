@@ -3002,8 +3002,12 @@ the nodal tangent :math:`\mathbf{m}_j/\lvert\mathbf{m}_j\rvert` (the line's Mori
 :math:`C_dA = C_{d,n} d` and :math:`C_dA_x = \pi C_{d,t} d`). The drag enters the velocity tangent
 and, through :math:`\mathbf{m}_j`, the position tangent exactly. Above the free surface an
 attachment carries its weight :math:`-m g\,\mathbf{e}_z` alone. The statics start from the
-equilibrium with the net weight smeared over the node's two elements and continue to the lumped
-load in warm-started Newton solves; in a deck current the drag at rest is added, each solve takes
+equilibrium with the net weight smeared over the node's two elements, in a deck current across
+the vertical plane of the chord with the drag areas smeared over them too (per-metre drag
+coefficients :math:`C_dA/(d\,L)` and :math:`C_dA_x/(\pi d\,L)` added to an element of length
+:math:`L` for each share), and continue to the lumped loads in warm-started Newton solves, the
+smeared weight and drag moving to the node together; in a deck current the drag at rest is
+lumped at the node, each solve takes
 every attachment's load on the side of the still-water level its node is on, and the final
 solve is repeated with the loads of its own solution until the nodes stop moving and no
 attachment changes side (an attachment that its weight in air takes below the surface and its
@@ -3021,12 +3025,16 @@ At most 64 load steps may fail in all. A discrete state reached this way passes 
 tensile, physical-branch and stability checks of the smeared state before it is accepted, the
 kink limit :math:`L_0\kappa \le 0.7` applied away from the attachment nodes: a lumped load
 turns the line by a slope jump :math:`\theta` at its node, which the :math:`C^1` elements
-beside the node carry as :math:`L_0\kappa \approx 2\theta` at any mesh size. The smeared state carries no
-attachment drag, and on a frictional seabed, whose regularised friction force turns from its
-sticking stiffness to its sliding capacity over a short slip, the Newton update for a
-cross-flow drag can overshoot and diverge from the first step (a lazy wave with 25 modules in a
-0.3 m/s cross current on 2 m elements, even in steps of 1/64), which the pseudo-transient
-regularisation avoids.
+beside the node carry as :math:`L_0\kappa \approx 2\theta` at any mesh size. On a frictional
+seabed, whose regularised friction force turns from its sticking stiffness to its sliding
+capacity over a short slip, a smeared state without the attachment drag left the polish to apply
+the whole module drag, and its damped Newton updates diverged from the first step as the
+grounded run slid metres sideways (a lazy wave with 25 modules in a 0.3 m/s cross current on 2 m
+elements); with the drag smeared, each load step moves the line by millimetres and converges in
+a few iterations. A current along the plane does not move the line out of it, and the polish
+carries the attachment drag from the smeared state without it, as the smeared start of a coarse
+deck mesh could otherwise stop at the grounded-run compression check (a lazy wave restrained in
+torsion in 0.5 m/s along its plane).
 As the pitch :math:`p` of identical modules shrinks, the discrete equilibrium
 converges to the smeared section at :math:`O(p^2)`.
 

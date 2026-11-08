@@ -6,14 +6,16 @@
 The lazy-wave power cable of ``tests/data/lazy_wave_touchdown_planar_{refined,coarse}_att.dat``
 (25 discrete buoyancy modules at a 4 m pitch, rigid end connections, seabed friction 0.35) is
 put in a uniform current across its vertical plane. The static solve reaches the discrete
-equilibrium from the smeared one by a homotopy in the module loads and drag; on the refined
-mesh in 0.3 m/s its damped Newton steps diverge on the frictional seabed, and the polish must
-fall back to its regularised solves rather than fail (its note naming that path is required).
+equilibrium from the smeared one by a homotopy in the module loads and drag.
 
 Every deck must solve (exit 0), and its line-end tensions must agree with the deck that
 replaces the modules by the equivalent smeared section (the same submerged weight, displaced
 volume and normal drag per metre over the stretch the modules cover): FairTen within 1 % and
-AnchTen within 2 % of the smeared values.
+AnchTen within 2 % of the smeared values. The static solve reaches the discrete state without a
+fallback: in a current across the line's plane the smeared start carries the modules' drag as well
+as their weight, so the polish only moves both to the nodes (with the drag left out of the smeared
+start, the refined deck in 0.3 m/s reached it only through the pseudo-transient and line-search
+repetitions).
 
 usage: test_attachment_cross_current.py --exe <cabledyn> --data <tests/data> --output <dir>
 """
@@ -32,10 +34,8 @@ MODULES, PITCH, M_MOD, V_MOD, CDA_MOD = 25, 4.0, 91.32, 0.18378, 1.392
 BARE_D, BARE_M, BARE_CDN, BARE_CDT = 0.16, 36.70, 1.2, 0.1
 FAIR_TOL, ANCH_TOL = 0.01, 0.02
 CASES = [("refined", 0.3), ("refined", 0.6), ("coarse", 0.3), ("coarse", 0.6)]
-# The case whose polish takes the fallback path; its note says so (and that the state passed
-# the acceptance checks of the smeared state).
-FALLBACK_CASE = "refined_0.3"
-FALLBACK_NOTE = "was reached after a failed Newton solve"
+# Notes of a static solve that reached its state through a fallback.
+FALLBACK_NOTES = ("reached after a failed Newton solve", "stalled", "looser tolerance")
 
 
 def with_current(text: str, speed: float) -> str:
@@ -95,8 +95,9 @@ def main() -> int:
             rc, row, log = run(exe, d / "deck.dat")
             if rc != 0 or "FairTen4" not in row:
                 failures.append("%s %s: exit %d\n%s" % (name, kind, rc, log[-2000:]))
-            if kind == "discrete" and name == FALLBACK_CASE and FALLBACK_NOTE not in log:
-                failures.append("%s: the polish did not report its fallback path" % name)
+            notes = [n for n in FALLBACK_NOTES if n in log]
+            if notes:
+                failures.append("%s %s: the static solve needed a fallback (%s)" % (name, kind, ", ".join(notes)))
             results[kind] = row
         if all("FairTen4" in r for r in results.values()):
             disc, smr = results["discrete"], results["smeared"]
