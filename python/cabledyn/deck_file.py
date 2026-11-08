@@ -1018,8 +1018,15 @@ def _positional_numbers_are_finite(tokens: list[str]) -> bool:
         return False
 
 
-def _positional_range_error(tokens: list[str]) -> str | None:
-    """Return a native-finalizer range error for a parsed positional option."""
+def _positional_range_error(tokens: list[str], *, effective: bool = True) -> str | None:
+    """Return a native range error for a parsed positional option.
+
+    The native reader checks some rules on every row as it reads it (positive wave
+    height and period, distinct profile depths, every spectral and wavetrain row) and
+    the magnitude bounds of a regular or JONSWAP ``waves`` row and of a ``current`` row
+    only on the row in effect once OPTIONS is read: the last one. ``effective=False``
+    returns the per-row rules alone, for a row a later row may override.
+    """
     mode = tokens[0].lower()
     if mode == "profile":
         # The native two-point parser accepts either input direction and
@@ -1028,7 +1035,7 @@ def _positional_range_error(tokens: list[str]) -> str | None:
         if abs(_native_float(tokens[5]) - _native_float(tokens[1])) <= 100.0 * math.ulp(1.0):
             return "current profile depths must be strictly increasing"
         values = [_native_float(token) for token in tokens[1:9]]
-        if (
+        if effective and (
             abs(values[0]) > _NATIVE_MAX_COORDINATE
             or abs(values[4]) > _NATIVE_MAX_COORDINATE
             or any(abs(value) > _NATIVE_MAX_FLUID_SPEED for value in values[1:4] + values[5:8])
@@ -1038,7 +1045,9 @@ def _positional_range_error(tokens: list[str]) -> str | None:
                 "in magnitude"
             )
     elif mode == "uniform":
-        if any(abs(_native_float(token)) > _NATIVE_MAX_FLUID_SPEED for token in tokens[1:4]):
+        if effective and any(
+            abs(_native_float(token)) > _NATIVE_MAX_FLUID_SPEED for token in tokens[1:4]
+        ):
             return "OPTION current velocity components must be at most 1e3 m/s"
     elif (
         mode in {"airy", "jonswap", "stream", "dean"}
@@ -1049,6 +1058,8 @@ def _positional_range_error(tokens: list[str]) -> str | None:
         gamma = _native_float(tokens[3]) if mode == "jonswap" else 1.0
         if height <= 0.0 or period <= 0.0 or gamma < 1.0:
             return "waves require positive height/period and JONSWAP gamma >= 1"
+        if not effective:
+            return None
         low, high = _NATIVE_WAVE_PERIOD_RANGE
         if height > _NATIVE_MAX_WAVE_HEIGHT or not low <= period <= high:
             return "waves need height <= 1e3 m and period in [0.1, 1e5] s"
@@ -3255,7 +3266,8 @@ class DeckFile:
                 raise DeckFormatError(
                     f"{where}: positional option values must be finite plain numbers"
                 )
-            if error := _positional_range_error(tokens):
+            # the magnitude bounds apply to the row in effect only (``_validate``)
+            if error := _positional_range_error(tokens, effective=False):
                 raise DeckFormatError(f"{where}: {error}")
             _raise_option_defect(where, tokens)
             return OptionRecord(index, tokens[-1], tuple(tokens[:-1]), description)
@@ -3380,6 +3392,15 @@ class DeckFile:
         options = self.options
         channels = self.outputs
         option_by_key = {_option_key(option.keyword): option for option in options}
+        # native finalize_checks: the magnitude bounds of the waves and current rows in
+        # effect (the last of each); a row a later row overrides takes its row rules only
+        for key in ("waves", "current"):
+            record = option_by_key.get(key)
+            if record is None or record.keyword_first:
+                continue
+            tokens = [*record.values, record.keyword]
+            if _is_positional_option(tokens) and (error := _positional_range_error(tokens)):
+                raise DeckFormatError(f"{self._label}:{record.index + 1}: {error}")
         has_depth = "water_depth" in option_by_key
         has_bathymetry = "bathymetry" in option_by_key
         if has_depth and has_bathymetry:
