@@ -208,7 +208,11 @@ The counts follow the march:
   torsion and consistent-acceleration solves count to the rest.
 * **Finite-EI cable assembly time** splits the residual and tangent assemblies into their
   sections. The tangent element kernels evaluate the structural, damping, drag and wave
-  tangents of each element together; the other sections are the element residuals, the weight
+  tangents of each element together. A residual evaluation that a tangent is expected to follow
+  at the same state (the predictor of a step, and the full Newton step of an iteration the
+  previous step went past) runs them with the element loads, so their time then counts to the
+  residual assembly and the tangent assembly only scatters their blocks; the other sections
+  are the element residuals, the weight
   and supports, the attachments, the dry-part buoyancy, the seabed contact, the axial damping,
   the drag, the end connections, the wave and held Froude-Krylov loads and the torsion. The
   sections also count the assemblies made outside the step (reactions, end moments and

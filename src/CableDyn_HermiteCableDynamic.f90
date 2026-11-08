@@ -363,10 +363,27 @@ MODULE CableDyn_HermiteCableDynamic
     REAL(wp), ALLOCATABLE :: ws_Kb(:, :), ws_Kvb(:, :)
     REAL(wp), ALLOCATABLE :: ws_Keffb(:, :), ws_Msumb(:, :), ws_Mamb(:, :)
     INTEGER, ALLOCATABLE :: ws_ipiv(:)                    ! band-factorization pivots
-    REAL(wp), ALLOCATABLE :: ws_elem_f(:, :), ws_elem_K(:, :, :), ws_elem_Kdrag(:, :, :)
+    REAL(wp), ALLOCATABLE :: ws_elem_K(:, :, :), ws_elem_Kdrag(:, :, :)
     REAL(wp), ALLOCATABLE :: ws_elem_Kv(:, :, :), ws_elem_Kwave(:, :, :), ws_elem_Kheld(:, :, :)
     INTEGER, ALLOCATABLE :: ws_elem_es(:)
     CHARACTER(200), ALLOCATABLE :: ws_elem_em(:)
+    ! Element tangents kept by a residual evaluation (assemble_residual with stash_tangent): the
+    ! element loads of each kernel, ws_elem_f(:, k, e) for k = structure, axial damping, drag, VIV
+    ! lift, wave and held Froude-Krylov, the element tangent blocks in ws_elem_K..ws_elem_Kheld,
+    ! and the configuration, velocity and time of that evaluation. A tangent assembly at the same
+    ! state (use_stash) scatters the kept blocks instead of evaluating the kernels again. Every
+    ! other assembly clears ws_stash_ok.
+    REAL(wp), ALLOCATABLE :: ws_elem_f(:, :, :), ws_stash_q(:), ws_stash_v(:)
+    REAL(wp) :: ws_stash_t = CD_ZERO
+    LOGICAL :: ws_stash_ok = .FALSE.
+    ! The Newton solves of the last committed step (1 before the first): the predictor, which the
+    ! first iteration's tangent follows at the same state, keeps its element tangents when the
+    ! last step made a solve (did not converge at its predictor).
+    INTEGER :: ws_stash_solves = 1
+    ! The tangents the last committed step's line searches assembled at their accepted trial: the
+    ! full step of a full-Newton line search keeps its element tangents while the step has
+    ! assembled fewer.
+    INTEGER :: ws_stash_ls = 0
     REAL(wp) :: alpha_m = CD_ZERO, alpha_f = CD_ZERO, beta = CD_ZERO, gamma = CD_ZERO
     ! Optional Morison drag (transverse + tangential quadratic drag on the submerged cable, relative
     ! to a uniform fluid velocity). Off by default; wired in via CD_HermiteCable_Dyn_Set_Drag.
@@ -844,9 +861,12 @@ CONTAINS
     model%ws_Kb = CD_ZERO; model%ws_Kvb = CD_ZERO; model%ws_Keffb = CD_ZERO
     model%ws_Msumb = CD_ZERO; model%ws_Mamb = CD_ZERO
     ALLOCATE (model%ws_ipiv(ndof))
-    ALLOCATE (model%ws_elem_f(12, ne), model%ws_elem_K(12, 12, ne), model%ws_elem_Kdrag(12, 12, ne), &
+    ALLOCATE (model%ws_elem_f(12, 6, ne), model%ws_elem_K(12, 12, ne), model%ws_elem_Kdrag(12, 12, ne), &
               model%ws_elem_Kv(12, 12, ne), model%ws_elem_Kwave(12, 12, ne), model%ws_elem_Kheld(12, 12, ne), &
-              model%ws_elem_es(ne), model%ws_elem_em(ne))
+              model%ws_elem_es(ne), model%ws_elem_em(ne), model%ws_stash_q(ndof), model%ws_stash_v(ndof))
+    model%ws_stash_ok = .FALSE.
+    model%ws_stash_solves = 1
+    model%ws_stash_ls = 0
 
     ! state: at-rest seed, v = 0, consistent a0
     ALLOCATE (model%q(ndof), model%v(ndof), model%a(ndof))
@@ -3707,6 +3727,7 @@ CONTAINS
 
     INTEGER :: ndof, it, es, i, np, ip, ls, gdof, nsolve_step, axial_element, axial_es
     INTEGER :: axial_worst_element, iv, attempt, n_attempt
+    INTEGER :: n_ls_tan  ! tangents the step's line searches assembled at their accepted trial
     REAL(wp) :: c_a, c_v, c_a2, am, af, bt, gm, rnorm, fscale, rnt, lambda, chosen, lam_ok, cw, t_alpha, dth_lin
     REAL(wp) :: e_bal, e_ma, tors_theta_new, tors_mt_new
     REAL(wp) :: axial_qe(12), axial_min
@@ -4103,7 +4124,13 @@ CONTAINS
     ! A carried factor starts the iteration already factored (and stale).
     mn_factored = xs_active
     mn_fresh = .FALSE.
-    CALL eval_res(model%ws_qk, .FALSE., rnorm, es, em2)
+    n_ls_tan = 0
+    ! The first iteration assembles its tangent at the predictor unless a carried factor is
+    ! reused, so the predictor evaluation keeps its element tangents for it (stash), unless the
+    ! last step converged at its predictor (made no solve). Either way every result is the same:
+    ! only where the element kernels run changes.
+    CALL eval_res(model%ws_qk, .FALSE., rnorm, es, em2, &
+                  stash=nsolve_step < model%ws_stash_solves .AND. .NOT. ((mn .OR. xs_active) .AND. mn_factored))
     IF (es /= CD_HCDYN_OK) THEN
       ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2)
       IF (attempt < n_attempt) CYCLE predict
@@ -4157,8 +4184,9 @@ CONTAINS
       IF (.NOT. ((mn .OR. xs_active) .AND. mn_factored)) THEN
         IF (.NOT. have_tangent) THEN
           IF (prof_enabled) CALL SYSTEM_CLOCK(pc0)
+          ! the element tangents the predictor (or refresh) evaluation kept at this very state
           CALL assemble_residual(model, model%ws_qa, model%ws_va, t_alpha, .FALSE., .TRUE., es, em2, &
-                                 endconn_direction_eval=step_endconn_eval)
+                                 endconn_direction_eval=step_endconn_eval, use_stash=.TRUE.)
           IF (prof_enabled) THEN
             CALL SYSTEM_CLOCK(pc1)
             prof_n_tan = prof_n_tan + 1
@@ -4280,7 +4308,11 @@ CONTAINS
           model%ws_qtrial(iv) = model%ws_qk(iv) + lambda*model%ws_dq(iv)
         END DO
         IF (model%tw_active) CALL tw_trial(lambda)
-        CALL eval_res(model%ws_qtrial, .TRUE., rnt, es, em2)
+        ! The full step of a full-Newton iteration keeps its element tangents while this step's
+        ! line searches have assembled fewer tangents than the last step's (an accepted trial that
+        ! iterates again assembles its tangent below, at this state).
+        CALL eval_res(model%ws_qtrial, .TRUE., rnt, es, em2, &
+                      stash=ls == 1 .AND. .NOT. (mn .OR. xs_active) .AND. n_ls_tan < model%ws_stash_ls)
         IF (es == CD_HCDYN_OK) THEN
           lam_ok = lambda                                 ! loop shrinks lambda, so this ends smallest
           IF (rnt < rnorm) THEN
@@ -4306,7 +4338,7 @@ CONTAINS
             END IF
             IF (prof_enabled) CALL SYSTEM_CLOCK(pc0)
             CALL assemble_residual(model, model%ws_qa, model%ws_va, t_alpha, .FALSE., .TRUE., es, em2, &
-                                   endconn_direction_eval=step_endconn_eval)
+                                   endconn_direction_eval=step_endconn_eval, use_stash=.TRUE.)
             IF (prof_enabled) THEN
               CALL SYSTEM_CLOCK(pc1)
               prof_n_tan = prof_n_tan + 1
@@ -4314,6 +4346,7 @@ CONTAINS
             END IF
             IF (es == CD_HCDYN_OK) THEN
               have_tangent = .TRUE.
+              n_ls_tan = n_ls_tan + 1
               chosen = lambda; EXIT
             END IF
           END IF
@@ -4342,8 +4375,9 @@ CONTAINS
         ! assembles the fresh tangent at the right point. At most one refresh fires per
         ! iteration (the rebuild sets mn_fresh, which blocks this guard). If the fresh
         ! direction still cannot improve, the step is genuinely hard and the fallback
-        ! below handles it exactly as full Newton would.
-        CALL eval_res(model%ws_qk, .FALSE., rnorm, es, em2)
+        ! below handles it exactly as full Newton would. The retry-top tangent is at this
+        ! evaluation's state, so it keeps its element tangents (stash).
+        CALL eval_res(model%ws_qk, .FALSE., rnorm, es, em2, stash=.TRUE.)
         IF (es /= CD_HCDYN_OK) THEN
           ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2)
           IF (attempt < n_attempt) CYCLE predict
@@ -4432,6 +4466,8 @@ CONTAINS
     END DO
     EXIT predict
     END DO predict
+    model%ws_stash_solves = nsolve_step
+    model%ws_stash_ls = n_ls_tan
 
     ! Force blend: the committed force F_{n+1} enters every later step through af F_n, so the
     ! accepted state is taken one Newton correction beyond the tolerance, with the factor of
@@ -4810,7 +4846,7 @@ CONTAINS
       END DO
     END FUNCTION force_cache_matches
 
-    SUBROUTINE eval_res(qcur, use_trial, rn, esx, emx)
+    SUBROUTINE eval_res(qcur, use_trial, rn, esx, emx, stash)
       !! gen-alpha residual G = M a_alpha + f_int - f_ext, its banded position/velocity
       !! tangents, and the dimensionless per-slot residual norm rn at the trial
       !! configuration qcur. Prescribed DOFs carry their prescribed acceleration/velocity;
@@ -4820,11 +4856,15 @@ CONTAINS
       !! at the loop top, directly into the committed band buffers) -- through pointers into the
       !! host's model, so no model subobject is ever argument-associated alongside the
       !! model itself (which the Fortran aliasing rule would forbid). Uses the ws_* Newmark scratch and the host fscale.
+      !! stash (optional): an evaluation the next tangent assembly follows at the same state
+      !! also keeps the element tangents (assemble_residual, stash_tangent); the residual is
+      !! the same either way.
       REAL(wp), INTENT(IN) :: qcur(:)
       LOGICAL, INTENT(IN) :: use_trial
       REAL(wp), INTENT(OUT) :: rn
       INTEGER, INTENT(OUT) :: esx
       CHARACTER(*), INTENT(OUT) :: emx
+      LOGICAL, INTENT(IN), OPTIONAL :: stash
       REAL(wp), POINTER :: Gout(:)
       INTEGER :: ii, nd
       INTEGER(INT64) :: ec0, ec1
@@ -4836,6 +4876,7 @@ CONTAINS
         CALL SYSTEM_CLOCK(ec0)
         prof_n_resid = prof_n_resid + 1
       END IF
+      model%ws_stash_ok = .FALSE.   ! kept element tangents never outlive a new evaluation
       IF (use_trial) THEN
         Gout => model%ws_Gt
       ELSE
@@ -4894,7 +4935,7 @@ CONTAINS
       END IF
       CALL vector_blend(CD_ONE - am, model%ws_ak, am, model%ws_an, model%ws_aa)
       CALL assemble_residual(model, model%ws_qa, model%ws_va, t_alpha, .TRUE., .FALSE., esx, emx, &
-                             endconn_direction_eval=step_endconn_eval)
+                             endconn_direction_eval=step_endconn_eval, stash_tangent=stash)
       IF (esx /= CD_HCDYN_OK) THEN
         rn = CD_ZERO
         IF (prof_enabled) THEN
@@ -8363,7 +8404,8 @@ CONTAINS
       DEALLOCATE (model%ws_ipiv)
       DEALLOCATE (model%ws_elem_f, model%ws_elem_K, model%ws_elem_Kdrag, model%ws_elem_Kv, &
                   model%ws_elem_Kwave, model%ws_elem_Kheld, &
-                  model%ws_elem_es, model%ws_elem_em)
+                  model%ws_elem_es, model%ws_elem_em, model%ws_stash_q, model%ws_stash_v)
+      model%ws_stash_ok = .FALSE.
     END IF
     IF (ALLOCATED(model%rc_q)) DEALLOCATE (model%rc_q, model%rc_v, model%rc_a, model%rc_g, model%rc_have, model%rc_qnb)
     model%rc_key_ok = .FALSE.
@@ -8453,7 +8495,7 @@ CONTAINS
   ! ------------------------------------------------------------------------------------------
 
   SUBROUTINE assemble_residual(model, q_cfg, v_cfg, t_eval, want_residual, want_tangent, ErrStat, ErrMsg, &
-                               endconn_direction_eval, node_only, R_out)
+                               endconn_direction_eval, node_only, R_out, stash_tangent, use_stash)
     !! Residual R = f_int(q) - f_ext(q, v, t), banded position tangent Kb = dR/dq, and banded
     !! velocity tangent Kvb = dR/dv at configuration q_cfg with nodal velocity v_cfg at time
     !! t_eval (LAPACK band layout, see the module note), written into the MODEL'S OWN
@@ -8485,11 +8527,25 @@ CONTAINS
     ! (which couples every element). The other rows of R_out are partial.
     INTEGER, INTENT(IN), OPTIONAL :: node_only
     REAL(wp), INTENT(INOUT), TARGET, OPTIONAL :: R_out(:)
+    ! stash_tangent: a full residual-only assembly that evaluates each element kernel once for
+    ! its load AND its tangent (evaluate_tangent_element with forces, in parallel like the
+    ! tangent assembly), adds the loads to R in the order of the residual-only assembly and keeps
+    ! the element tangent blocks (ws_stash_ok). R is bit-for-bit that of the residual-only
+    ! assembly. If any element evaluation fails (a tangent can overflow where the load stays
+    ! finite), this assembly evaluates the loads again residual-only, so its result and message
+    ! are those of the residual-only assembly, and keeps nothing.
+    ! use_stash: a tangent-only assembly at exactly the configuration, velocity and time of the
+    ! last assembly, when that one kept its element tangents, scatters those blocks instead of
+    ! evaluating the kernels again. Otherwise it evaluates them as usual.
+    LOGICAL, INTENT(IN), OPTIONAL :: stash_tangent, use_stash
     REAL(wp), POINTER :: R(:), Kb(:, :), Kvb(:, :)
     INTEGER :: ne, e, a, gi, es, omp_threads
     INTEGER :: e_lo, e_hi, n_lo, n_hi  ! the elements and nodes assembled (all unless node_only)
     INTEGER(INT64) :: asm_t  ! clock at the last section mark (asm_mark; profiled runs only)
     LOGICAL :: tangent_only
+    LOGICAL :: stash   ! this residual assembly keeps its element tangents (stash_tangent)
+    LOGICAL :: kept    ! the element loads and tangents of this assembly's kernels are in ws_elem_*
+    LOGICAL :: reuse   ! this tangent assembly scatters the element tangents the last one kept
     REAL(wp) :: qe(12), ve(12), Ee, fe(12), Ke(12, 12), pen
     REAL(wp) :: fdrag(12), djq(12, 12), djv(12, 12), ffk(12), fjq(12, 12)
     REAL(wp) :: fdamp(12), kdq(12, 12), kdv(12, 12)
@@ -8512,6 +8568,29 @@ CONTAINS
 !$  omp_threads = MIN(4, omp_get_max_threads())
 !$  IF (omp_in_parallel()) omp_threads = 1
     tangent_only = want_tangent .AND. .NOT. want_residual
+    ! The kept element tangents belong to the last assembly alone: decide whether this tangent
+    ! assembly is at its exact state, then drop them (a keeping assembly sets them on success).
+    reuse = .FALSE.
+    IF (PRESENT(use_stash)) THEN
+      IF (use_stash .AND. tangent_only .AND. model%ws_stash_ok) THEN
+        reuse = bits_equal(t_eval, model%ws_stash_t) .AND. SIZE(q_cfg) == SIZE(model%ws_stash_q) .AND. &
+                SIZE(v_cfg) == SIZE(model%ws_stash_v)
+        IF (reuse) THEN
+          DO gi = 1, SIZE(q_cfg)
+            IF (.NOT. (bits_equal(q_cfg(gi), model%ws_stash_q(gi)) .AND. &
+                       bits_equal(v_cfg(gi), model%ws_stash_v(gi)))) THEN
+              reuse = .FALSE.
+              EXIT
+            END IF
+          END DO
+        END IF
+      END IF
+    END IF
+    model%ws_stash_ok = .FALSE.
+    stash = .FALSE.
+    IF (PRESENT(stash_tangent)) stash = stash_tangent .AND. want_residual .AND. .NOT. want_tangent .AND. &
+                                        .NOT. PRESENT(node_only) .AND. .NOT. PRESENT(R_out)
+    kept = .FALSE.
     R => model%ws_R
     Kb => model%ws_Kb
     Kvb => model%ws_Kvb
@@ -8546,22 +8625,50 @@ CONTAINS
     CALL asm_mark(HC_ASM_ZERO, asm_t)
 
     ! Tangent-only element kernels are independent. Evaluate them in parallel into persistent
-    ! buffers, then validate and scatter serially in the original element order. Residual and
-    ! combined-output requests retain the lower-overhead serial path. A four-thread cap avoids
+    ! buffers, then validate and scatter serially in the original element order. Plain residual
+    ! and combined-output requests retain the lower-overhead serial path. A four-thread cap avoids
     ! tiny-kernel oversubscription while respecting a smaller host OpenMP thread limit.
-    IF (tangent_only) THEN
-      !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qe) NUM_THREADS(omp_threads) IF(ne >= 32)
+    ! A residual assembly that keeps its element tangents (stash) runs the same parallel
+    ! kernels with their loads; the loads then enter R serially, phase by phase, in the
+    ! element order of the residual-only assembly below. A tangent assembly at the kept
+    ! state (reuse) scatters the kept blocks.
+    IF (stash) THEN
+      !$OMP PARALLEL DEFAULT(SHARED) NUM_THREADS(omp_threads) IF(ne >= 32)
       CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
       !$OMP DO SCHEDULE(STATIC)
       DO e = 1, ne
         CALL evaluate_tangent_element(model, e, q_cfg, v_cfg, t_eval, model%ws_elem_K(:, :, e), &
                                       model%ws_elem_Kdrag(:, :, e), model%ws_elem_Kv(:, :, e), &
                                       model%ws_elem_Kwave(:, :, e), model%ws_elem_Kheld(:, :, e), &
-                                      model%ws_elem_es(e), model%ws_elem_em(e))
+                                      model%ws_elem_es(e), model%ws_elem_em(e), &
+                                      forces=model%ws_elem_f(:, :, e))
       END DO
       !$OMP END DO
       !$OMP END PARALLEL
       CALL asm_mark(HC_ASM_TAN_KERNELS, asm_t)
+      kept = .TRUE.
+      DO e = 1, ne
+        IF (model%ws_elem_es(e) /= CD_HCABLE_OK) THEN
+          kept = .FALSE.
+          EXIT
+        END IF
+      END DO
+    END IF
+    IF (tangent_only) THEN
+      IF (.NOT. reuse) THEN
+        !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(qe) NUM_THREADS(omp_threads) IF(ne >= 32)
+        CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+        !$OMP DO SCHEDULE(STATIC)
+        DO e = 1, ne
+          CALL evaluate_tangent_element(model, e, q_cfg, v_cfg, t_eval, model%ws_elem_K(:, :, e), &
+                                        model%ws_elem_Kdrag(:, :, e), model%ws_elem_Kv(:, :, e), &
+                                        model%ws_elem_Kwave(:, :, e), model%ws_elem_Kheld(:, :, e), &
+                                        model%ws_elem_es(e), model%ws_elem_em(e))
+        END DO
+        !$OMP END DO
+        !$OMP END PARALLEL
+        CALL asm_mark(HC_ASM_TAN_KERNELS, asm_t)
+      END IF
       DO e = 1, ne
         IF (model%ws_elem_es(e) /= CD_HCABLE_OK) THEN
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'element: '//TRIM(model%ws_elem_em(e)); RETURN
@@ -8571,6 +8678,13 @@ CONTAINS
       CALL asm_mark(HC_ASM_SCATTER, asm_t)
     ELSE
       DO e = e_lo, e_hi
+        IF (kept) THEN
+          DO a = 1, 12
+            gi = elem_gdof(e, a)
+            R(gi) = R(gi) + model%ws_elem_f(a, 1, e)
+          END DO
+          CYCLE
+        END IF
         qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3)
         qe(4:6) = q_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
         qe(7:9) = q_cfg(6*e + 1:6*e + 3)
@@ -8725,6 +8839,13 @@ CONTAINS
     ! reference-arc Hermite interpolation and axial quadrature as the elastic resultant.
     IF (model%has_axial_damping .AND. .NOT. tangent_only) THEN
       DO e = e_lo, e_hi
+        IF (kept) THEN
+          DO a = 1, 12
+            gi = elem_gdof(e, a)
+            R(gi) = R(gi) + model%ws_elem_f(a, 2, e)
+          END DO
+          CYCLE
+        END IF
         qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3); qe(4:6) = q_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
         qe(7:9) = q_cfg(6*e + 1:6*e + 3); qe(10:12) = q_cfg(6*e + 4:6*e + 6)
         ve(1:3) = v_cfg(6*(e - 1) + 1:6*(e - 1) + 3); ve(4:6) = v_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
@@ -8771,6 +8892,13 @@ CONTAINS
     ! Kv -= djv over all 12 element DOFs.
     IF (model%has_drag .AND. .NOT. tangent_only) THEN
       DO e = e_lo, e_hi
+        IF (kept) THEN
+          DO a = 1, 12
+            gi = elem_gdof(e, a)
+            R(gi) = R(gi) - model%ws_elem_f(a, 3, e)
+          END DO
+          CYCLE
+        END IF
         qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3); qe(4:6) = q_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
         qe(7:9) = q_cfg(6*e + 1:6*e + 3); qe(10:12) = q_cfg(6*e + 4:6*e + 6)
         ve(1:3) = v_cfg(6*(e - 1) + 1:6*(e - 1) + 3); ve(4:6) = v_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
@@ -8849,6 +8977,13 @@ CONTAINS
     ! Cross-flow VIV lift (an external load like the drag, at the step's phase viv_phi_eval).
     IF (model%has_viv .AND. .NOT. tangent_only) THEN
       DO e = e_lo, e_hi
+        IF (kept) THEN
+          DO a = 1, 12
+            gi = elem_gdof(e, a)
+            R(gi) = R(gi) - model%ws_elem_f(a, 4, e)
+          END DO
+          CYCLE
+        END IF
         IF (want_tangent) THEN
           CALL viv_element_lift(model, q_cfg, v_cfg, e, fdrag, es, em_e, djq, djv)
         ELSE
@@ -8903,6 +9038,13 @@ CONTAINS
     ! the wave-field spatial gradient is neglected in K -- see the element note).
     IF (model%has_wave .AND. model%has_am .AND. .NOT. tangent_only) THEN
       DO e = e_lo, e_hi
+        IF (kept) THEN
+          DO a = 1, 12
+            gi = elem_gdof(e, a)
+            R(gi) = R(gi) - model%ws_elem_f(a, 5, e)
+          END DO
+          CYCLE
+        END IF
         qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3); qe(4:6) = q_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
         qe(7:9) = q_cfg(6*e + 1:6*e + 3); qe(10:12) = q_cfg(6*e + 4:6*e + 6)
         IF (model%wv_ncomp > 0) THEN
@@ -8957,6 +9099,13 @@ CONTAINS
     ! configuration's coefficients -- the held-mode twin of the wave FK block above.
     IF (model%has_held_field .AND. model%has_am .AND. .NOT. tangent_only) THEN
       DO e = e_lo, e_hi
+        IF (kept) THEN
+          DO a = 1, 12
+            gi = elem_gdof(e, a)
+            R(gi) = R(gi) - model%ws_elem_f(a, 6, e)
+          END DO
+          CYCLE
+        END IF
         qe(1:3) = q_cfg(6*(e - 1) + 1:6*(e - 1) + 3); qe(4:6) = q_cfg(6*(e - 1) + 4:6*(e - 1) + 6)
         qe(7:9) = q_cfg(6*e + 1:6*e + 3); qe(10:12) = q_cfg(6*e + 4:6*e + 6)
         IF (want_tangent) THEN
@@ -9011,6 +9160,13 @@ CONTAINS
       END IF
     END IF
     CALL asm_mark(HC_ASM_TORSION, asm_t)
+    ! A complete keeping assembly records the state its element tangents belong to.
+    IF (kept) THEN
+      model%ws_stash_q = q_cfg
+      model%ws_stash_v = v_cfg
+      model%ws_stash_t = t_eval
+      model%ws_stash_ok = .TRUE.
+    END IF
   END SUBROUTINE assemble_residual
 
   SUBROUTINE assemble_torsion(model, q_cfg, want_residual, want_tangent, ErrStat, ErrMsg)
@@ -10253,10 +10409,16 @@ CONTAINS
   END SUBROUTINE scatter_contact_band
 
   SUBROUTINE evaluate_tangent_element(model, e, q_cfg, v_cfg, t_eval, Kstruct, Kdrag, Kvel, Kwave, Kheld, &
-                                      ErrStat, ErrMsg)
+                                      ErrStat, ErrMsg, forces)
     !! Evaluate the complete element-local Newton package. Keeping structural, drag and
     !! fluid-inertia tangents in one worker avoids three OpenMP regions per iteration;
     !! the caller scatters these private blocks in deterministic element order.
+    !! forces (optional) also returns the element load of each kernel from the same call:
+    !! forces(:, k) for k = 1 structure (f_int), 2 axial damping, 3 drag, 4 VIV lift, 5 wave and
+    !! 6 held Froude-Krylov (the loads as the kernels return them, before the residual's signs).
+    !! Every kernel forms its load by the same statements with or without its tangent, so these
+    !! are bit-for-bit the loads of a residual-only evaluation. The columns of the kernels the
+    !! model does not configure are not defined.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: e
     REAL(wp), INTENT(IN) :: q_cfg(:), v_cfg(:), t_eval
@@ -10264,6 +10426,7 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: Kwave(12, 12), Kheld(12, 12)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: forces(12, 6)
 
     REAL(wp) :: qe(12), ve(12), energy, force(12), fload(12)
     REAL(wp) :: djq(12, 12), djv(12, 12), fjq(12, 12)
@@ -10284,10 +10447,17 @@ CONTAINS
     ! so they are not cleared.
     Kdrag = CD_ZERO; Kvel = CD_ZERO
 
-    CALL CD_HermiteCable_Element(qe, model%l0(e), model%EA(e), model%EI(e), energy, force, Kstruct, es, em, &
-                                 symmetric_half=.TRUE., tangent_only=.TRUE., &
-                                 axial_quadrature_order=model%axial_quadrature_order, &
-                                 bending_quadrature_order=model%bending_quadrature_order)
+    IF (PRESENT(forces)) THEN
+      CALL CD_HermiteCable_Element(qe, model%l0(e), model%EA(e), model%EI(e), energy, forces(:, 1), Kstruct, &
+                                   es, em, symmetric_half=.TRUE., &
+                                   axial_quadrature_order=model%axial_quadrature_order, &
+                                   bending_quadrature_order=model%bending_quadrature_order)
+    ELSE
+      CALL CD_HermiteCable_Element(qe, model%l0(e), model%EA(e), model%EI(e), energy, force, Kstruct, es, em, &
+                                   symmetric_half=.TRUE., tangent_only=.TRUE., &
+                                   axial_quadrature_order=model%axial_quadrature_order, &
+                                   bending_quadrature_order=model%bending_quadrature_order)
+    END IF
     IF (es /= CD_HCABLE_OK) THEN
       ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'element: '//TRIM(em); RETURN
     END IF
@@ -10305,6 +10475,7 @@ CONTAINS
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = TRIM(em); RETURN
       END IF
+      IF (PRESENT(forces)) forces(:, 2) = fload
       Kdrag = Kdrag + djq
       Kvel = Kvel + djv
     END IF
@@ -10336,6 +10507,7 @@ CONTAINS
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es; ErrMsg = TRIM(em); RETURN
       END IF
+      IF (PRESENT(forces)) forces(:, 3) = fload
       Kdrag = Kdrag - djq
       Kvel = Kvel - djv
     END IF
@@ -10345,6 +10517,7 @@ CONTAINS
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es; ErrMsg = TRIM(em); RETURN
       END IF
+      IF (PRESENT(forces)) forces(:, 4) = fload
       Kdrag = Kdrag - djq
       Kvel = Kvel - djv
     END IF
@@ -10367,6 +10540,7 @@ CONTAINS
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es; ErrMsg = TRIM(em); RETURN
       END IF
+      IF (PRESENT(forces)) forces(:, 5) = fload
       Kwave = -fjq
     END IF
 
@@ -10382,6 +10556,7 @@ CONTAINS
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es; ErrMsg = TRIM(em); RETURN
       END IF
+      IF (PRESENT(forces)) forces(:, 6) = fload
       Kheld = -fjq
     END IF
   END SUBROUTINE evaluate_tangent_element
