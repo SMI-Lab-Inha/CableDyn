@@ -327,6 +327,8 @@ CONTAINS
       ! symmetry without redundant flops.
       DO m = 1, 4
         DO k = 1, 4
+          ! a node block below the diagonal (k > m) holds only rows ic > jc: none in the upper triangle
+          IF (half_kt .AND. k > m) CYCLE
           w11 = b1(k)*b1(m)
           w12 = b1(k)*b2(m)
           w21 = b2(k)*b1(m)
