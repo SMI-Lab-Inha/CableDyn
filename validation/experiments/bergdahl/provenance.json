@@ -1,8 +1,8 @@
 {
-  "CableDyn_release": "v0.4.0",
-  "validation_date": "2026-11-03",
+  "CableDyn_release": "v0.4.1",
+  "validation_date": "2026-11-08",
   "executable_name": "cabledyn.exe",
-  "executable_sha256": "d6603f989f41b01e7921dc52c1c9e580182208c99b45e6ebdd93377b4cbc289f",
+  "executable_sha256": "9b86cbd5abc47d73d535f49dd5952f7805646b190a3744380d0b43849019e10f",
   "compiler": "GNU Fortran 16.2.0",
   "build_type": "Release",
   "platform": "Windows 11 x86-64",
@@ -22,5 +22,5 @@
   "waveform_metrics_sha256": "0fb6015cb30aa2bbb1cd8951b603f9201af50372ee6d3633a72fc70ea5280d1a",
   "refinement_summary_sha256": "75342ed4f3ebe2d7acb19af56394e24e6ce909bb3df7445bf3a1d884280f9eb6",
   "waveform_comparison_release": "v0.3.0",
-  "waveform_comparison_note": "not rerun with 0.4.0: the supplement expData.dat was not available when the record was rerun; the waveform files and metrics are those of the v0.3.0 run"
+  "waveform_comparison_note": "not rerun with 0.4.0 or 0.4.1: the supplement expData.dat was not available when the record was rerun; the waveform files and metrics are those of the v0.3.0 run"
 }
