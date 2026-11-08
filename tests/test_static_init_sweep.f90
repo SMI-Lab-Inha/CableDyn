@@ -53,9 +53,10 @@ PROGRAM test_static_init_sweep
   !!       concentrates an O(pi) turn at one node, curv*l0 ~ 2-3. This is the measurable
   !!       version of "reached the smooth branch, not a kinked local equilibrium".
   !!   (4) penetration consistent with the penalty: min z >= -d - (10 |w|_max / kn + 1 mm).
-  !! An expected-fail list records the known limitations (five 800 m low-EI lazy waves the
-  !! production initialisation does not solve); an XFAIL case that PASSES also fails the
-  !! gate, so a fix or a regression is seen.
+  !! An expected-fail list records the known limitations of this kernel from the trivial
+  !! seed (four low-EI lazy waves; the deck route solves them, see the list below); an
+  !! XFAIL case that PASSES is counted and reported, so a fix is seen, and a case off the
+  !! list that fails fails the gate.
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteCableStatic, ONLY: CD_HermiteCable_Static_Solve_Sequenced, &
@@ -167,15 +168,17 @@ PROGRAM test_static_init_sweep
     CALL add_case('g', MERGE(50.0_wp, 400.0_wp, i == 1), -2.0_wp, 1.5_wp, EA0, EI0, KN0, CHI0, FB0)
   END DO
 
-  ! ---- KNOWN-FAIL SET (measured on the full matrix sweep; parameter-matched
-  ! fail-closed: a matrix edit that orphans an entry is rejected. A solver improvement that
-  ! flips one to PASS is reported without failing the suite. The remaining cases either
-  ! exhaust the bounded hierarchy/recovery paths or reach a residual-converged one-element
-  ! hairpin that the production h*kappa safety gate rejects. Neither class can silently
-  ! enter dynamics.
-  ! Continuous whole-element curvature inspection exposes the unresolved hairpin in this
-  ! low-EI, 800 m fixed mesh. The former nodal metric incorrectly admitted it as smooth.
-  CALL mark_xfail('b', 800.0_wp, 1.25_wp, 1.5_wp, 5.0e7_wp, 5.0e2_wp, KN0, CHI0, FB0)  ! [unresolved]
+  ! ---- KNOWN-FAIL SET (measured on the full matrix sweep with every OpenBLAS kernel;
+  ! parameter-matched fail-closed: a matrix edit that orphans an entry is rejected. A solver
+  ! improvement that flips one to PASS is reported without failing the suite. These four
+  ! low-EI lazy waves reach, from the trivial seed on this kernel alone, a residual-converged
+  ! kinked state (a Z of a few elements in mid-water) that the production h*kappa safety gate
+  ! rejects, so none can silently enter dynamics. A deck never takes this combination for a
+  ! line with a buoyant section: the deck route seeds it as a lazy wave, starts from the
+  ! EI = 0 catenary, and refines a kinked state locally. That route solves all four, and the
+  ! formerly listed 800 m EA = 5e7 N case, on both cable_statics routes, to within 2.4e-4 of
+  ! an independent EI = 0 catenary where the arch stays submerged: cable_statics_matrix gates
+  ! them (entries SIS_*).
   CALL mark_xfail('b', 800.0_wp, 1.25_wp, 1.5_wp, 2.0e9_wp, 5.0e2_wp, KN0, CHI0, FB0)  ! [wad]
   CALL mark_xfail('b', 800.0_wp, 1.25_wp, 1.5_wp, EA0, 5.0e2_wp, KN0, CHI0, FB0)       ! [unresolved]
   CALL mark_xfail('f', 800.0_wp, -1.0_wp, 2.5_wp, EA0, 5.0e2_wp, 3.0e6_wp, CHI0, FB0)  ! [wad]

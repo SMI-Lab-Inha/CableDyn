@@ -743,17 +743,28 @@ cannot restart the buoyancy ramp. AutoMesh warm-start refinement is tested by
 buoyant fraction. Each is solved by the production mesh-sequenced solver from a
 library-built trivial seed (`CD_HermiteCable_Trivial_Seed`: endpoints, rest
 lengths, and seabed in; isometric seed out; no catenary, seed files, or per-case
-tuning). Result: **117 pass, 3 known failures, 2 cases annotated as known failures
-that now pass, 0 unexpected failures, and 0 silent wrong answers**. Known-failure
-annotations are checked both ways: an annotated case must either fail cleanly or be
-reported when it passes.
+tuning). Result: **118 pass, 4 known failures, 0 unexpected failures, and 0 silent
+wrong answers**, the same on every OpenBLAS kernel. Known-failure annotations are checked
+both ways: an annotated case must either fail cleanly or be reported when it passes.
+
+The deck route solves all 122 cases but the one beyond the L-shape bound that it refuses by
+name: a deck seeds a line with a buoyant section as a lazy wave, starts it from the
+`EI = 0` catenary and refines a kinked state locally, never this kernel from the trivial seed.
+Run through the standalone driver on both `cable_statics` routes, the 121 equilibria agree
+between the routes to 1.3e-7 in tension and 1e-5 m in position, with `max(h*kappa)` at most
+0.56. The four known failures of the kernel and the former fifth are cases of the
+`cable_statics_matrix` test (entries `SIS_*`, both routes): where the arch stays submerged
+their fairlead tension is within 2.4e-4 of an independent elastic multi-segment `EI = 0`
+catenary; two float their arch at the surface.
 
 - On a frictionless bed, a smooth planar equilibrium exists only while the rest
   length is below the L-shape bound `L < h_fairlead + x_anchor`; beyond it the
   surplus must fold on the bed. The slack axis runs to 0.97× the bound. A separate
   family crosses it and must return either a clean error or a finite
-  bounded-curvature solution, never NaN or a silent cusp. The three known failures
-  are hard contact cases at the lowest EI of the sweep (5e2 N·m²).
+  bounded-curvature solution, never NaN or a silent cusp. The four known failures
+  are lazy waves at the lowest EI of the sweep (5e2 N·m²): from the trivial seed the
+  kernel reaches a residual-converged kink of a few elements in mid-water, which the
+  check below rejects.
 - A residual-converged state is not sufficient: the solver rejects an
   element-localised branch when `max(h*kappa) > 0.7`, so a folded equilibrium
   cannot enter dynamics.
