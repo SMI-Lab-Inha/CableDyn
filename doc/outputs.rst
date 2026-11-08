@@ -841,6 +841,19 @@ the channels report that end node (and ``TDP<L>Grd`` reads 0); when the whole li
 seabed, the suspended end node. ``TDP<L>Grd`` is the grounded length of the `Anchor uplift`_
 check.
 
+The seabed carries the line at its nodes, so the mesh at touchdown sets how finely the touchdown
+point and the tension around it are resolved: a node lands on the floor at once, and in a
+dynamic run its landing shakes the line. The node tension near touchdown converges at the second
+order in the element length there. On the lazy-wave cable of
+``lozon_gomex80_power_cable_motion.dat`` (bending length :math:`\sqrt{EI/T}` = 3.9 m at
+touchdown, tension 1.3 to 1.9 kN) it departs from a 1024-element solution by at most 140, 55,
+19 and 5.8 N with 3.3, 1.6, 0.8 and 0.4 m elements at touchdown over the heave cycle (time step
+0.0125 s), and by 4.6, 1.0 and 0.25 N in the static state with 3.3, 1.6 and 0.8 m elements; on
+the 3.3 m mesh ``TDP<L>s`` moves at up to 4 m/s while a node lands (0.7 m/s converged) and its
+lowest value differs from the converged one by 0.6 m. Elements no longer than about a fifth of
+:math:`\sqrt{EI/T}` at touchdown keep the node tension there within about 1.5 % of the
+converged value through the motion, and a tenth within 0.5 %.
+
 Point channels
 ~~~~~~~~~~~~~~
 

@@ -8,6 +8,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Finite-EI node tension, curvature and bend moment next to the touchdown point: the floor
+  reaction of the first grounded node was spread over its grounded half-element alone, wherever
+  the touchdown point lay in the touchdown element. The local tension error there fell only at
+  the first order with the element length (4.3, 1.9, 1.0 N at 1.6, 0.8, 0.4 m elements on a
+  lazy-wave cable at 270 N) and the node outputs stepped as each node grounded or lifted off.
+  The touchdown element now takes the reaction of its grounded stretch, from the grounded node
+  to the touchdown point located from the two nodes' clearances: the error falls at the second
+  order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+
 ## [0.4.1] - 2026-11-08
 
 ### Added

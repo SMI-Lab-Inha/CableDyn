@@ -2779,12 +2779,23 @@ if(Python3_Interpreter_FOUND)
     ENVIRONMENT "${_cabledyn_python_test_environment}")
   # Node tension through touchdown on a coarse mesh (10 m grounded elements) follows a four
   # times finer reference within 3.5 %: the touchdown element, grounded at one end only, takes
-  # no share of its grounded node's floor reaction.
+  # the floor reaction of its grounded stretch alone, not half an element's.
   add_test(NAME driver_touchdown_recovery
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_touchdown_recovery.py
                    $<TARGET_FILE:cabledyn>)
   set_tests_properties(driver_touchdown_recovery PROPERTIES
     LABELS "python;driver;integration;static"
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+  # Node tension at touchdown converges at second order wherever the touchdown point falls in
+  # its element: the local error over a sweep of meshes at 1.6, 0.8 and 0.4 m elements falls
+  # by at least 2.5 from 0.8 to 0.4 m and stays below 0.35 N there (the touchdown element takes
+  # the floor reaction of its grounded stretch).
+  add_test(NAME driver_touchdown_convergence
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_touchdown_convergence.py
+                   $<TARGET_FILE:cabledyn>)
+  set_tests_properties(driver_touchdown_convergence PROPERTIES
+    LABELS "python;driver;integration;static"
+    TIMEOUT 600
     ENVIRONMENT "${_cabledyn_python_test_environment}")
   # A hang-off through a tapered bend stiffener follows the planar elastica (scipy solve_bvp)
   # within 2 % of the root moment and 1 cm, and node by node on a sweep of element sizes within
