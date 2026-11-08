@@ -2641,14 +2641,9 @@ _ROUTE_RULE_CASES = [
         r"MassDenInAir must be > 0",
     ),
     ("finite-mass-small", _edit(_FINITE, (" 390.0 ", " 1e-3 ")), False, None),
-    # the standalone finite-EI march takes lines whose sections all have a finite EI
-    ("split-line", _SPLIT_LINE, False, r"LINE 1 combines EI=0 and finite-EI sections"),
-    (
-        "split-line-static",
-        _static_check(_SPLIT_LINE, keep_dtm=True),
-        False,
-        r"LINE 1 combines EI=0 and finite-EI sections",
-    ),
+    # a line with EI = 0 and finite-EI sections is one finite-EI cable on every route
+    ("split-line", _SPLIT_LINE, False, None),
+    ("split-line-static", _static_check(_SPLIT_LINE, keep_dtm=True), False, None),
     ("split-line-host", _SPLIT_LINE, True, None),
     ("split-line-mixed-route", _SPLIT_LINE_AND_CHAIN, False, None),
     # Point<P>p channels are read from the EI=0 system: on the aggregate a Coupled point of

@@ -2167,8 +2167,7 @@ CONTAINS
       IF (es_l == CD_DECKDRV_OK) CALL CD_End_Deck_Aggregate(cagg)
     END BLOCK
 
-    ! A finite-EI line needs mass, and the standalone finite-EI march a line whose sections all
-    ! have a finite EI: both are named input errors, not a failure inside the model build.
+    ! A finite-EI line needs mass: a named input error, not a failure inside the model build.
     BLOCK
       CHARACTER(*), PARAMETER :: CHAIN_ROW = 'chain 0.252 390.0 1.674e9 -1.0 0.0 1.37 0.64 1.0 0.0'
       CHARACTER(*), PARAMETER :: STIFF_ROW = 'stiff 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0'
@@ -2192,9 +2191,12 @@ CONTAINS
       k = INDEX(body, CHAIN_ROW)
       CALL require(k > 0, 'split-line fixture locates the LINE TYPES row')
       IF (k > 0) THEN
+        ! a line of EI=0 and finite-EI sections is one finite-EI cable, as on the coupled aggregate
         body = body(1:k - 1)//CHAIN_ROW//nl//STIFF_ROW//body(k + LEN(CHAIN_ROW):)
-        CALL expect_badinput('deck_hard_split_line.dat', body, 'a line of EI=0 and finite-EI sections', &
-                             'LINE 1 combines EI=0 and finite-EI sections')
+        CALL write_text_file('deck_hard_split_line.dat', body)
+        CALL CD_Run_Deck_Driver('deck_hard_split_line.dat', 'deck_hard_split_line', conv_l, es_l, em_l)
+        CALL require(es_l == CD_DECKDRV_OK .AND. conv_l, 'a line of EI=0 and finite-EI sections runs: '// &
+                     TRIM(em_l))
       END IF
     END BLOCK
   END SUBROUTINE check_parser_hardening

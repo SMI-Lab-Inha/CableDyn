@@ -9758,23 +9758,13 @@ CONTAINS
         RETURN
       END IF
       IF (has_finite) THEN
-        ! The standalone finite-EI march owns one homogeneous family of bending
-        ! lines. Mixed EI=0/EI>0 composition belongs to the aggregate route; keep
-        ! this guard ahead of the Hermite dispatch so an EI=0 line can never be
-        ! coerced through the all-lines Hermite builder.
-        IF (.NOT. all_lines_have_finite_ei(types, lines, sections)) THEN
+        ! The standalone finite-EI march owns the finite-EI lines: a line with any finite-EI
+        ! section, built as one cable whose EI = 0 sections carry no bending, as on the coupled
+        ! aggregate. A deck of separate EI=0 and finite-EI lines belongs to the aggregate route
+        ! (the standalone executable sends it there); keep this guard ahead of the Hermite
+        ! dispatch so a line without a finite-EI section is never coerced through the builder.
+        IF (.NOT. ALL([(line_is_finite_ei(lines(li), types, sections), li=1, SIZE(lines))])) THEN
           IF (opts%has_bathymetry_file) CALL CD_End_Bathymetry(bathymetry)
-          ! name the line that has both kinds of section (the standalone executable sends a deck
-          ! of separate EI=0 and finite-EI lines to the aggregate, never here)
-          DO li = 1, SIZE(lines)
-            IF (line_is_finite_ei(lines(li), types, sections) .AND. &
-                .NOT. all_lines_have_finite_ei(types, lines(li:li), sections)) THEN
-              CALL fail(ErrStat, ErrMsg, 'LINE '//TRIM(int_to_str(lines(li)%id))//' combines EI=0 and '// &
-                        'finite-EI sections, which the standalone finite-EI march does not take: give every '// &
-                        'section of the line a finite EI')
-              RETURN
-            END IF
-          END DO
           CALL fail(ErrStat, ErrMsg, 'mixed EI=0 and finite-EI dynamic decks are not supported by this entry point')
           RETURN
         END IF
@@ -39763,9 +39753,9 @@ CONTAINS
 
   LOGICAL FUNCTION line_is_finite_ei(ln, types, sections) RESULT(is_finite)
     !! A LINE is a finite-EI (bending) cable iff ANY of its sections has EI > 0.
-    !! Factored from all_lines_have_finite_ei's per-line finite test so the OpenFAST
-    !! aggregate (CD_Init_Deck_Aggregate) can partition a mixed deck into its
-    !! {EI=0 mooring} and {finite-EI cable} subsets from one shared predicate.
+    !! The one predicate every route partitions a deck by: the coupled aggregate and the
+    !! multibody march into their {EI=0 mooring} and {finite-EI cable} subsets, the standalone
+    !! finite-EI march into the cables it builds.
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckLineType), INTENT(IN) :: types(:)
     TYPE(DeckSection), INTENT(IN) :: sections(:)
@@ -39781,28 +39771,6 @@ CONTAINS
       END IF
     END DO
   END FUNCTION line_is_finite_ei
-
-  LOGICAL FUNCTION all_lines_have_finite_ei(types, lines, sections) RESULT(all_finite)
-    !! Every line is fully finite-EI: each line has at least one finite-EI section
-    !! (line_is_finite_ei) AND no line carries an EI=0 section. Used to reject a deck
-    !! that mixes EI=0 and finite-EI sections on the standalone finite-EI dynamic path.
-    TYPE(DeckLineType), INTENT(IN) :: types(:)
-    TYPE(DeckLine), INTENT(IN) :: lines(:)
-    TYPE(DeckSection), INTENT(IN) :: sections(:)
-    INTEGER :: i, j
-    all_finite = .TRUE.
-    DO i = 1, SIZE(lines)
-      DO j = 1, SIZE(sections)
-        IF (sections(j)%line_id /= lines(i)%id) CYCLE
-        IF (sections(j)%ltype < 1 .OR. sections(j)%ltype > SIZE(types)) THEN
-          all_finite = .FALSE.
-          CYCLE
-        END IF
-        IF (.NOT. (types(sections(j)%ltype)%ei > CD_ZERO)) all_finite = .FALSE.
-      END DO
-      all_finite = all_finite .AND. line_is_finite_ei(lines(i), types, sections)
-    END DO
-  END FUNCTION all_lines_have_finite_ei
 
   INTEGER FUNCTION point_index(points, id) RESULT(idx)
     TYPE(DeckPoint), INTENT(IN) :: points(:)
