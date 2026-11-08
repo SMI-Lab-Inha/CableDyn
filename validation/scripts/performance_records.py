@@ -589,10 +589,33 @@ def compare_wc(cabledyn: dict, moordyn_c: dict) -> dict:
             "max_difference_percent": 100.0 * abs(xa.max() - xb.max()) / xb.max()}
 
 
+def wc_agreement(results: dict) -> dict:
+    """The L5-wc CableDyn vs MoorDyn-C trace agreement; raises when it is outside WC_TOLERANCE."""
+    extra, problems = {}, []
+    for label in sorted({r["code"]["label"] for r in results.values() if r["code"]["name"] == "CableDyn"}):
+        cd = results.get(f"wc/cabledyn/{label}")
+        mdc = results.get("wc/moordyn-c/moordyn-c")
+        if not (cd and mdc):
+            continue
+        cmp = compare_wc(cd, mdc)
+        if cmp["samples"] == 0:
+            problems.append(f"{label}: no common output times with MoorDyn-C")
+        for key in ("mean_difference_percent", "max_difference_percent"):
+            if not cmp[key] <= 100.0 * WC_TOLERANCE:
+                problems.append(f"{label}: {key} {cmp[key]:.2f} % > {100.0 * WC_TOLERANCE:.0f} %")
+        extra[f"wc/{label}_vs_moordyn-c"] = {k: _round(v, 3) for k, v in cmp.items()}
+    if problems:
+        raise SystemExit(f"L5-wc response outside the L2-2 band; no records written: {problems}")
+    return extra
+
+
 def cmd_write(args) -> None:
     results = load_results(args.work / "results.json")["entries"]
     if not results:
         raise SystemExit("no results to write")
+    # The L5-wc cross-code agreement is checked before any record file is written: a timing is
+    # published only for a response inside the L2-2 band.
+    extra = wc_agreement(results)
     rows = []
     for key, r in sorted(results.items()):
         wall = summarise(r["runs"])
@@ -643,12 +666,6 @@ def cmd_write(args) -> None:
         codes[c["label"]] = {k: v for k, v in c.items() if k != "label"}
     responses = {row["_key"]: {k: _round(v, 4) for k, v in results[row["_key"]]["response"].items()
                                if k != "series"} for row in rows}
-    extra = {}
-    for label in {r["code"]["label"] for r in results.values() if r["code"]["name"] == "CableDyn"}:
-        cd = results.get(f"wc/cabledyn/{label}")
-        mdc = results.get("wc/moordyn-c/moordyn-c")
-        if cd and mdc:
-            extra[f"wc/{label}_vs_moordyn-c"] = {k: _round(v, 3) for k, v in compare_wc(cd, mdc).items()}
     step_checks = {key: {k: (_round(v, 8) if not isinstance(v, dict) else {a: _round(b, 8) for a, b in v.items()})
                          for k, v in r["step_check"].items()}
                    for key, r in results.items() if "step_check" in r}
