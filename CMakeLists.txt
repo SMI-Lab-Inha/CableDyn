@@ -2845,6 +2845,16 @@ if(Python3_Interpreter_FOUND)
 endif()
 # A clamped finite-EI cable with a buoyant section on a Rigid6 body: the body static solve
 # holds the objects at their deck poses, warns once, and reports no balanced clamped end loads.
+# A lazy wave on a graded mesh in a cross current: the continuation route stops on a compression
+# read on elements longer than half the bending length, which is no grounded-run limit, so the
+# mesh-sequenced route still runs and solves the deck, with no fallback.
+add_test(NAME driver_graded_cross_current
+  COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
+    "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/lazy_wave_graded_cross_current.dat|graded"
+    "-DMUST_NOT=failed Newton;stalled;looser tolerance"
+    -DWORKDIR=${CMAKE_CURRENT_BINARY_DIR}/driver_graded_cross_current
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_driver_output.cmake)
+set_tests_properties(driver_graded_cross_current PROPERTIES LABELS "fortran;driver;integration;static" TIMEOUT 600)
 add_test(NAME driver_clamped_buoyant_held
   COMMAND ${CMAKE_COMMAND} -DDRIVER=$<TARGET_FILE:cabledyn> -DEXPECT_RC=0
     "-DARGS=${CMAKE_CURRENT_SOURCE_DIR}/tests/data/clamped_buoyant_cable_held.dat|held"

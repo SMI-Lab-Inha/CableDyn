@@ -3248,7 +3248,7 @@ CONTAINS
     has = cur%drag
   END FUNCTION current_has_drag
 
-  FUNCTION current_compression_note(l0, EA, qx, seabed_z, flat, frictional, frictionless_run) RESULT(note)
+  FUNCTION current_compression_note(l0, EA, qx, seabed_z, flat, frictional, frictionless_run, EI, w) RESULT(note)
     !! Diagnosis of a current that has no tension-only equilibrium on the traced branch:
     !! empty unless the state qx (the last one reached) carries an element-mean axial force
     !! (three-point Gauss mean of EA (|r'| - 1), free of the end-node boundary layer) below
@@ -3263,8 +3263,13 @@ CONTAINS
     ! TRUE for the two frictionless grounded-run diagnoses (the run folds against its end or
     ! is pushed along the seabed in compression).
     LOGICAL, INTENT(OUT), OPTIONAL :: frictionless_run
+    ! The bending stiffness and weight per length of the elements (both or neither): on an
+    ! element longer than half its bending length (EI/|w|)^(1/3) the element-mean axial force of
+    ! a stiff line oscillates and can read a compression the line does not carry, so a
+    ! compression there names the mesh, not a limit of the current.
+    REAL(wp), INTENT(IN), OPTIONAL :: EI(:), w(:)
     CHARACTER(1024) :: note
-    REAL(wp) :: t_min, t_max, s_min, z_min, z_top
+    REAL(wp) :: t_min, t_max, s_min, z_min, z_top, need
     INTEGER :: k, k_min, wios, ne, es
     CHARACTER(1024) :: em
     note = ''
@@ -3279,6 +3284,22 @@ CONTAINS
     IF (.NOT. (t_min < -1.0e-3_wp*t_max)) RETURN
     ! Height of the compressed element: the lower of its two nodes.
     z_min = MIN(qx(6*(k_min - 1) + 3), qx(6*k_min + 3))
+    IF (PRESENT(EI) .AND. PRESENT(w)) THEN
+      ! the compressed element and its neighbours against half their bending length
+      need = CD_ZERO
+      DO k = MAX(1, k_min - 1), MIN(ne, k_min + 1)
+        IF (EI(k) > CD_ZERO .AND. ABS(w(k)) > CD_ZERO) &
+          need = MAX(need, l0(k)/(0.5_wp*(EI(k)/ABS(w(k)))**(1.0_wp/3.0_wp)))
+      END DO
+      IF (need > 1.0_wp) THEN
+        WRITE (note, '(A,ES10.3,A,F10.2,A,F6.2,A)', IOSTAT=wios) 'the line reads an element-mean axial '// &
+          'compression (', t_min, ' N at unstretched arc length ', s_min, ' m) on elements ', need, &
+          ' times half the bending length (EI/|w|)^(1/3), where the element-mean axial force of a stiff '// &
+          'line oscillates and can read a compression the line does not carry; refine those elements '// &
+          '(NumSegs) to half the bending length or less; '
+        RETURN
+      END IF
+    END IF
     IF (flat .AND. z_min <= seabed_z + 0.01_wp*(z_top - seabed_z) .AND. frictional) THEN
       WRITE (note, '(A,ES10.3,A,F10.2,A,ES10.3,A)', IOSTAT=wios) 'the line is in axial compression at '// &
         'the seabed (', t_min, ' N at unstretched arc length ', s_min, ' m, ', z_min - seabed_z, &
@@ -3695,7 +3716,7 @@ CONTAINS
       run_limit = .FALSE.
       IF (.NOT. PRESENT(current)) RETURN
       IF (.NOT. current_has_drag(current)) RETURN
-      note = current_compression_note(l0, EA, qx, seabed_z, flat, use_fric, run_limit)
+      note = current_compression_note(l0, EA, qx, seabed_z, flat, use_fric, run_limit, EI=EI, w=w)
     END FUNCTION frictionless_run_limit
 
     FUNCTION compression_note(qx) RESULT(note)
@@ -3707,7 +3728,7 @@ CONTAINS
       note = ''
       IF (.NOT. PRESENT(current)) RETURN
       IF (.NOT. current_has_drag(current)) RETURN
-      note = current_compression_note(l0, EA, qx, seabed_z, flat, use_fric)
+      note = current_compression_note(l0, EA, qx, seabed_z, flat, use_fric, EI=EI, w=w)
     END FUNCTION compression_note
 
     FUNCTION fixed_point_name() RESULT(name)
@@ -6798,7 +6819,7 @@ CONTAINS
         IF (PRESENT(current)) THEN
           IF (current_has_drag(current)) &
             emloc = TRIM(current_compression_note(l0_out, EA_out, q_out, seabed_z,.NOT. PRESENT(bathymetry), &
-                                                  ALLOCATED(current%friction)))//TRIM(emloc)
+                                                  ALLOCATED(current%friction), EI=EI_out, w=w_out))//TRIM(emloc)
         END IF
         ErrStat = es; ErrMsg = 'CD_HermiteCable_Static_Solve_AutoMesh: refined-mesh polish failed: '//TRIM(emloc)
         RETURN
@@ -6930,7 +6951,7 @@ CONTAINS
       IF (PRESENT(current)) THEN
         IF (current_has_drag(current)) &
           wbuf = TRIM(current_compression_note(l0_out, EA_out, q_out, seabed_z,.NOT. PRESENT(bathymetry), &
-                                               ALLOCATED(current%friction)))//TRIM(wbuf)
+                                               ALLOCATED(current%friction), EI=EI_out, w=w_out))//TRIM(wbuf)
       END IF
       ErrMsg = wbuf
       RETURN
