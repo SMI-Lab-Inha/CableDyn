@@ -1652,7 +1652,8 @@ beyond a :math:`10^{-6}` relative round-off band; a slack element reports zero t
    :math:`\lVert\mathbf{R}\rVert_\infty < 10^{-14}`, where :math:`s` is the largest of the
    infinity norms of the external load, the seabed reaction, and any current drag; a residual
    that stops decreasing inside the round-off floor
-   :math:`16\,\epsilon\,\max(EA/L_0)\max(\lvert q\rvert, L_0)` of the nodal forces is converged.
+   :math:`16\,\epsilon\,\max(EA/L_0)\max(\lvert q\rvert, L_0)` of the nodal forces is converged,
+   whether it stays flat or cycles between values (three iterations without a new minimum).
    A line with no admissible equilibrium fails closed, naming the line, the seeds and stages
    tried, and the reason.
 
