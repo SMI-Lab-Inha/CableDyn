@@ -36,6 +36,10 @@ driver:
 * ``att_cross`` (a finite-EI line with discrete buoyancy modules on a cross slope): the reference
   sinks each node under its discrete load, so the module nodes rest on the laid path (no lateral
   kink, as in the smeared twin) and a march from the static state stays at rest;
+* ``shallow_cross`` (a 0.5 m finite-EI cable on a seabed 0.1 m deep, sloping across it): the
+  reference sinks each node under the load the solver applies there, the dry part of the section
+  that pierces the surface included, so the run rests on its laid path and a march from the
+  static state stays at rest;
 * ``pl_*``: per-line rows win over the global ones (``layAzimuth<ID>`` over ``layAzimuth``,
   ``asLaidTension<ID>`` over ``asLaidTension``, in either order), and a row for line 2 leaves
   line 1 alone; ``aniso_*``: the axial coefficient rules the friction along a laid run;
@@ -508,6 +512,51 @@ def main() -> int:
         check(kd <= ks,
               "att_cross: the module nodes rest on the laid path as closely as in the smeared twin (%.2e <= %.2e m)"
               % (kd, ks))
+
+    # --- finite-EI cable laid on a shelf shallower than its radius, sloping across it ---
+    # A light 0.5 m cable rests on a seabed 0.1 m deep (5 degrees across the line): its section
+    # pierces the surface, and the static solve and the dynamics give back the buoyancy of the dry
+    # part, about 2.3 times its submerged weight. The friction reference sinks every node under
+    # that same normal load (the dry part at the node's sunk height), so the laid run rests on its
+    # laid path, y = 0. A reference sunk under the submerged weight alone would hold the run down
+    # the slope by the difference of the two sinks times tan(slope), about 0.8 mm, with a spurious
+    # friction force. Checked: the run's nodes stay within a tenth of that of the laid path
+    # (about 4e-6 m), and a march from the static state stays at rest.
+    cdir = root / "shallow_cross"
+    cdir.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for x in range(-300, 1000, 100):
+        for y in (-1.0, 1.0):
+            rows.append("%.1f %.1f %.12g" % (x, y, 0.1 + math.tan(math.radians(5.0)) * y))
+    (cdir / "bathy.txt").write_text("\n".join(rows) + "\n", encoding="utf-8", newline="\n")
+    d_s, m_s = 0.5, 220.0
+    w_s = (m_s - RHO * math.pi / 4.0 * d_s * d_s) * G
+    sc = dict(ei=1.0e4, length=100.0, nseg=50, fair=(100.0, 0.0, -0.095), anch=(0.0, 0.0, -0.1), seabed=sb,
+              types=f"chain {d_s} {m_s} 1.0e8 -1 1.0e4 1.2 0.008 1 0\n")
+    rc, log = run(a.exe, cdir, "shallow", deck("shallow cross", **sc))
+    check(rc == 0, "shallow_cross converges (rc %d)%s" % (rc, "" if rc == 0 else ": " + log.strip()[-300:]))
+    if rc == 0:
+        p = first_row(cdir / "shallow.Line1.p.out")
+        # the run away from its two held ends, which rest at their deck positions above the
+        # sunk run and bend it within a few elements of them
+        y_run = [p[3 * i + 1] for i in range(5, len(p) // 3 - 5)]
+        # the sink of a node under its submerged weight and under its load with the dry part
+        kn_l = 1.0e5 * d_s
+        dry_load = w_s
+        for _ in range(100):
+            u = max(-1.0, min(1.0, (-0.1 - dry_load / kn_l) / (0.5 * d_s)))
+            phi = 1.0 - (math.acos(u) - u * math.sqrt(1.0 - u * u)) / math.pi
+            dry_load = w_s + phi * RHO * G * math.pi / 4.0 * d_s * d_s
+        spurious = (dry_load - w_s) / kn_l * math.tan(math.radians(5.0))
+        dev = max(abs(y) for y in y_run)
+        check(dev < 0.1 * spurious,
+              "shallow_cross: the run rests on its laid path (%.2e m off it, a reference without the dry part "
+              "would hold it %.2e m off)" % (dev, spurious))
+        rc, _ = run(a.exe, cdir, "shallow_rest", deck("shallow cross rest", **sc, tmax=1.0))
+        check(rc == 0, "shallow_cross at-rest march runs (rc %d)" % rc)
+        if rc == 0:
+            drift = at_rest(cdir, "shallow", "shallow_rest")
+            check(drift <= REST_TOL, "shallow_cross stays at rest from the static state (drift %.2e)" % drift)
 
     # --- per-line rows, non-default azimuth and tension, anisotropic friction (EI = 0) ---
     cdir = root / "perline"

@@ -3283,16 +3283,20 @@ CONTAINS
       ! friction deflection along a slope, beyond the slope load its spring carries at rest.
       IF (as_laid .AND. PRESENT(bathymetry)) THEN
         BLOCK
-          REAL(wp), ALLOCATABLE :: node_load(:)
-          ALLOCATE (node_load(SIZE(l0) + 1))
+          REAL(wp), ALLOCATABLE :: node_load(:), node_dry(:)
+          ALLOCATE (node_load(SIZE(l0) + 1), node_dry(SIZE(l0) + 1))
           node_load = CD_ZERO
+          node_dry = CD_ZERO
           DO i = 1, SIZE(l0)
             node_load(i:i + 1) = node_load(i:i + 1) + 0.5_wp*w_bare(i)*l0(i)
           END DO
+          ! the net weight of each attachment, and the buoyancy it has not above the surface
+          ! (attachment_static_weight)
           DO i = 1, SIZE(att_node)
             node_load(att_node(i)) = node_load(att_node(i)) + (ln%att(2, i) - opts%rhoW*ln%att(3, i))*opts%g
+            node_dry(att_node(i)) = node_dry(att_node(i)) + opts%rhoW*ln%att(3, i)*opts%g
           END DO
-          CALL as_laid_reference(es, em, node_load)
+          CALL as_laid_reference(es, em, node_load, node_dry)
         END BLOCK
         IF (es /= CD_DECKDRV_OK) THEN
           CALL fail_solve(ErrStat, ErrMsg, 'finite-EI as-laid reference for the seabed friction with discrete '// &
@@ -5164,7 +5168,7 @@ CONTAINS
       END DO
     END FUNCTION as_laid_cross_slope
 
-    SUBROUTINE as_laid_reference(esr, emr, node_load)
+    SUBROUTINE as_laid_reference(esr, emr, node_load, node_dry_load)
       !! Friction reference of the static solve (CD_HermiteCable_As_Laid_Offsets): the line laid
       !! on the seabed from its lower end (the anchor, node 1, unless the fairlead is lower, as in
       !! the EI = 0 line model) along the lay azimuth at the as-laid tension, as (x, y) offsets
@@ -5178,9 +5182,13 @@ CONTAINS
       !! dynamic hand-off does on the final mesh. node_load [N, downward positive, one entry per
       !! node]: the discrete loads of an attachment polish on the final mesh l0, which hold on
       !! that mesh alone; the reference is then this profile (default: the lumped weights w).
+      !! node_dry_load (with node_load): the attachments' buoyancy at each node, which a node
+      !! laid above the still-water level does not have. On a bathymetry a node sinks under the
+      !! normal load the solver applies at its laid position, the dry part of a section laid
+      !! within its radius of the surface included (the friction's laid_* dry-part data).
       INTEGER, INTENT(OUT) :: esr
       CHARACTER(*), INTENT(OUT) :: emr
-      REAL(wp), INTENT(IN), OPTIONAL :: node_load(:)
+      REAL(wp), INTENT(IN), OPTIONAL :: node_load(:), node_dry_load(:)
       REAL(wp), ALLOCATABLE :: wn(:), kn_r(:), offsets(:, :)
       REAL(wp) :: laid_t, az
       INTEGER :: k, ne_r, es_r
@@ -5206,6 +5214,15 @@ CONTAINS
       cur_obj%friction%laid_azimuth = az
       cur_obj%friction%laid_tension = laid_t
       cur_obj%friction%laid_frame_cs = frame_cs
+      ! the dry part of the line at the still-water level z = 0, the diameter by reference arc
+      cur_obj%friction%laid_water_weight = opts%rhoW*opts%g
+      cur_obj%friction%laid_waterline_z = CD_ZERO
+      ALLOCATE (cur_obj%friction%laid_arc_end(ne_r), cur_obj%friction%laid_diam(ne_r))
+      cur_obj%friction%laid_arc_end(1) = l0(1)
+      DO k = 2, ne_r
+        cur_obj%friction%laid_arc_end(k) = cur_obj%friction%laid_arc_end(k - 1) + l0(k)
+      END DO
+      cur_obj%friction%laid_diam = diam(1:ne_r)
       ! the nodal loads and seabed stiffnesses the nodes of mesh l0 sink under
       ALLOCATE (wn(ne_r + 1), kn_r(ne_r + 1), offsets(2, ne_r + 1))
       wn = CD_ZERO
@@ -5220,7 +5237,10 @@ CONTAINS
           wn(k:k + 1) = wn(k:k + 1) + 0.5_wp*w(k)*l0(k)
         END DO
       END IF
-      IF (PRESENT(bathymetry)) THEN
+      IF (PRESENT(bathymetry) .AND. PRESENT(node_dry_load)) THEN
+        CALL CD_HermiteCable_As_Laid_Offsets(cur_obj%friction, l0, ea, wn, kn_r, offsets, es_r, emr, bathymetry, &
+                                             node_dry_load=node_dry_load)
+      ELSE IF (PRESENT(bathymetry)) THEN
         CALL CD_HermiteCable_As_Laid_Offsets(cur_obj%friction, l0, ea, wn, kn_r, offsets, es_r, emr, bathymetry)
       ELSE
         CALL CD_HermiteCable_As_Laid_Offsets(cur_obj%friction, l0, ea, wn, kn_r, offsets, es_r, emr)

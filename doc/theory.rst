@@ -1111,6 +1111,8 @@ phases, the running mean squares and the averaging time are part of the checkpoi
 restart continues the uninterrupted run bit for bit. The OpenFAST correction iterations rewind
 them with the rest of the state.
 
+.. _theory-dry-buoyancy:
+
 Buoyancy and wetting
 ~~~~~~~~~~~~~~~~~~~~
 
@@ -1438,7 +1440,15 @@ laid node sinks into the penalty seabed along its normal by its static penetrati
 slope moves it horizontally by :math:`w_i\,(z_{,x}, z_{,y})/k_i`, with :math:`w_i` its nodal
 load: its share of the line's submerged weight, plus the net weight of a discrete attachment
 lumped at it (the finite-EI solve first smears an attachment over the two elements at its
-node, then rebuilds the reference for the discrete loads before it polishes to them). Where
+node, then rebuilds the reference for the discrete loads before it polishes to them). It is the
+normal load the solver applies to the node resting at its laid position: a finite-EI section
+that lies within its radius of the still-water level there (a seabed shallower than the cable
+radius) carries the buoyancy of its dry part, as in the static solve and the dynamics
+(:ref:`buoyancy recovery <theory-dry-buoyancy>`), at the height the node sinks to under that
+load, :math:`z_f - w_i s^2/k_i`, and an attachment above the level its dry weight. The seabed
+lies below the still-water level everywhere (a positive ``WtrDpth`` and positive bathymetry
+depths), so a grounded node with its attachment stays submerged; an ``EI = 0`` line, whose
+submergence follows its node heights, is wholly submerged where it is grounded. Where
 the slope varies, the laid tension turns at every node and adds
 :math:`-T_\text{laid}\,(\mathbf{t}_{i}^{+} - \mathbf{t}_{i}^{-})\cdot\mathbf{n}_i` to the
 normal load (it presses the line into a crest and lifts it from a hollow), with

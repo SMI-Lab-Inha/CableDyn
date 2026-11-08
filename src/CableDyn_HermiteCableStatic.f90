@@ -206,6 +206,13 @@ MODULE CableDyn_HermiteCableStatic
     REAL(wp) :: laid_origin(2) = 0.0_wp, laid_node1(2) = 0.0_wp
     REAL(wp) :: laid_azimuth = 0.0_wp, laid_tension = 0.0_wp
     REAL(wp) :: laid_frame_cs(2) = [1.0_wp, 0.0_wp]
+    ! The dry part of a laid line (laid_water_weight > 0, on a bathymetry): the nodes of a line
+    ! laid within its section radius of the still-water level laid_waterline_z sink under the
+    ! buoyancy the solver gives back there (CD_HermiteCable_As_Laid_Offsets). laid_water_weight
+    ! is rho g [N/m^3]; the section diameter is laid_diam on the reference-arc intervals ending
+    ! at laid_arc_end (cumulative rest length from node 1), so any mesh of the line looks it up.
+    REAL(wp) :: laid_water_weight = 0.0_wp, laid_waterline_z = 0.0_wp
+    REAL(wp), ALLOCATABLE :: laid_arc_end(:), laid_diam(:)
   END TYPE CD_HermiteStaticFrictionType
 
   TYPE, PUBLIC :: CD_HermiteStaticCurrentType
@@ -2786,7 +2793,8 @@ CONTAINS
 
   END SUBROUTINE CD_HermiteCable_Static_Solve
 
-  SUBROUTINE CD_HermiteCable_As_Laid_Offsets(fr, l0, EA, node_load, node_kn, offsets, ErrStat, ErrMsg, bathymetry)
+  SUBROUTINE CD_HermiteCable_As_Laid_Offsets(fr, l0, EA, node_load, node_kn, offsets, ErrStat, ErrMsg, bathymetry, &
+                                             node_dry_load)
     !! As-laid friction reference of the nodes of mesh l0 (the lay of fr, laid_* above;
     !! CD_Static_As_Laid_Reference): node i at the stretched arc length of the elements
     !! l0 (1 + laid_tension/EA) along the seabed from the lower end, and on a bathymetry
@@ -2795,13 +2803,20 @@ CONTAINS
     !! turning force of the laid tension). offsets(1:2, i) is the reference of node i less
     !! the global position laid_node1 of node 1, in the solve frame laid_frame_cs; with
     !! laid_in_plane on a bathymetry only the sink offset across the chord leaves its plane.
+    !! node_load holds the submerged weights. On a bathymetry with fr%laid_water_weight > 0 a
+    !! node sinks under the normal load the solver applies at its laid position instead
+    !! (laid_dry_loads): with the buoyancy the line gives back on its part above the still-water
+    !! level fr%laid_waterline_z (CD_HermiteCable_Dry_Buoyancy of the laid centreline: a section
+    !! within its radius of the surface is partly dry), and node_dry_load(i) [N, downward, the
+    !! buoyancy of the attachments on node i] where node i is laid above that level.
     TYPE(CD_HermiteStaticFrictionType), INTENT(IN) :: fr
     REAL(wp), INTENT(IN) :: l0(:), EA(:), node_load(:), node_kn(:)
     REAL(wp), INTENT(OUT) :: offsets(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
-    REAL(wp), ALLOCATABLE :: ref_g(:, :), ref_0(:, :), wn(:), sn(:), kn_o(:), l0_r(:), ea_r(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: node_dry_load(:)
+    REAL(wp), ALLOCATABLE :: ref_g(:, :), ref_0(:, :), wn(:), sn(:), kn_o(:), l0_r(:), ea_r(:), load(:)
     REAL(wp) :: dg(2), dg0(2), cs(2)
     INTEGER :: k, ne, es
     CHARACTER(1024) :: em
@@ -2816,13 +2831,26 @@ CONTAINS
       ErrStat = CD_HCSTAT_BADINPUT; ErrMsg = 'as-laid friction reference: nodal loads and stiffnesses must be finite'
       RETURN
     END IF
+    IF (PRESENT(node_dry_load)) THEN
+      IF (SIZE(node_dry_load) /= ne + 1 .OR. .NOT. CD_All_Finite(node_dry_load)) THEN
+        ErrStat = CD_HCSTAT_BADINPUT
+        ErrMsg = 'as-laid friction reference: node_dry_load must be finite, one entry per node'; RETURN
+      END IF
+    END IF
     offsets = CD_ZERO
     ALLOCATE (ref_g(2, ne + 1))
     IF (PRESENT(bathymetry)) THEN
+      load = node_load
+      IF (fr%laid_water_weight > CD_ZERO) THEN
+        CALL laid_dry_loads(load, es, em)
+        IF (es /= CD_HCSTAT_OK) THEN
+          ErrStat = CD_HCSTAT_BADINPUT; ErrMsg = 'as-laid friction reference: '//TRIM(em); RETURN
+        END IF
+      END IF
       ! the static penalty penetration factor w_i/k_i of every node
       ALLOCATE (wn(ne + 1))
       WHERE (node_kn > CD_ZERO)
-        wn = MAX(node_load, CD_ZERO)/node_kn
+        wn = MAX(load, CD_ZERO)/node_kn
       ELSEWHERE
         wn = CD_ZERO
       END WHERE
@@ -2870,6 +2898,136 @@ CONTAINS
         offsets(2, k) = (-cs(2)*dg(1) + cs(1)*dg(2)) - (-cs(2)*dg0(1) + cs(1)*dg0(2))
       END IF
     END DO
+
+  CONTAINS
+
+    SUBROUTINE laid_dry_loads(nl, esd, emd)
+      !! The nodal loads nl (the submerged weights on entry) as the static solve and the dynamics
+      !! apply them to a node resting at its laid position: the line laid without its sink, the
+      !! seabed under every node, the tangent along the laid path stretched by the laid tension.
+      !! There a node of load W stands at the height z = z_floor - W (1 + |grad z_floor|^2)/k of
+      !! the penalty seabed's static penetration, and the line gives back the buoyancy
+      !! laid_water_weight pi d^2/4 of its part above laid_waterline_z
+      !! (CD_HermiteCable_Dry_Buoyancy with the section radius d/2, d the laid_diam of the
+      !! element's midpoint arc), a node above that level also node_dry_load: W = nl + the dry
+      !! load at z(W), solved by Newton's method with the dry load's exact height derivative (its
+      !! residual decreases monotonically in W). The turning force of the laid tension is left
+      !! out of the height. nl is unchanged where the line lies below the surface by more than
+      !! its radius.
+      REAL(wp), INTENT(INOUT) :: nl(:)
+      INTEGER, INTENT(OUT) :: esd
+      CHARACTER(*), INTENT(OUT) :: emd
+      INTEGER, PARAMETER :: MAX_NEWTON = 50
+      REAL(wp), PARAMETER :: LOAD_RTOL = 1.0e-12_wp
+      REAL(wp), ALLOCATABLE :: ref_u(:, :), zf(:), dzds(:), sfac2(:), de(:), base(:), wl(:), z(:), fd(:), &
+                               gres(:), dg(:), lo(:), up(:), y(:)
+      REAL(wp) :: dir(2), gx, gy, ga, qz(4), fdry(4), kdry(4, 4), s_mid, stretch, scale_w, piv
+      INTEGER :: j, e, ix, esq, it
+      LOGICAL :: dry, any_dry
+      esd = CD_HCSTAT_OK
+      emd = ''
+      IF (.NOT. (ALLOCATED(fr%laid_arc_end) .AND. ALLOCATED(fr%laid_diam))) RETURN
+      IF (SIZE(fr%laid_arc_end) < 1 .OR. SIZE(fr%laid_diam) /= SIZE(fr%laid_arc_end)) THEN
+        esd = CD_HCSTAT_BADINPUT; emd = 'the dry-part diameter profile is inconsistent'; RETURN
+      END IF
+      IF (ANY(node_kn <= CD_ZERO)) RETURN
+      ! the laid path without the sink, from the lower end, in node order
+      ALLOCATE (ref_u(2, ne + 1), zf(ne + 1), dzds(ne + 1), sfac2(ne + 1), de(ne))
+      IF (fr%laid_from_top) THEN
+        CALL CD_Static_As_Laid_Reference(fr%laid_origin, fr%laid_azimuth, l0(ne:1:-1), EA(ne:1:-1), &
+                                         fr%laid_tension, ref_u, esq, emd, bathymetry=bathymetry)
+        ref_u = ref_u(:, ne + 1:1:-1)
+      ELSE
+        CALL CD_Static_As_Laid_Reference(fr%laid_origin, fr%laid_azimuth, l0, EA, fr%laid_tension, ref_u, esq, &
+                                         emd, bathymetry=bathymetry)
+      END IF
+      IF (esq /= CD_STATIC_OK) THEN
+        esd = CD_HCSTAT_BADINPUT; RETURN
+      END IF
+      dir = [COS(fr%laid_azimuth), SIN(fr%laid_azimuth)]
+      DO j = 1, ne + 1
+        CALL CD_Bathymetry_Floor_Gradient(bathymetry, ref_u(1, j), ref_u(2, j), zf(j), gx, gy, esq, emd)
+        IF (esq /= CD_BATHY_OK) THEN
+          esd = CD_HCSTAT_BADINPUT; RETURN
+        END IF
+        ! the rise of the laid path per unit length along it, in node order (laid from the last
+        ! node, the node order runs against the lay)
+        ga = gx*dir(1) + gy*dir(2)
+        dzds(j) = MERGE(-CD_ONE, CD_ONE, fr%laid_from_top)*ga/SQRT(CD_ONE + ga*ga)
+        sfac2(j) = CD_ONE + gx*gx + gy*gy
+      END DO
+      s_mid = CD_ZERO
+      ix = 1
+      DO e = 1, ne
+        s_mid = s_mid + 0.5_wp*l0(e)
+        DO WHILE (ix < SIZE(fr%laid_arc_end))
+          IF (fr%laid_arc_end(ix) >= s_mid) EXIT
+          ix = ix + 1
+        END DO
+        s_mid = s_mid + 0.5_wp*l0(e)
+        de(e) = fr%laid_diam(ix)
+      END DO
+      base = nl
+      wl = nl
+      scale_w = MAX(CD_ONE, MAXVAL(ABS(base)))
+      ALLOCATE (z(ne + 1), fd(ne + 1), gres(ne + 1), dg(ne + 1), lo(ne + 1), up(ne + 1), y(ne + 1))
+      DO it = 1, MAX_NEWTON
+        ! the dry load at the heights of the loads wl, and its derivative with respect to them
+        z = zf - MAX(wl, CD_ZERO)*sfac2/node_kn
+        fd = CD_ZERO
+        dg = CD_ONE
+        lo = CD_ZERO
+        up = CD_ZERO
+        any_dry = .FALSE.
+        DO e = 1, ne
+          IF (.NOT. (de(e) > CD_ZERO)) CYCLE
+          stretch = CD_ONE + fr%laid_tension/EA(e)
+          qz = [z(e), stretch*dzds(e), z(e + 1), stretch*dzds(e + 1)]
+          CALL CD_HermiteCable_Dry_Buoyancy(qz, l0(e), fr%laid_water_weight*0.25_wp*PI_W*de(e)**2, &
+                                            fr%laid_waterline_z, fdry, kdry, dry, radius=0.5_wp*de(e))
+          IF (.NOT. dry) CYCLE
+          any_dry = .TRUE.
+          fd(e) = fd(e) + fdry(1)
+          fd(e + 1) = fd(e + 1) + fdry(3)
+          ! d(fd)/d(wl) = -kdry dz/dwl, dz/dwl = -sfac2/kn where the load presses the node in
+          IF (wl(e) > CD_ZERO) THEN
+            dg(e) = dg(e) + kdry(1, 1)*sfac2(e)/node_kn(e)
+            lo(e + 1) = lo(e + 1) + kdry(3, 1)*sfac2(e)/node_kn(e)
+          END IF
+          IF (wl(e + 1) > CD_ZERO) THEN
+            dg(e + 1) = dg(e + 1) + kdry(3, 3)*sfac2(e + 1)/node_kn(e + 1)
+            up(e) = up(e) + kdry(1, 3)*sfac2(e + 1)/node_kn(e + 1)
+          END IF
+        END DO
+        IF (PRESENT(node_dry_load)) THEN
+          WHERE (z > fr%laid_waterline_z) fd = fd + node_dry_load
+          any_dry = any_dry .OR. ANY(z > fr%laid_waterline_z .AND. ABS(node_dry_load) > CD_ZERO)
+        END IF
+        IF (it == 1 .AND. .NOT. any_dry) RETURN
+        gres = wl - base - fd
+        IF (MAXVAL(ABS(gres)) <= LOAD_RTOL*scale_w) EXIT
+        ! (I + K D) dw = -gres, tridiagonal (diagonal dg, sub lo, super up): Thomas elimination;
+        ! the diagonal is at least 1 and grows with the dry stiffness
+        y = -gres
+        DO j = 2, ne + 1
+          piv = lo(j)/dg(j - 1)
+          dg(j) = dg(j) - piv*up(j - 1)
+          y(j) = y(j) - piv*y(j - 1)
+        END DO
+        y(ne + 1) = y(ne + 1)/dg(ne + 1)
+        DO j = ne, 1, -1
+          y(j) = (y(j) - up(j)*y(j + 1))/dg(j)
+        END DO
+        wl = wl + y
+        IF (.NOT. CD_All_Finite(wl)) THEN
+          esd = CD_HCSTAT_BADINPUT; emd = 'the dry-part load is not finite'; RETURN
+        END IF
+      END DO
+      IF (MAXVAL(ABS(gres)) > LOAD_RTOL*scale_w) THEN
+        esd = CD_HCSTAT_BADINPUT; emd = 'the dry-part load of the laid line did not converge'; RETURN
+      END IF
+      nl = wl
+    END SUBROUTINE laid_dry_loads
   END SUBROUTINE CD_HermiteCable_As_Laid_Offsets
 
   SUBROUTINE CD_HermiteCable_Friction_Reference(fr, l0, origin, ref, ErrStat, ErrMsg, EA, w, node_kn, bathymetry)
