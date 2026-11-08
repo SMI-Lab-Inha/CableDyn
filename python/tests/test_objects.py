@@ -562,6 +562,16 @@ def test_channel_tokens_must_be_ascii(tmp_path):
             model.channel("FairTen\u00b91")
 
 
+@pytest.mark.parametrize("token", ["FairTen1\x00", "FairTen1\x00x", "\x00FairTen1"])
+def test_channel_tokens_must_not_hold_a_nul(tmp_path, token):
+    # the library reads a token up to its first NUL: "FairTen1\0x" would read as FairTen1
+    with CableDyn(_held_chain(tmp_path)) as model:
+        with pytest.raises(ValueError, match="NUL"):
+            model.channel(token)
+        with pytest.raises(ValueError, match="NUL"):
+            model.channels(["FairTen1", token])
+
+
 def test_zero_length_rod_axis_is_a_value_error(tmp_path, monkeypatch):
     deck = _write(tmp_path, "rod.dat", _ROD_DECK)
     with CableDyn(deck) as model:
