@@ -18,7 +18,7 @@ redistributed.
 | [`bodies/`](bodies/README.md) | Rigid-body, rod and shared-anchor cases with MoorDyn-C twins, stored references and pass limits |
 | [`experiments/`](experiments/README.md) | Holcombe et al. (2025) static lazy-wave and Bergdahl et al. (2016) dynamic-chain comparisons |
 | [`PERFORMANCE_0_1_0.md`](PERFORMANCE_0_1_0.md) | Wall time of CableDyn 0.1.0, MoorDyn-C and MoorDyn-F at equal accuracy on five mooring, cable, buoy and coupled cases |
-| [`performance/`](performance/README.md) | Same-host timing of the three spatially resolved lazy-wave cables |
+| [`performance/`](performance/README.md) | Same-host wall-clock records of the L5 cases: the resolved lazy-wave spans, the one-hour VolturnUS-S mooring and the tension-only chain |
 | [`PAPER_REPRODUCTION.md`](PAPER_REPRODUCTION.md) | Every CableDyn result in the journal article, re-run with the release defaults and in paper mode |
 | [`OPENFAST_DLC_VERIFICATION.md`](OPENFAST_DLC_VERIFICATION.md) | Design-load-case comparison against stock MoorDyn-F in OpenFAST, maintained by NLR (National Laboratory of the Rockies, formerly NREL) |
 | `scripts/` | Cross-code comparison and reference-generation scripts cited in `VALIDATION.md` |

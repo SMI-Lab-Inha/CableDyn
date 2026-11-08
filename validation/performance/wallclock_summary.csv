@@ -1,0 +1,7 @@
+case,site,solver,build,elements,time_step_s,total_wall_median_s,total_wall_min_s,total_wall_max_s,static_wall_median_s,dynamic_wall_median_s,total_cpu_median_s,peak_working_set_MiB,host_busy_median,newton_per_step,subdivided_intervals
+L5-V,,CableDyn,gnu-release-dev,50,0.1,6.1818,6.156,6.194,0.651,5.545,6.1562,21.4,0.069,2.03,
+L5-V,,CableDyn,ifx-release-0.4.1,50,0.1,4.4435,4.441,4.4519,0.319,4.112,4.4219,12.6,0.07,2.03,
+L5-V,,OrcaFlex,orcaflex,50,0.1,19.7203,19.3258,19.7361,0.0276,19.6926,19.7188,151.2,0.064,,
+L5-wc,,CableDyn,gnu-release-dev,41,0.05,0.2766,0.2748,0.4056,0.029,0.228,0.2812,11.3,0.078,2.289,
+L5-wc,,CableDyn,ifx-release-0.4.1,41,0.05,0.2002,0.1977,0.2041,0.018,0.171,0.2031,10.5,0.083,2.289,
+L5-wc,,MoorDyn-C,moordyn-c,41,0.001,0.4819,0.4758,0.4827,,0.452,0.4844,6.2,0.072,,

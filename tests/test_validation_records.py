@@ -177,24 +177,51 @@ class ValidationRecordTests(unittest.TestCase):
     def test_performance_summary_matches_machine_readable_record(self) -> None:
         directory = VALIDATION / "performance"
         rows = load_csv(directory / "performance_summary.csv")
+        others = load_csv(directory / "wallclock_summary.csv")
         record = load_json(directory / "performance_metrics.json")
-        self.assertEqual(len(rows), 9)
-        self.assertEqual(len(record["rows"]), 9)
-        lookup = {(row["site"], row["solver"]): row for row in rows}
+        # L5-DPC: three spans, CableDyn with the GNU development build and the IFX release driver,
+        # OrcaFlex and MoorDyn-F.
+        cabledyn_builds = {row["build"] for row in rows if row["solver"] == "CableDyn"}
+        self.assertEqual(len(cabledyn_builds), 2)
+        expected = {(site, "CableDyn", build) for site in ("80m", "200m", "800m") for build in cabledyn_builds}
+        expected |= {(site, solver, solver.lower()) for site in ("80m", "200m", "800m")
+                     for solver in ("OrcaFlex", "MoorDyn-F")}
+        lookup = {(row["site"], row["solver"], row["build"]): row for row in rows}
+        self.assertEqual(len(lookup), len(rows))
+        self.assertEqual(set(lookup), expected)
+        self.assertEqual({row["case"] for row in rows}, {"L5-DPC"})
+        # L5-V (CableDyn builds and OrcaFlex) and L5-wc (CableDyn builds and MoorDyn-C).
+        other_lookup = {(row["case"], row["solver"], row["build"]): row for row in others}
+        self.assertEqual(len(other_lookup), len(others))
         self.assertEqual(
-            set(lookup),
-            {(site, solver) for site in ("80m", "200m", "800m") for solver in ("CableDyn", "OrcaFlex", "MoorDyn-F")},
+            set(other_lookup),
+            {(case, "CableDyn", build) for case in ("L5-V", "L5-wc") for build in cabledyn_builds}
+            | {("L5-V", "OrcaFlex", "orcaflex"), ("L5-wc", "MoorDyn-C", "moordyn-c")},
         )
 
-        records = {(row["site"], row["solver"]): row for row in record["rows"]}
-        self.assertEqual(set(records), set(lookup))
-        for key, row in lookup.items():
-            median = float(row["total_wall_median_s"])
-            self.assertLessEqual(float(row["total_wall_min_s"]), median)
-            self.assertGreaterEqual(float(row["total_wall_max_s"]), median)
-            assert_close(self, median, records[key]["total_wall_median_s"])
+        for table, key_fields, json_rows in (
+            (lookup, ("site", "solver", "build"), record["rows"]),
+            (other_lookup, ("case", "solver", "build"), record["wallclock_rows"]),
+        ):
+            records = {tuple(row[field] for field in key_fields): row for row in json_rows}
+            self.assertEqual(set(records), set(table))
+            for key, row in table.items():
+                median = float(row["total_wall_median_s"])
+                self.assertLessEqual(float(row["total_wall_min_s"]), median)
+                self.assertGreaterEqual(float(row["total_wall_max_s"]), median)
+                assert_close(self, median, records[key]["total_wall_median_s"])
+                self.assertIn(row["build"], record["codes"])
+        for key, row in list(lookup.items()) + list(other_lookup.items()):
+            if row["solver"] == "CableDyn" and row["subdivided_intervals"]:
+                self.assertEqual(int(row["subdivided_intervals"]), 0, key)
         for site in ("80m", "200m", "800m"):
-            self.assertEqual(int(lookup[(site, "CableDyn")]["subdivided_intervals"]), 0)
+            for build in cabledyn_builds:
+                self.assertEqual(int(lookup[(site, "CableDyn", build)]["subdivided_intervals"]), 0)
+        # The refined MoorDyn-F step is the largest whose halving moves the scored responses < 0.01 %.
+        checks = record["moordyn_f_step_checks"]
+        self.assertEqual(len(checks), 3)
+        for check in checks.values():
+            self.assertLess(check["largest_relative_move"], 1.0e-4)
 
 
 if __name__ == "__main__":

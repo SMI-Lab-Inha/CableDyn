@@ -8,6 +8,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The L5 wall-clock records (`validation/performance` and the L5 rows of `VALIDATION.md`) are
+  measured again on one host, with the v0.4.1 release driver and a GNU build. The new
+  `validation/scripts/performance_records.py` builds the lazy-wave span, one-hour mooring and
+  tension-only chain models for CableDyn, OrcaFlex, MoorDyn-F and MoorDyn-C, checks each against
+  its reference response, times them and writes the records.
+
 ## [0.4.1] - 2026-11-08
 
 ### Added

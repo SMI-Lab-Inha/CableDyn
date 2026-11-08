@@ -88,9 +88,9 @@ article's methods, are compared in
 | **L4-rot** | Coupled mooring rotational stiffness | held 1° pitch geometry | upwind −16.0 kN, downwind +7.8 kN each; first-order restoring moment | signs + first-order | Pass |
 | **L5-stab** | Snap-load Δt-stability | sub-CFL fine-dt (0.5 ms) self-ref | peak 1.5% at dt = 20 ms (explicit limit 3.2 ms) | — | Pass |
 | **L5-stab** | Snap-load Δt-stability, implicit and explicit steps | MoorDyn-C explicit step limit | 20 ms implicit; ~1 ms explicit | — | Pass |
-| **L5-V** | VolturnUS-S 1-hr mooring wall-clock | measured, matched protocol | CableDyn 18.1–32 s across repeated runs (full Newton) vs OrcaFlex 14.5 s; heave-only config 10.3 s | — | Pass (response at L3-7) |
-| **L5-wc** | Wall-clock vs explicit C solver | external-C RK2 (WD chain) | L2 0.967 s vs external-C 0.541 s; traces validated | matched comparison reported | Pass measured |
-| **L5-DPC** | Pinned-TDP lazy-wave spans, 80/200/800 m | OrcaFlex / refined MoorDyn-F | CableDyn 1.55/4.64/7.37 s; OrcaFlex 2.29/4.56/23.17 s; MoorDyn-F 249/145/243 s | resolved meshes, same host, one thread | Pass measured |
+| **L5-V** | VolturnUS-S 1-hr mooring wall-clock | OrcaFlex 11.6d, same drive and host | CableDyn 4.44 s (IFX release) / 6.18 s (GNU) vs OrcaFlex 19.72 s; the timed deck reproduces the L3-7 response | — | Pass measured |
+| **L5-wc** | Wall-clock, tension-only chain | MoorDyn-C v2.7.2, explicit RK2 (WD0050 chain) | CableDyn 0.200 s (IFX) / 0.277 s (GNU) vs MoorDyn-C 0.482 s; tensions 1.35 / 1.71% (mean / max) | matched comparison reported | Pass measured |
+| **L5-DPC** | Pinned-TDP lazy-wave spans, 80/200/800 m | OrcaFlex / refined MoorDyn-F | CableDyn 1.44/2.56/5.29 s (IFX release; GNU 2.06/3.40/7.59 s); OrcaFlex 2.69/5.31/27.81 s; MoorDyn-F 327/192/321 s | resolved meshes, same host, one thread | Pass measured |
 | **L5-pk** | Snap-load peak, 3-code | MoorDyn-C + OrcaFlex | 4.86 / 6.32 / 10.22 MN | — | Informative |
 | **T-1** | Torsion kernel: twist of the centreline, gradient, Hessian | automatic differentiation; finite differences | ≤3.8e-15; ≤5.3e-11 | <1e-10; <1e-6 | Pass |
 | **T-2** | Pure torsion (multi-section, end springs, five turns) | `Φ/C`; OrcaFlex 11.6d | round-off; ≤1.7e-8 | <1e-12; <1e-7 | Pass |
@@ -505,49 +505,68 @@ scripts, results, and source provenance are in
 
 ### Wall-clock time
 
-- **Tension-only chain (Pass measured)**: MoorDyn-C runs the 8 s snap in about
-  0.03 s and CableDyn in about 0.26 s; cheap lumped-mass substeps make the explicit
-  model faster for this short axial-line problem. For the L2 WD0050/A1 80 s deck,
-  CableDyn takes **0.967 s** and the external-C RK2 calculation **0.541 s**; the
-  traces agree to 1.67 / 3.61% in mean / maximum fairlead tension.
-- **VolturnUS-S one-hour mooring**:
-
-| Case | CableDyn | Reference | Note |
-|------|----------|-----------|------|
-| All-chain static IC | converged | OrcaFlex 2427 / MoorDyn 2439 kN | `FairTen` 2437 kN (0.42% / 0.08%); anchor 0.77% (L2) |
-| 1-hour (3600 s) dynamic, heave-only config | **10.3 s** (dt=0.1 s, 36000 steps, 0 non-convergent, ~2 iterations/step) | — | throughput at production step |
-| 1-hour dynamic, matched 2-component drive (L3-7) | **18.1–32 s** across repeated runs (full Newton) | OrcaFlex **14.5 s** | same drive and host |
-
-- **Finite-bending lazy-wave spans (L5-DPC)**: the 80, 200, and 800 m pinned-TDP
-  suspended spans are timed after spatial convergence, without grounded tail or
-  seabed contact. CableDyn uses 240, 480, and 960 Hermite elements at 0.05 s.
-  OrcaFlex uses independently checked segment lengths and the same step. MoorDyn-F
-  uses a fourfold-refined mesh and the largest step for which all reported
-  responses change by less than 0.01% on further halving.
-
-| Depth | CableDyn | OrcaFlex | Refined MoorDyn-F |
-|------:|---------:|---------:|------------------:|
-| 80 m | 1.55 s | 2.29 s | 249.07 s |
-| 200 m | 4.64 s | 4.56 s | 144.61 s |
-| 800 m | 7.37 s | 23.17 s | 243.08 s |
-
-Totals include initialisation and the same 60 s dynamic interval. The explicit MoorDyn-F
-step is set by its stability limit on the fourfold-refined bending mesh, so these times reflect
-the chosen resolution protocol rather than a general property of any code. Each value is the
-median of three runs after one warm-up on one Intel Core i9-13900K thread. Model
-sizes, timing ranges, memory, Newton work, and the OrcaFlex mesh sweep are in
+The measurements below were made on 2026-11-08 on one host (AMD Ryzen Threadripper PRO 7965WX,
+Windows 11 Pro) with one thread per code, as the median of three runs after one warm-up. They
+come from [`validation/scripts/performance_records.py`](validation/scripts/performance_records.py),
+which also checks each timed model against its reference response. CableDyn is timed with the
+Windows release driver (IFX, the shipped binary) and with a GNU Release build of `dev`. Their
+versions and hashes, the ranges and the timing definitions are in
 [`validation/performance`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/performance/README.md).
+The figures depend on each code's configuration and on this host; they are not rankings.
 
-- **Hermite solver timings** (development workstation; machine-specific, not
-  portable tests): the banded solves reproduce the dense reference to identical
-  digits and Newton counts, and the dynamic step performs no heap allocation. The
-  960-element Humboldt static solve takes 40.3 s and the 480-element solve 17.3 s;
-  the 240-element pinned-span static solve takes 471 Newton iterations direct and
-  477 with mesh sequencing; the installed-cable sequence takes 529 coarse and
-  20/60/14 polishing iterations; the 240-element 200 m dynamic case runs at
-  2.21 ms per step with 3.95 Newton iterations per step; and the 78-component
-  irregular-wave lazy-wave comparison (the article's sea) runs in 66.6 s.
-- **Coupled throughput**: at `dtM = 0.025 s` the one-line, 50-element aggregate
+- **Tension-only chain (L5-wc)**: the WD0050 grounded chain (`examples/wd0050_chain.dat`)
+  under the L2-2 A1 heave for 80 s. CableDyn at dt 0.05 s takes **0.200 s** (IFX) and
+  **0.277 s** (GNU); MoorDyn-C v2.7.2 through `moordyn_c_driver.cpp` (explicit RK2, dtM 1 ms)
+  takes **0.482 s**, of which 0.452 s is its stepping loop. Over the 20 s scored window the
+  fairlead tensions of the two codes differ by 1.35% in mean and 1.71% in maximum. The
+  original external solver of this row was MoorDyn-C v2.6.1 through the same driver, whose deck
+  settings were not recorded.
+- **VolturnUS-S one-hour mooring (L5-V)**: the L3-7 drive (5 m / 90 s surge and 2 m / 12 s
+  heave of the fairlead) on one 850 m chain with 50 elements.
+
+| Case | CableDyn (IFX) | CableDyn (GNU) | OrcaFlex 11.6d | Note |
+|------|---------------:|---------------:|---------------:|------|
+| All-chain static IC, `FairTen` | 2437 kN | 2437 kN | 2427 kN | 0.42% from OrcaFlex, 0.08% from MoorDyn (2439 kN); anchor 0.77% (L2) |
+| 1-hour dynamic, dt 0.1 s | **4.44 s** (4.44–4.45) | **6.18 s** (6.16–6.19) | **19.72 s** (19.33–19.74) | 36,000 steps, 2.03 Newton iterations per step; OrcaFlex adds a 200 s build-up |
+
+  The timed CableDyn deck reproduces the L3-7 response: fairlead tension mean, standard
+  deviation, minimum and maximum within 0.27, 0.26, 0.50 and 0.43% of OrcaFlex.
+
+- **Finite-bending lazy-wave spans (L5-DPC)**: the 80, 200 and 800 m pinned-touchdown
+  suspended spans of the L3-6 protocol (3 m / 12 s hang-off heave, 60 s), without grounded tail
+  or seabed contact. CableDyn uses 240, 480 and 960 Hermite elements at 0.05 s; OrcaFlex uses
+  0.75 m segments (179, 350 and 1227) at the same step; MoorDyn-F uses its native meshes refined
+  fourfold (208, 224 and 232 segments) at the largest explicit step for which halving the step
+  moves every scored response by less than 0.01% (0.125 ms at 80 and 200 m, 0.5 ms at 800 m,
+  re-checked in this run: halving moved them by at most 0.0005%).
+
+| Depth | CableDyn (IFX) | CableDyn (GNU) | OrcaFlex | Refined MoorDyn-F |
+|------:|---------------:|---------------:|---------:|------------------:|
+| 80 m | 1.44 s | 2.06 s | 2.69 s | 326.6 s |
+| 200 m | 2.56 s | 3.40 s | 5.31 s | 191.9 s |
+| 800 m | 5.29 s | 7.59 s | 27.81 s | 320.7 s |
+
+Totals include initialisation and the dynamic interval. The timed CableDyn and refined
+MoorDyn-F models reproduce the OrcaFlex hang-off tension mean, minimum and maximum of the L3-6
+gate within 0.12% and 0.29%. The explicit MoorDyn-F step is set by its stability limit on the
+fourfold-refined bending mesh, so these times reflect the chosen resolution protocol rather than
+a general property of any code; the MoorDyn-F totals include its dynamic-relaxation
+initialisation. CableDyn takes 2.7–3.3 linear solves per step, and no step needs recovery
+subdivision.
+
+- **Cubic-Hermite solver work** (GNU Release build of `dev` on the same host; the iteration
+  counts are deterministic, the times are not): the 240-element pinned Humboldt span
+  (`hermite_sequenced`) takes 507 Newton iterations solved directly and 460 with mesh
+  sequencing (450 / 4 / 6 by level); the installed 800 m cable (`l3_lazywave_fullcable`) takes
+  524 iterations on its 89-element mesh and 20 / 60 / 14 to polish at 178 / 356 / 712
+  elements; the mesh-sequenced 480- and 960-element static solves of `l3_lazywave_refinement`
+  take 81 and 4 iterations and 0.1 s or less each; and the irregular-sea comparison in the
+  article's 78-component sea (`test_l3_lazywave_irregular OUT TABLE.dat`, the table written by
+  `orcaflex_lazywave_irregular_reference.py --orcaflex-jonswap`) runs in 10.9 s. The per-step
+  advance of the OpenFAST aggregate route, Hermite cables included, makes no heap allocation
+  (`step_allocations`).
+- **Coupled throughput** (measured in September 2026 with the code of that date on an Intel Core
+  i9-13900K; not re-measured for the records above): at `dtM = 0.025 s` the one-line, 50-element aggregate
   advances at 0.540 ms per step and the three-line spread at 0.590 ms per step;
   these are mooring-module figures only. With
   `OpenFAST DT = CableDyn dtM = OpenFAST DT_Out = 0.025 s`, uninterrupted 4200 s
@@ -556,7 +575,7 @@ sizes, timing ranges, memory, Newton work, and the OrcaFlex mesh sweep are in
   and **1399.44 s** with an added 55-element suspended finite-EI power cable (a
   variant of the mixed example without touchdown), using default full-Newton
   settings (no `dynamic_solver` override, no modified Newton, no adaptive
-  remeshing), on the development workstation. Each binary output has
+  remeshing). Each binary output has
   exactly 144,001 rows from 600 s to 4200 s with 47 channels. The OpenFAST runtime
   Jacobian is the fixed-state direct-feedthrough derivative; formal linearisation
   differentiates the line dynamics with the line states registered.
