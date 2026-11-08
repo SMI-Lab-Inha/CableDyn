@@ -18,6 +18,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- Static balance of `Connect`/`Free` points, bodies and rods: a step that raised the force
+  residual was accepted when the Newton step from it was half the current one. Near the
+  slack/taut kink of a line the Newton step can grow again, and the steps then cycled (a
+  Connect point between a near-vertical heavy chain and two wires on the seabed: 4e4 N to 6e6 N
+  and back, every four steps) until the solve failed from every seed, although an independent
+  catenary solution gives the balance. Such a step is now accepted only when the new Newton step
+  is also half the shortest of the solve so far.
 
 ## [0.4.1] - 2026-11-08
 

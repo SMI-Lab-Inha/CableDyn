@@ -2676,7 +2676,9 @@ does not converge. At a slack line whose condensed stiffness vanishes, the itera
 a central-difference Jacobian of the full residual.
 
 A step is accepted when it lowers the residual, or when the Newton step from the trial point is
-at most half the current one. The second test lets an object swing along a curved valley: a
+at most half the current one and half the shortest Newton step of the solve so far (a Newton step
+that grows again near a slack/taut kink of a line must not reset that measure, or the steps can
+cycle). The second test lets an object swing along a curved valley: a
 buoy on a stiff taut line moves on a sphere about the anchor, and every straight step
 overstretches the line by its sagitta, so the force residual alone would reject any step
 longer than a few centimetres. After each accepted step the rotation unknowns are folded into
