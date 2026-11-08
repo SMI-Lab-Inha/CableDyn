@@ -168,7 +168,7 @@ The CableDyn part of the console (other modules' lines trimmed):
 
 .. code-block:: text
 
-    Running CableDyn (v0.4.0, 2026-11-04).
+    Running CableDyn (v0.4.1, 2026-11-08).
       CableDyn: geometrically exact finite-element statics and dynamics of mooring lines and dynamic power cables.
       ...
       CableDyn time step dtM = 2.50000E-02 s (1 x glue DT; deck dtM)

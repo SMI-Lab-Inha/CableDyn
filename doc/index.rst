@@ -14,7 +14,7 @@ with MoorDyn-C, MoorDyn-F, and OrcaFlex on common reference cases.
 .. admonition:: Release status
    :class: note
 
-   CableDyn ``v0.4.0`` is the current stable release. It is on PyPI with wheels that carry the
+   CableDyn ``v0.4.1`` is the current stable release. It is on PyPI with wheels that carry the
    solver (``pip install cabledyn``), runs 13-33 % faster in the release build, extrapolates the
    coupled loads between OpenFAST solves at a ``dtM`` above ``DT``, restarts bit for bit at any
    ``dtM``, and recovers node tension through touchdown on coarse meshes.
@@ -53,8 +53,8 @@ Download to first result in five minutes
 ----------------------------------------
 
 #. Download ``CableDyn_driver.exe``, ``SHA256SUMS.txt``, and **Source code (zip)** (for the
-   ``examples`` folder) from the `v0.4.0 release
-   <https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.0>`_ and verify the checksum —
+   ``examples`` folder) from the `v0.4.1 release
+   <https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.1>`_ and verify the checksum —
    :doc:`installation`. No installer and no runtime DLLs.
 #. Put ``CableDyn_driver.exe`` in a working folder, unzip the source archive, and copy its
    ``examples`` folder next to the executable.

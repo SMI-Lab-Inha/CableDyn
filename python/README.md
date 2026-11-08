@@ -25,7 +25,7 @@ Fortran compiler and LAPACK.
 
 The pure Python wheel attached to each
 [GitHub release](https://github.com/SMI-Lab-Inha/CableDyn/releases/latest)
-(`cabledyn-0.4.0-py3-none-any.whl`) carries no solver. `CableDynDriver` finds the
+(`cabledyn-0.4.1-py3-none-any.whl`) carries no solver. `CableDynDriver` finds the
 driver from an explicit path, then the `CABLEDYN_DRIVER` environment variable,
 then the driver inside the package, then `PATH`; the in-process `CableDyn` class
 uses the library inside the package, or one named by `CABLEDYN_LIBRARY` or found in

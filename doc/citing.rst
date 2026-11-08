@@ -53,7 +53,7 @@ software]. https://github.com/SMI-Lab-Inha/CableDyn
    }
 
 When results depend on a particular release, quote the version reported in the solver banner
-(``CableDyn v0.4.0``) together with the options recorded for the run.
+(``CableDyn v0.4.1``) together with the options recorded for the run.
 
 Relation to the journal article
 -------------------------------
