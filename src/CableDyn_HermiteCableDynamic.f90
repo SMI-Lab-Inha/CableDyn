@@ -179,6 +179,11 @@ MODULE CableDyn_HermiteCableDynamic
   ! Half-bandwidth of the nodal-twist tangent in 7-DOF-per-node order ([r, m, phi] per node).
   INTEGER, PARAMETER :: KB7 = 13
   INTEGER, PARAMETER :: LDAB_D = 2*KL_D + KU_D + 1
+  ! First row of the stored band. Rows 1..KL_D are the factorization's fill-in space: every
+  ! band array is allocated with them zero and only an LU factor (ws_Keffb) ever writes them,
+  ! so the sweeps over the operators (zeroing, sums, the effective-tangent combination, the
+  ! added-mass check) skip them.
+  INTEGER, PARAMETER :: BAND_TOP_D = KL_D + 1
 
   ! Profiling is OFF by default: SYSTEM_CLOCK in the step/residual hot path is measurable
   ! overhead in a production run. CD_HermiteCable_Dyn_Reset_Profile ARMS it (a benchmark
@@ -832,6 +837,9 @@ CONTAINS
     ALLOCATE (model%ws_Kb(LDAB_D, ndof), model%ws_Kvb(LDAB_D, ndof), &
               model%ws_Keffb(LDAB_D, ndof), model%ws_Msumb(LDAB_D, ndof), &
               model%ws_Mamb(LDAB_D, ndof))
+    ! zero fill-in rows (BAND_TOP_D), which the band sweeps then leave untouched
+    model%ws_Kb = CD_ZERO; model%ws_Kvb = CD_ZERO; model%ws_Keffb = CD_ZERO
+    model%ws_Msumb = CD_ZERO; model%ws_Mamb = CD_ZERO
     ALLOCATE (model%ws_ipiv(ndof))
     ALLOCATE (model%ws_elem_f(12, ne), model%ws_elem_K(12, 12, ne), model%ws_elem_Kdrag(12, 12, ne), &
               model%ws_elem_Kv(12, 12, ne), model%ws_elem_Kwave(12, 12, ne), model%ws_elem_Kheld(12, 12, ne), &
@@ -3879,8 +3887,7 @@ CONTAINS
     ! Total mass for this step: structural + added mass FROZEN at the beginning-of-step
     ! configuration q_n (constant within the Newton -> no dM/dq term; O(dt) freeze error consistent
     ! with gen-alpha accuracy, exact at any at-rest fixed point). All band arrays share the
-    ! DGBSV layout, so the sum is a plain array operation.
-    CALL band_copy(model%Mgb, model%ws_Msumb)
+    ! DGBSV layout, so the sum is a plain array operation (one sweep, after the added mass).
     IF (model%has_am) THEN
       IF (prof_enabled) CALL SYSTEM_CLOCK(pc0)
       CALL assemble_added_mass(model, model%ws_qn, es, em2)
@@ -3892,7 +3899,9 @@ CONTAINS
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2); RETURN
       END IF
-      CALL band_add(model%ws_Mamb, model%ws_Msumb)
+      CALL band_sum(model%Mgb, model%ws_Mamb, model%ws_Msumb)
+    ELSE
+      CALL band_copy(model%Mgb, model%ws_Msumb)
     END IF
     ! A fixed DOF that is NOT prescribed this step is a boundary HELD AT REST: zero its velocity and
     ! acceleration so the predictor keeps it at q_n and the commit leaves v = a = 0. Without this a
@@ -5038,8 +5047,12 @@ CONTAINS
       !! contains the c_a*d and gamma/(beta*dt)*d contributions. Add the terms
       !! from d_dot and d_ddot as a rank-one update whose right vector is d;
       !! after the rigid basis transform this affects only the free axial column.
-      INTEGER :: iend, base, row, j
-      REAL(wp) :: rate_coefficient, extra_acceleration(3)
+      !! The left vector (1 - am) M a_x + (1 - af) Kv d_dot has non-zeros only in the band rows
+      !! of the three tangent columns, so it is formed on those rows alone: the products of the
+      !! three column entries, summed in column order as the band matvec would sum them.
+      INTEGER :: iend, base, row, j, lo, hi
+      REAL(wp) :: rate_coefficient, extra_acceleration(3), mass_part, damping_part
+      REAL(wp) :: transport(KL_D + KU_D + 3)
       rate_coefficient = gm/(bt*dt)
       DO iend = 1, 2
         IF (model%endconn_mode(iend) /= CD_ENDCONN_RIGID) CYCLE
@@ -5050,19 +5063,23 @@ CONTAINS
         END IF
         extra_acceleration = 2.0_wp*rate_coefficient*step_endconn_rate(:, iend) + &
                              step_endconn_acceleration(:, iend)
-        model%ws_dq = CD_ZERO
-        model%ws_dq(base + 1:base + 3) = extra_acceleration
-        CALL band_matvec(model%ws_Msumb, model%ws_dq, model%ws_inert)
-        model%ws_inert = (CD_ONE - am)*model%ws_inert
-        model%ws_dq = CD_ZERO
-        model%ws_dq(base + 1:base + 3) = step_endconn_rate(:, iend)
-        CALL band_matvec(model%ws_Kvb, model%ws_dq, model%ws_vk)
-        model%ws_inert = model%ws_inert + (CD_ONE - af)*model%ws_vk
+        lo = MAX(1, base + 1 - KU_D)
+        hi = MIN(model%ndof, base + 3 + KL_D)
+        DO row = lo, hi
+          mass_part = CD_ZERO
+          damping_part = CD_ZERO
+          DO j = 1, 3
+            mass_part = mass_part + dynamic_band_entry(model, model%ws_Msumb, row, base + j)*extra_acceleration(j)
+            damping_part = damping_part + &
+                           dynamic_band_entry(model, model%ws_Kvb, row, base + j)*step_endconn_rate(j, iend)
+          END DO
+          transport(row - lo + 1) = (CD_ONE - am)*mass_part + (CD_ONE - af)*damping_part
+        END DO
         DO j = 1, 3
           DO row = MAX(1, base + j - KU_D), MIN(model%ndof, base + j + KL_D)
             CALL set_dynamic_band_entry(model, model%ws_Keffb, row, base + j, &
                                         dynamic_band_entry(model, model%ws_Keffb, row, base + j) + &
-                                        model%ws_inert(row)*step_endconn_target(j, iend))
+                                        transport(row - lo + 1)*step_endconn_target(j, iend))
           END DO
         END DO
       END DO
@@ -6334,19 +6351,21 @@ CONTAINS
     freac = -(model%ws_inert(gi + 1:gi + 3) + model%ws_R(gi + 1:gi + 3))
   END SUBROUTINE CD_HermiteCable_Dyn_Reaction
 
-  SUBROUTINE node_reaction(model, node, freac, ErrStat, ErrMsg)
+  SUBROUTINE node_reaction(model, node, freac, ErrStat, ErrMsg, tangent_rows)
     !! CD_HermiteCable_Dyn_Reaction from the node's rows only: the residual of the one or two
     !! elements that reach the node and of its nodal terms (assemble_residual node_only), and
     !! the node's rows of the total mass times the acceleration, with the added mass of those
     !! elements. Every row term is formed and summed in the order of the full assembly and of
     !! band_matvec, so the reaction is bit-identical, at the cost of one or two elements
     !! instead of the line, and the model's scratch is not touched. Not for a line with
-    !! torsion, which couples every element.
+    !! torsion, which couples every element. tangent_rows = .TRUE. returns the node's three
+    !! material-tangent rows instead of its translational ones (a rigid end connection).
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: node
     REAL(wp), INTENT(OUT) :: freac(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: tangent_rows
     REAL(wp) :: Rn(SIZE(model%ws_R)), Me(12, 12), mam(3, -KL_D:KU_D), inert(3), m
     INTEGER :: e, a, b, k, gi, gj, j, n, es
     CHARACTER(1024) :: em
@@ -6357,6 +6376,9 @@ CONTAINS
       ErrStat = es; ErrMsg = TRIM(em); RETURN
     END IF
     gi = 6*(node - 1)
+    IF (PRESENT(tangent_rows)) THEN
+      IF (tangent_rows) gi = gi + 3
+    END IF
     n = SIZE(model%a)
     ! the node's rows of the added mass, mam(k, j - (gi + k)) = Mamb(gi + k, j), summed element
     ! by element from zero as assemble_added_mass scatters them
@@ -7763,25 +7785,36 @@ CONTAINS
       ! G0 is the unconstrained dynamic residual. The constraint contribution
       ! required in the residual is -G0 in the transverse tangent plane; under
       ! virtual work, m cross that contribution is the line's moment on the
-      ! supporting body, matching the finite-spring convention.
-      CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., es, em)
-      IF (es /= CD_HCDYN_OK) THEN
-        ErrStat = es
-        ErrMsg = 'CD_HermiteCable_Dyn_EndConnection_Moment: '//TRIM(em)
-        RETURN
-      END IF
-      model%ws_Msumb = model%Mgb
-      IF (model%has_am) THEN
-        CALL assemble_added_mass(model, model%q, es, em)
+      ! supporting body, matching the finite-spring convention. Only the end tangent's three
+      ! rows are needed: without torsion (which couples every element) they come from the
+      ! elements at the node, bit-identical to the full assembly (node_reaction).
+      IF (model%torsion%active) THEN
+        CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., es, em)
         IF (es /= CD_HCDYN_OK) THEN
           ErrStat = es
           ErrMsg = 'CD_HermiteCable_Dyn_EndConnection_Moment: '//TRIM(em)
           RETURN
         END IF
-        model%ws_Msumb = model%ws_Msumb + model%ws_Mamb
+        model%ws_Msumb = model%Mgb
+        IF (model%has_am) THEN
+          CALL assemble_added_mass(model, model%q, es, em)
+          IF (es /= CD_HCDYN_OK) THEN
+            ErrStat = es
+            ErrMsg = 'CD_HermiteCable_Dyn_EndConnection_Moment: '//TRIM(em)
+            RETURN
+          END IF
+          model%ws_Msumb = model%ws_Msumb + model%ws_Mamb
+        END IF
+        CALL band_matvec(model%ws_Msumb, model%a, model%ws_inert)
+        f_ec = -(model%ws_inert(base + 1:base + 3) + model%ws_R(base + 1:base + 3))
+      ELSE
+        CALL node_reaction(model, node, f_ec, es, em, tangent_rows=.TRUE.)
+        IF (es /= CD_HCDYN_OK) THEN
+          ErrStat = es
+          ErrMsg = 'CD_HermiteCable_Dyn_EndConnection_Moment: '//TRIM(em)
+          RETURN
+        END IF
       END IF
-      CALL band_matvec(model%ws_Msumb, model%a, model%ws_inert)
-      f_ec = -(model%ws_inert(base + 1:base + 3) + model%ws_R(base + 1:base + 3))
       direction = model%endconn_d0(:, iend)
       f_ec = f_ec - DOT_PRODUCT(f_ec, direction)*direction
     END IF
@@ -8493,7 +8526,8 @@ CONTAINS
     IF (prof_enabled) CALL SYSTEM_CLOCK(asm_t)
     IF (want_residual) R = CD_ZERO
     IF (want_tangent) THEN
-      Kb = CD_ZERO; Kvb = CD_ZERO
+      ! the stored band only: the fill-in rows above it are never written (BAND_TOP_D)
+      Kb(BAND_TOP_D:, :) = CD_ZERO; Kvb(BAND_TOP_D:, :) = CD_ZERO
     END IF
     CALL asm_mark(HC_ASM_ZERO, asm_t)
 
@@ -10231,7 +10265,10 @@ CONTAINS
     qe(7:12) = q_cfg(6*e + 1:6*(e + 1))
     ve(1:6) = v_cfg(6*(e - 1) + 1:6*e)
     ve(7:12) = v_cfg(6*e + 1:6*(e + 1))
-    Kdrag = CD_ZERO; Kvel = CD_ZERO; Kwave = CD_ZERO; Kheld = CD_ZERO
+    ! Kdrag and Kvel accumulate their contributors from zero. Kwave and Kheld are each set
+    ! whole by their one contributor below and read (scattered) only when it is configured,
+    ! so they are not cleared.
+    Kdrag = CD_ZERO; Kvel = CD_ZERO
 
     CALL CD_HermiteCable_Element(qe, model%l0(e), model%EA(e), model%EI(e), energy, force, Kstruct, es, em, &
                                  symmetric_half=.TRUE., tangent_only=.TRUE., &
@@ -10421,8 +10458,8 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: l0_dot
 
     REAL(wp) :: gp(6), gw(6), H(4), dH(4)
-    REAL(wp) :: r_xi(3), v_xi(3), tangent(3), pperp(3), projector(3, 3)
-    REAL(wp) :: speed, strain_rate, scale_q, scale_v, rate_ratio
+    REAL(wp) :: r_xi(3), v_xi(3), tangent(3), pperp(3), projector(3, 3), kq3(3, 3)
+    REAL(wp) :: speed, strain_rate, scale_q, scale_v, scale_r, rate_ratio
     INTEGER :: order, ig, s, sp, c, cp, ia, ib
 
     ErrStat = CD_HCDYN_OK
@@ -10478,25 +10515,34 @@ CONTAINS
         END DO
       END DO
       pperp = MATMUL(projector, v_xi)
+      ! the 3 x 3 factor of the position Jacobian, formed once per Gauss point
+      DO cp = 1, 3
+        DO c = 1, 3
+          kq3(c, cp) = strain_rate*projector(c, cp) + tangent(c)*pperp(cp)/l0
+        END DO
+      END DO
 
       DO s = 1, 4
         DO c = 1, 3
           ia = 3*(s - 1) + c
           fdamp(ia) = fdamp(ia) + gw(ig)*BA*strain_rate*dH(s)*tangent(c)
-          DO sp = 1, 4
-            DO cp = 1, 3
-              ib = 3*(sp - 1) + cp
-              IF (PRESENT(Kv)) THEN
-                scale_v = gw(ig)*BA*dH(s)*dH(sp)/l0
-                Kv(ia, ib) = Kv(ia, ib) + scale_v*tangent(c)*tangent(cp)
-              END IF
+        END DO
+      END DO
+      DO sp = 1, 4
+        DO s = 1, 4
+          scale_v = gw(ig)*BA*dH(s)*dH(sp)/l0
+          scale_q = gw(ig)*BA*dH(s)*dH(sp)/speed
+          scale_r = gw(ig)*BA*dH(s)*dH(sp)*(rate_ratio/l0)
+          DO cp = 1, 3
+            ib = 3*(sp - 1) + cp
+            DO c = 1, 3
+              ia = 3*(s - 1) + c
+              IF (PRESENT(Kv)) Kv(ia, ib) = Kv(ia, ib) + scale_v*tangent(c)*tangent(cp)
               IF (PRESENT(Kq)) THEN
-                scale_q = gw(ig)*BA*dH(s)*dH(sp)/speed
-                Kq(ia, ib) = Kq(ia, ib) + scale_q*(strain_rate*projector(c, cp) + &
-                                                   tangent(c)*pperp(cp)/l0)
+                Kq(ia, ib) = Kq(ia, ib) + scale_q*kq3(c, cp)
                 ! the length-rate term depends on the end positions (sp = 1, 3) only
                 IF (PRESENT(l0_dot) .AND. MOD(sp, 2) == 1) &
-                  Kq(ia, ib) = Kq(ia, ib) - gw(ig)*BA*dH(s)*dH(sp)*(rate_ratio/l0)*tangent(c)*tangent(cp)
+                  Kq(ia, ib) = Kq(ia, ib) - scale_r*tangent(c)*tangent(cp)
               END IF
             END DO
           END DO
@@ -10575,7 +10621,7 @@ CONTAINS
     REAL(wp), PARAMETER :: G3 = 0.7745966692414834_wp   ! sqrt(3/5)
     REAL(wp) :: gp(NGP), gw(NGP), H(4), dH(4)
     REAL(wp) :: rpos(3), vvel(3), rp(3), speed, tangent(3), urel(3), fpl(3), Jrel(3, 3), Jtan(3, 3)
-    REAL(wp) :: scale, eta_w, uw(3), aw(3)
+    REAL(wp) :: jq3(3, 3), scale, eta_w, uw(3), aw(3)
     LOGICAL :: has_wv, has_shared, has_trio, has_cmp, any_wv_arg, want_jac
     INTEGER :: g, s, c, sp, cp, a, b, es
     ! the message of a per-Gauss-point CableDyn_Hydro kinematics or Morison call (at most 154
@@ -10680,12 +10726,15 @@ CONTAINS
       IF (has_wv) urel = urel + uw
       ! Pass the raw dr/dxi as the tangent vector: the primitive normalises it and returns Jtan =
       ! d f_perlen / d(dr/dxi), so d f_perlen/d qe folds in through d(dr/dxi)/d qe = dH directly.
+      ! rho, diam, cdn and cdt were validated above, before the Gauss loop.
       IF (want_jac) THEN
-        CALL CD_Morison_Drag_Per_Length_Jac(urel, rp, rho, diam, cdn, cdt, fpl, Jrel, Jtan, es, em2)
+        CALL CD_Morison_Drag_Per_Length_Jac(urel, rp, rho, diam, cdn, cdt, fpl, Jrel, Jtan, es, em2, &
+                                            scalars_validated=.TRUE.)
       ELSE
         ! same primitive without the Jacobian pair: the force statements are identical, so
         ! the residual-only trial force is bit-for-bit the with-Jacobian force.
-        CALL CD_Morison_Drag_Per_Length_Jac(urel, rp, rho, diam, cdn, cdt, fpl, ErrStat=es, ErrMsg=em2)
+        CALL CD_Morison_Drag_Per_Length_Jac(urel, rp, rho, diam, cdn, cdt, fpl, ErrStat=es, ErrMsg=em2, &
+                                            scalars_validated=.TRUE.)
       END IF
       IF (es /= CD_HYDRO_OK) THEN
         ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Drag_Element: '//TRIM(em2); RETURN
@@ -10698,6 +10747,15 @@ CONTAINS
         END DO
       END DO
       IF (.NOT. want_jac) CYCLE
+      ! position: d[speed * f_perlen_c]/d qe(b) with d(dr/dxi)/d qe = dH(sp) --
+      !   speed * Jtan(c,cp) * dH(sp)  (force direction/tangent)
+      ! + f_perlen_c * d(speed)/d qe(b),  d(speed)/d qe(b) = tangent(cp) dH(sp);
+      ! its 3 x 3 factor jq3 is formed once per Gauss point.
+      DO cp = 1, 3
+        DO c = 1, 3
+          jq3(c, cp) = speed*Jtan(c, cp) + fpl(c)*tangent(cp)
+        END DO
+      END DO
       DO s = 1, 4
         DO c = 1, 3
           a = 3*(s - 1) + c
@@ -10706,10 +10764,7 @@ CONTAINS
               b = 3*(sp - 1) + cp
               ! velocity: d urel/d ve(b) = -H(sp), scaled by the deformed length measure
               djv(a, b) = djv(a, b) - scale*H(s)*H(sp)*Jrel(c, cp)
-              ! position: d[speed * f_perlen_c]/d qe(b) with d(dr/dxi)/d qe = dH(sp) --
-              !   speed * Jtan(c,cp) * dH(sp)  (force direction/tangent)
-              ! + f_perlen_c * d(speed)/d qe(b),  d(speed)/d qe(b) = tangent(cp) dH(sp)
-              djq(a, b) = djq(a, b) + gw(g)*H(s)*dH(sp)*(speed*Jtan(c, cp) + fpl(c)*tangent(cp))
+              djq(a, b) = djq(a, b) + gw(g)*H(s)*dH(sp)*jq3(c, cp)
             END DO
           END DO
         END DO
@@ -10923,7 +10978,7 @@ CONTAINS
     REAL(wp), PARAMETER :: PI_L = 3.14159265358979323846_wp
     REAL(wp) :: gp(NGP), gw(NGP), H(4), dH(4)
     REAL(wp) :: rpos(3), rp(3), speed, tangent(3), eta_w, uw(3), aw(3), area, alpha
-    REAL(wp) :: fpl(3), Jtan(3, 3), proj(3, 3), projk(3), dalpha
+    REAL(wp) :: fpl(3), Jtan(3, 3), proj(3, 3), projk(3), dalpha, jq3(3, 3)
     LOGICAL :: has_trio, has_cmp, has_held, want_jac
     INTEGER :: g, s, c, sp, cp, a, b, k, es
     ! the message of a per-Gauss-point CableDyn_Hydro kinematics call (at most 154 characters): a
@@ -11066,14 +11121,20 @@ CONTAINS
         END DO
       END DO
       IF (.NOT. want_jac) CYCLE
+      ! d[speed * fpl_c]/d qe(b): the tangent chain plus the length-measure derivative, with
+      ! its 3 x 3 factor jq3 formed once per Gauss point.
+      DO cp = 1, 3
+        DO c = 1, 3
+          jq3(c, cp) = speed*Jtan(c, cp) + fpl(c)*tangent(cp)
+        END DO
+      END DO
       DO s = 1, 4
         DO c = 1, 3
           a = 3*(s - 1) + c
           DO sp = 1, 4
             DO cp = 1, 3
               b = 3*(sp - 1) + cp
-              ! d[speed * fpl_c]/d qe(b): the tangent chain plus the length-measure derivative.
-              fjq(a, b) = fjq(a, b) + gw(g)*H(s)*dH(sp)*(speed*Jtan(c, cp) + fpl(c)*tangent(cp))
+              fjq(a, b) = fjq(a, b) + gw(g)*H(s)*dH(sp)*jq3(c, cp)
             END DO
           END DO
         END DO
@@ -11104,7 +11165,8 @@ CONTAINS
     REAL(wp) :: Me(12, 12)
     CHARACTER(1024) :: em2
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
-    model%ws_Mamb = CD_ZERO
+    ! the stored band only: the fill-in rows above it stay zero (BAND_TOP_D)
+    model%ws_Mamb(BAND_TOP_D:, :) = CD_ZERO
     IF (.NOT. model%has_am) RETURN
     DO e = 1, model%ne
       CALL added_mass_element(model, q_cfg, e, Me, es, em2)
@@ -11116,7 +11178,7 @@ CONTAINS
     ! Every element matrix can be finite while two adjacent contributions
     ! overflow at their shared-node band entry.  Validate the assembled global
     ! operator before it is added to the structural mass or factorised.
-    IF (.NOT. CD_All_Finite(model%ws_Mamb)) THEN
+    IF (.NOT. CD_All_Finite(model%ws_Mamb(BAND_TOP_D:, :))) THEN
       ErrStat = CD_HCDYN_NOCONVERGE
       ErrMsg = 'assemble_added_mass: non-finite global added-mass matrix'
     END IF
@@ -11272,25 +11334,44 @@ CONTAINS
     out = x + b*y + c*z
   END SUBROUTINE vector_sum3
 
+  ! The band sweeps below take CONTIGUOUS dummies, which lets the compiler vectorise them.
+  ! Every caller passes whole allocatable model arrays, so no copy is ever made; an actual
+  ! the compiler cannot prove contiguous (a pointer, an assumed-shape dummy) would be
+  ! packed into a temporary at each call. They sweep the stored band rows only: the fill-in
+  ! rows of their operands are zero (BAND_TOP_D).
+
   PURE SUBROUTINE band_copy(x, y)
     !! y = x for band storage (distinct arrays).
-    REAL(wp), INTENT(IN) :: x(:, :)
-    REAL(wp), INTENT(INOUT) :: y(:, :)
-    y = x
+    REAL(wp), CONTIGUOUS, INTENT(IN) :: x(:, :)
+    REAL(wp), CONTIGUOUS, INTENT(INOUT) :: y(:, :)
+    INTEGER :: j
+    DO j = 1, SIZE(x, 2)
+      y(BAND_TOP_D:, j) = x(BAND_TOP_D:, j)
+    END DO
   END SUBROUTINE band_copy
 
-  PURE SUBROUTINE band_add(x, y)
-    !! y = y + x for band storage (distinct arrays).
-    REAL(wp), INTENT(IN) :: x(:, :)
-    REAL(wp), INTENT(INOUT) :: y(:, :)
-    y = y + x
-  END SUBROUTINE band_add
+  PURE SUBROUTINE band_sum(x, y, out)
+    !! out = x + y for band storage in one sweep (out distinct from x and y).
+    REAL(wp), CONTIGUOUS, INTENT(IN) :: x(:, :), y(:, :)
+    REAL(wp), CONTIGUOUS, INTENT(INOUT) :: out(:, :)
+    INTEGER :: j
+    DO j = 1, SIZE(x, 2)
+      out(BAND_TOP_D:, j) = x(BAND_TOP_D:, j) + y(BAND_TOP_D:, j)
+    END DO
+  END SUBROUTINE band_sum
 
   PURE SUBROUTINE band_combine(a, x, b, y, c, z, out)
-    !! out = a*x + b*y + c*z for band storage (out distinct from x, y, z).
-    REAL(wp), INTENT(IN) :: a, b, c, x(:, :), y(:, :), z(:, :)
-    REAL(wp), INTENT(INOUT) :: out(:, :)
-    out = a*x + b*y + c*z
+    !! out = a*x + b*y + c*z for band storage (out distinct from x, y, z). The fill-in rows of
+    !! out, which a previous factorization overwrote, are reset to the zero a*0 + b*0 + c*0
+    !! of the operands' fill-in rows.
+    REAL(wp), INTENT(IN) :: a, b, c
+    REAL(wp), CONTIGUOUS, INTENT(IN) :: x(:, :), y(:, :), z(:, :)
+    REAL(wp), CONTIGUOUS, INTENT(INOUT) :: out(:, :)
+    INTEGER :: j
+    DO j = 1, SIZE(x, 2)
+      out(1:BAND_TOP_D - 1, j) = CD_ZERO
+      out(BAND_TOP_D:, j) = a*x(BAND_TOP_D:, j) + b*y(BAND_TOP_D:, j) + c*z(BAND_TOP_D:, j)
+    END DO
   END SUBROUTINE band_combine
 
   SUBROUTINE transform_rigid_band(model, bases, matrix)
@@ -11485,23 +11566,25 @@ CONTAINS
     !! Scatter a 12x12 element matrix into LAPACK general-band storage for element e
     !! (entry (gi, gj) at abg(KL_D + KU_D + 1 + gi - gj, gj); the chain connectivity
     !! keeps |gi - gj| <= 11 = KU_D, so every entry is in band by construction).
+    !! The element's DOFs are the 12 consecutive global DOFs from 6(e - 1) + 1 (elem_gdof), so
+    !! column b of Ke lands in one contiguous run of band column 6(e - 1) + b.
     REAL(wp), INTENT(INOUT) :: abg(:, :)
     REAL(wp), INTENT(IN) :: Ke(12, 12)
     INTEGER, INTENT(IN) :: e
-    INTEGER :: a, b, gi, gj
-    DO a = 1, 12
-      gi = elem_gdof(e, a)
-      DO b = 1, 12
-        gj = elem_gdof(e, b)
-        abg(KL_D + KU_D + 1 + gi - gj, gj) = abg(KL_D + KU_D + 1 + gi - gj, gj) + Ke(a, b)
+    INTEGER :: a, b, gj, row0
+    DO b = 1, 12
+      gj = 6*(e - 1) + b
+      row0 = KL_D + KU_D + 1 - b
+      DO a = 1, 12
+        abg(row0 + a, gj) = abg(row0 + a, gj) + Ke(a, b)
       END DO
     END DO
   END SUBROUTINE scatter12_band
 
   PURE SUBROUTINE band_matvec(abg, x, y)
     !! y = A x for A in the module's LAPACK general-band layout.
-    REAL(wp), INTENT(IN) :: abg(:, :), x(:)
-    REAL(wp), INTENT(OUT) :: y(:)
+    REAL(wp), CONTIGUOUS, INTENT(IN) :: abg(:, :), x(:)
+    REAL(wp), CONTIGUOUS, INTENT(OUT) :: y(:)
     INTEGER :: i, j, n
     n = SIZE(x)
     y = CD_ZERO
@@ -11516,7 +11599,7 @@ CONTAINS
     !! Apply Dirichlet conditions in band form: zero each fixed DOF's row and column
     !! within the band and set a unit diagonal, so the full-size banded solve returns
     !! exactly zero update at every fixed DOF (with a zero RHS slot).
-    REAL(wp), INTENT(INOUT) :: abg(:, :)
+    REAL(wp), CONTIGUOUS, INTENT(INOUT) :: abg(:, :)
     LOGICAL, INTENT(IN) :: freemask(:)
     INTEGER :: j, gi, gj, n
     n = SIZE(freemask)

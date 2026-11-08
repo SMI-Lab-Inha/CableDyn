@@ -1365,7 +1365,7 @@ CONTAINS
   END SUBROUTINE CD_Morison_Drag_Per_Length
 
   SUBROUTINE CD_Morison_Drag_Per_Length_Jac(rel_velocity, tangent, rho, diameter, cdn, cdt, &
-                                            force, jac_rel, jac_tan, ErrStat, ErrMsg)
+                                            force, jac_rel, jac_tan, ErrStat, ErrMsg, scalars_validated)
     !! Morison drag per unit length [N/m] and its analytical Jacobians with respect to the relative
     !! velocity (jac_rel = d force / d rel_velocity) and the (possibly non-unit) tangent VECTOR
     !! (jac_tan = d force / d tangent), for consistent distributed-load assembly over an element's
@@ -1378,14 +1378,20 @@ CONTAINS
     !! jac_rel/jac_tan are OPTIONAL as a pair: a residual-only caller omits both and pays for
     !! the force alone -- computed by the IDENTICAL statements either way, so the force is
     !! bit-for-bit the same with or without the Jacobians.
+    !!
+    !! scalars_validated (optional, default .FALSE.): .TRUE. when the caller has already
+    !! established finite rho > 0, diameter > 0, cdn >= 0 and cdt >= 0 (an element kernel
+    !! that checks them once per element, before its quadrature loop), which skips the same
+    !! checks at every quadrature point. The vector inputs and the results are always checked.
     REAL(wp), INTENT(IN) :: rel_velocity(3), tangent(3), rho, diameter, cdn, cdt
     REAL(wp), INTENT(OUT) :: force(3)
     REAL(wp), INTENT(OUT), OPTIONAL :: jac_rel(3, 3), jac_tan(3, 3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: scalars_validated
     REAL(wp) :: ek(3), col(3), tnorm, tu(3), munit(3, 3), proj(3, 3)
     INTEGER :: k
-    LOGICAL :: want_jac
+    LOGICAL :: want_jac, check_scalars
 
     want_jac = PRESENT(jac_rel)
     IF (want_jac .NEQV. PRESENT(jac_tan)) THEN
@@ -1398,11 +1404,15 @@ CONTAINS
       jac_rel = CD_ZERO; jac_tan = CD_ZERO
     END IF
     ErrStat = CD_HYDRO_OK; ErrMsg = ''
-    CALL validate_hydro_scalars(rho, diameter, ErrStat, ErrMsg)
-    IF (ErrStat /= CD_HYDRO_OK) RETURN
-    IF (.NOT. (CD_Is_Finite(cdn) .AND. CD_Is_Finite(cdt) .AND. cdn >= CD_ZERO .AND. cdt >= CD_ZERO)) THEN
-      CALL fail(ErrStat, ErrMsg, 'drag coefficients must be finite and non-negative')
-      RETURN
+    check_scalars = .TRUE.
+    IF (PRESENT(scalars_validated)) check_scalars = .NOT. scalars_validated
+    IF (check_scalars) THEN
+      CALL validate_hydro_scalars(rho, diameter, ErrStat, ErrMsg)
+      IF (ErrStat /= CD_HYDRO_OK) RETURN
+      IF (.NOT. (CD_Is_Finite(cdn) .AND. CD_Is_Finite(cdt) .AND. cdn >= CD_ZERO .AND. cdt >= CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'drag coefficients must be finite and non-negative')
+        RETURN
+      END IF
     END IF
     IF (.NOT. CD_All_Finite(rel_velocity) .OR. .NOT. CD_All_Finite(tangent)) THEN
       CALL fail(ErrStat, ErrMsg, 'relative velocity and tangent must be finite')

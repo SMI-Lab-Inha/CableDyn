@@ -18,6 +18,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+### Changed
+
+- The finite-EI dynamic step does less redundant work: band operators are swept over their stored
+  rows only, the step mass is summed in one pass, the rigid-end transport tangent and the rigid
+  end-connection moment are formed from the rows they need, and the element kernels form their
+  Gauss-point factors once. Results are bit-identical; the finite-EI example decks run 2-15 %
+  faster.
 
 ## [0.4.1] - 2026-11-08
 

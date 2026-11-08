@@ -54,12 +54,20 @@ CONTAINS
   END FUNCTION all_finite_1
 
   PURE LOGICAL FUNCTION all_finite_2(x) RESULT(finite)
+    ! The column test is inlined rather than called per column: the arrays checked most
+    ! often are 12 x 12 element matrices, where a call per column costs more than the test.
     REAL(wp), INTENT(IN) :: x(:, :)
-    INTEGER :: j
+    INTEGER :: i, j
+    INTEGER(I8) :: nonfinite, exponent
 
     finite = .TRUE.
     DO j = 1, SIZE(x, 2)
-      IF (.NOT. all_finite_1(x(:, j))) THEN
+      nonfinite = 0_I8
+      DO i = 1, SIZE(x, 1)
+        exponent = IAND(SHIFTR(TRANSFER(x(i, j), 0_I8), 52), EXPONENT_MASK)
+        nonfinite = IOR(nonfinite, MERGE(1_I8, 0_I8, exponent == EXPONENT_MASK))
+      END DO
+      IF (nonfinite /= 0_I8) THEN
         finite = .FALSE.
         RETURN
       END IF
@@ -68,14 +76,22 @@ CONTAINS
 
   PURE LOGICAL FUNCTION all_finite_3(x) RESULT(finite)
     REAL(wp), INTENT(IN) :: x(:, :, :)
-    INTEGER :: k
+    INTEGER :: i, j, k
+    INTEGER(I8) :: nonfinite, exponent
 
     finite = .TRUE.
     DO k = 1, SIZE(x, 3)
-      IF (.NOT. all_finite_2(x(:, :, k))) THEN
-        finite = .FALSE.
-        RETURN
-      END IF
+      DO j = 1, SIZE(x, 2)
+        nonfinite = 0_I8
+        DO i = 1, SIZE(x, 1)
+          exponent = IAND(SHIFTR(TRANSFER(x(i, j, k), 0_I8), 52), EXPONENT_MASK)
+          nonfinite = IOR(nonfinite, MERGE(1_I8, 0_I8, exponent == EXPONENT_MASK))
+        END DO
+        IF (nonfinite /= 0_I8) THEN
+          finite = .FALSE.
+          RETURN
+        END IF
+      END DO
     END DO
   END FUNCTION all_finite_3
 
