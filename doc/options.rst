@@ -506,6 +506,22 @@ Finite-EI cable controls
        same under both
      - both (finite-EI lines)
      - ``element OutputRecovery``
+   * - ``axialDampingRatio`` / ``axial_damping_ratio``
+     - mode
+     - ``segment``
+     - what a negative ``LINE TYPES`` ``BA`` is the damping ratio :math:`\zeta` of.
+       ``segment`` (MoorDyn's convention): of each segment,
+       :math:`BA = \zeta L_0 \sqrt{EA\,m}` per element, which damps the line's first axial mode
+       at about :math:`\zeta\pi/(2N)` on :math:`N` elements, so the axial damping depends on
+       the mesh; a dynamic run notes the ratio for each such line. ``mode1``: of the line's
+       first axial mode, both ends held, from its sections' lengths, ``EA`` and dry mass, so
+       the same on any mesh: :math:`BA = 2\zeta EA/\omega_1` on every element, a damping
+       proportional to the stiffness, under which the axial mode :math:`n` is damped at
+       :math:`\zeta\,\omega_n/\omega_1` (see :doc:`theory`). A positive ``BA`` is used as given
+       under both. Under ``mode1`` a line with a negative ``BA`` and a viscoelastic
+       (``ElasticMod`` 2 or 3) or Syrope section is refused by name
+     - both (``EI = 0`` and finite-EI lines)
+     - ``mode1 axialDampingRatio``
    * - ``axial_quadrature_order`` / ``axialquadratureorder`` / ``axial_quadrature``
      - integer, –
      - ``4``

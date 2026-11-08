@@ -47,7 +47,8 @@ MODULE CableDyn_DeckDriver
                            CD_Nodal_Seabed_Stiffness, CD_LINE_OK
   USE CableDyn_Catenary, ONLY: CD_Catenary_Seed, CD_CAT_OK, CD_CAT_NOSEED
   USE CableDyn_Linalg, ONLY: CD_Solve_Dense_As_Banded, CD_LINALG_OK
-  USE CableDyn_Damping, ONLY: CD_Resolve_Legacy_BA, CD_DAMP_OK
+  USE CableDyn_Damping, ONLY: CD_Resolve_Legacy_BA, CD_Resolve_Mode1_BA, CD_Axial_Mode1_Omega, &
+                              CD_Axial_Mode1_Damping, CD_DAMP_OK
   USE CableDyn_Syrope, ONLY: CD_SYROPE_WC_LINEAR, CD_SYROPE_WC_QUADRATIC, CD_SYROPE_WC_EXP, &
                              CD_SyropeType, CD_Syrope_Init, CD_Syrope_End, &
                              CD_Syrope_Static_Tension, CD_Syrope_Slow_For_Tension, CD_SYROPE_OK, &
@@ -788,6 +789,10 @@ MODULE CableDyn_DeckDriver
     ! effective tension, curvature and bend moment from nodal equilibrium; 'element' reports the
     ! element-mean axial force EA (|r'| - 1) and the exact one-sided curvature traces.
     LOGICAL  :: output_element_recovery = .FALSE.
+    ! A negative LINE TYPES BA (axialDampingRatio): 'segment' (default, MoorDyn's convention)
+    ! is the damping ratio of each segment, BA = zeta L0 sqrt(EA m) per element; 'mode1' is the
+    ! damping ratio of the line's first axial mode, BA = 2 zeta EA / omega_1 (CD_Resolve_Mode1_BA).
+    LOGICAL  :: axial_damping_mode1 = .FALSE.
     INTEGER  :: tensile_mode = CD_HCDYN_TENSILE_OFF
     REAL(wp) :: tensile_strain_tolerance = 2.0e-6_wp
     ! HOST-DRIVEN AMBIENT FLUID (not a deck keyword): set by CD_Init_Deck_Aggregate when
@@ -1182,6 +1187,10 @@ MODULE CableDyn_DeckDriver
     ! seabed_drift: a current moves the line along a seabed without friction (seabed_drift_note);
     ! friction_refused: the line's route rejects frictionMu (FOLD_FRICTION_NONE).
     LOGICAL :: seabed_drift = .FALSE., friction_refused = .FALSE.
+    ! axial_zeta1: the damping ratio of the first axial mode of the built line, with both ends
+    ! held, on its axial_elements elements (summary_axial_damping); -1 when not worked out.
+    REAL(wp) :: axial_zeta1 = -1.0_wp
+    INTEGER :: axial_elements = 0
   END TYPE CD_LineInitSummary
 
   TYPE :: CD_DeckAggregateType
@@ -1622,6 +1631,9 @@ CONTAINS
         CALL axial_period_note(summaries(i)%line_id, dt, sections, types, note)
         CALL capture_note(note)
       END IF
+      ! the caller marches the system, with the deck's step or its own
+      CALL axial_damping_note(summaries(i), sections, types, opts, note)
+      CALL capture_note(note)
     END DO
     IF (ANY(summaries%seabed_drift)) THEN
       CALL seabed_drift_note(PACK(summaries%line_id, summaries%seabed_drift), &
@@ -1847,6 +1859,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: curv(:), cdn(:), cdt(:), can(:), cat(:), catenary_pos(:)
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:)
     REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:)
+    REAL(wp) :: mode1_omega
     REAL(wp), ALLOCATABLE :: contact_kn(:), contact_cn(:)
     REAL(wp) :: anchor(3), fairlead(3), res, tvec(3), tnrm, contact_z, seed_z, seed_floor_a, seed_floor_b
     REAL(wp) :: dxh, dyh, hspan, frame_cs(2), horizontal_tension, grounded_length
@@ -3253,11 +3266,24 @@ CONTAINS
     CALL MOVE_ALLOC(w_am, w)
     CALL MOVE_ALLOC(fixed_am, fixed_dofs)
     ALLOCATE (ba(SIZE(l0)))
+    ! OPTION axialDampingRatio mode1: a negative BA is the damping ratio of the line's first
+    ! axial mode, set by the deck sections whatever the mesh
+    mode1_omega = CD_ZERO
+    IF (opts%axial_damping_mode1 .AND. ANY(ba_raw < CD_ZERO)) THEN
+      CALL line_mode1_omega(ln%id, sections, types, mode1_omega, es, em)
+      IF (es /= CD_DECKDRV_OK) THEN
+        CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
+      END IF
+    END IF
     DO i = 1, SIZE(l0)
       ! Resolve negative damping-ratio inputs only after adaptive remeshing because
       ! BA = zeta*l0*sqrt(EA*mass_per_length) is defined for the final element length.
       ! A direct positive BA remains a mesh-independent constitutive coefficient.
-      CALL CD_Resolve_Legacy_BA(ba_raw(i), l0(i), ea(i), rho_a(i), ba(i), es, em)
+      IF (opts%axial_damping_mode1) THEN
+        CALL CD_Resolve_Mode1_BA(ba_raw(i), ea(i), mode1_omega, ba(i), es, em)
+      ELSE
+        CALL CD_Resolve_Legacy_BA(ba_raw(i), l0(i), ea(i), rho_a(i), ba(i), es, em)
+      END IF
       IF (es /= CD_DAMP_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'finite-EI BA resolution failed: '//TRIM(em)); RETURN
       END IF
@@ -3289,16 +3315,20 @@ CONTAINS
       ! friction deflection along a slope, beyond the slope load its spring carries at rest.
       IF (as_laid .AND. PRESENT(bathymetry)) THEN
         BLOCK
-          REAL(wp), ALLOCATABLE :: node_load(:)
-          ALLOCATE (node_load(SIZE(l0) + 1))
+          REAL(wp), ALLOCATABLE :: node_load(:), node_dry(:)
+          ALLOCATE (node_load(SIZE(l0) + 1), node_dry(SIZE(l0) + 1))
           node_load = CD_ZERO
+          node_dry = CD_ZERO
           DO i = 1, SIZE(l0)
             node_load(i:i + 1) = node_load(i:i + 1) + 0.5_wp*w_bare(i)*l0(i)
           END DO
+          ! the net weight of each attachment, and the buoyancy it has not above the surface
+          ! (attachment_static_weight)
           DO i = 1, SIZE(att_node)
             node_load(att_node(i)) = node_load(att_node(i)) + (ln%att(2, i) - opts%rhoW*ln%att(3, i))*opts%g
+            node_dry(att_node(i)) = node_dry(att_node(i)) + opts%rhoW*ln%att(3, i)*opts%g
           END DO
-          CALL as_laid_reference(es, em, node_load)
+          CALL as_laid_reference(es, em, node_load, node_dry)
         END BLOCK
         IF (es /= CD_DECKDRV_OK) THEN
           CALL fail_solve(ErrStat, ErrMsg, 'finite-EI as-laid reference for the seabed friction with discrete '// &
@@ -5178,7 +5208,7 @@ CONTAINS
       END DO
     END FUNCTION as_laid_cross_slope
 
-    SUBROUTINE as_laid_reference(esr, emr, node_load)
+    SUBROUTINE as_laid_reference(esr, emr, node_load, node_dry_load)
       !! Friction reference of the static solve (CD_HermiteCable_As_Laid_Offsets): the line laid
       !! on the seabed from its lower end (the anchor, node 1, unless the fairlead is lower, as in
       !! the EI = 0 line model) along the lay azimuth at the as-laid tension, as (x, y) offsets
@@ -5192,9 +5222,13 @@ CONTAINS
       !! dynamic hand-off does on the final mesh. node_load [N, downward positive, one entry per
       !! node]: the discrete loads of an attachment polish on the final mesh l0, which hold on
       !! that mesh alone; the reference is then this profile (default: the lumped weights w).
+      !! node_dry_load (with node_load): the attachments' buoyancy at each node, which a node
+      !! laid above the still-water level does not have. On a bathymetry a node sinks under the
+      !! normal load the solver applies at its laid position, the dry part of a section laid
+      !! within its radius of the surface included (the friction's laid_* dry-part data).
       INTEGER, INTENT(OUT) :: esr
       CHARACTER(*), INTENT(OUT) :: emr
-      REAL(wp), INTENT(IN), OPTIONAL :: node_load(:)
+      REAL(wp), INTENT(IN), OPTIONAL :: node_load(:), node_dry_load(:)
       REAL(wp), ALLOCATABLE :: wn(:), kn_r(:), offsets(:, :)
       REAL(wp) :: laid_t, az
       INTEGER :: k, ne_r, es_r
@@ -5220,6 +5254,15 @@ CONTAINS
       cur_obj%friction%laid_azimuth = az
       cur_obj%friction%laid_tension = laid_t
       cur_obj%friction%laid_frame_cs = frame_cs
+      ! the dry part of the line at the still-water level z = 0, the diameter by reference arc
+      cur_obj%friction%laid_water_weight = opts%rhoW*opts%g
+      cur_obj%friction%laid_waterline_z = CD_ZERO
+      ALLOCATE (cur_obj%friction%laid_arc_end(ne_r), cur_obj%friction%laid_diam(ne_r))
+      cur_obj%friction%laid_arc_end(1) = l0(1)
+      DO k = 2, ne_r
+        cur_obj%friction%laid_arc_end(k) = cur_obj%friction%laid_arc_end(k - 1) + l0(k)
+      END DO
+      cur_obj%friction%laid_diam = diam(1:ne_r)
       ! the nodal loads and seabed stiffnesses the nodes of mesh l0 sink under
       ALLOCATE (wn(ne_r + 1), kn_r(ne_r + 1), offsets(2, ne_r + 1))
       wn = CD_ZERO
@@ -5234,7 +5277,10 @@ CONTAINS
           wn(k:k + 1) = wn(k:k + 1) + 0.5_wp*w(k)*l0(k)
         END DO
       END IF
-      IF (PRESENT(bathymetry)) THEN
+      IF (PRESENT(bathymetry) .AND. PRESENT(node_dry_load)) THEN
+        CALL CD_HermiteCable_As_Laid_Offsets(cur_obj%friction, l0, ea, wn, kn_r, offsets, es_r, emr, bathymetry, &
+                                             node_dry_load=node_dry_load)
+      ELSE IF (PRESENT(bathymetry)) THEN
         CALL CD_HermiteCable_As_Laid_Offsets(cur_obj%friction, l0, ea, wn, kn_r, offsets, es_r, emr, bathymetry)
       ELSE
         CALL CD_HermiteCable_As_Laid_Offsets(cur_obj%friction, l0, ea, wn, kn_r, offsets, es_r, emr)
@@ -8700,6 +8746,8 @@ CONTAINS
         IF (static_only) CYCLE
         CALL axial_period_note(agg%init_lines(il)%line_id, dt, sections, types, strain_note)
         IF (LEN_TRIM(strain_note) > 0) CALL append_note_line(agg%init_lines(il)%note, strain_note)
+        CALL axial_damping_note(agg%init_lines(il), sections, types, opts, strain_note)
+        IF (LEN_TRIM(strain_note) > 0) CALL append_note_line(agg%init_lines(il)%note, strain_note)
       END DO
       IF (own_current) CALL warn_coarse_sections(lines, sections)
     END BLOCK
@@ -10148,9 +10196,9 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: ve_ead(:), ve_bas(:), ve_bad(:), ve_ambl(:), ve_vbet(:)
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:)
     LOGICAL, ALLOCATABLE :: syr_el(:)
-    REAL(wp) :: anchor(3), fairlead(3)
+    REAL(wp) :: anchor(3), fairlead(3), mode1_omega
     REAL(wp), PARAMETER :: factors(4) = [0.25_wp, 0.5_wp, 0.75_wp, CD_ONE]
-    INTEGER :: j, i, e, es
+    INTEGER :: j, i, e, er, es
     LOGICAL :: want_wave_cfg
     CHARACTER(1024) :: em
     ! static seabed friction of this line: lay azimuth override [rad] (unallocated: the
@@ -10194,12 +10242,31 @@ CONTAINS
     ve_bad = CD_ZERO
     ve_ambl = CD_ZERO
     ve_vbet = CD_ZERO
+    ! OPTION axialDampingRatio mode1: a negative BA is the damping ratio of the line's first
+    ! axial mode, set by the deck sections whatever the mesh
+    mode1_omega = CD_ZERO
+    IF (opts%axial_damping_mode1) THEN
+      IF (ANY([(types(line_section_type(sections, ln%id, i))%ba < CD_ZERO, i=1, SIZE(secs))])) THEN
+        CALL line_mode1_omega(ln%id, sections, types, mode1_omega, es, em)
+        IF (es /= CD_DECKDRV_OK) THEN
+          CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
+        END IF
+      END IF
+    END IF
     e = 0
     DO i = 1, SIZE(secs)
       DO j = 1, secs(i)%n_segments
         e = e + 1
-        CALL CD_Resolve_Legacy_BA(types(line_section_type(sections, ln%id, i))%ba, l0(e), ea(e), mpl(e), &
-                                  ba(e), es, em)
+        ! e counts the elements from End A, as the per-element arrays filled here (reversed
+        ! below); the mesh l0, ea, mpl runs from the anchor, End B: element e is er there
+        er = SIZE(l0) + 1 - e
+        IF (opts%axial_damping_mode1) THEN
+          CALL CD_Resolve_Mode1_BA(types(line_section_type(sections, ln%id, i))%ba, ea(er), mode1_omega, ba(e), &
+                                   es, em)
+        ELSE
+          CALL CD_Resolve_Legacy_BA(types(line_section_type(sections, ln%id, i))%ba, l0(er), ea(er), mpl(er), &
+                                    ba(e), es, em)
+        END IF
         IF (es /= CD_DAMP_OK) THEN
           CALL fail(ErrStat, ErrMsg, 'BA resolution for model init: '//TRIM(em)); RETURN
         END IF
@@ -12507,6 +12574,117 @@ CONTAINS
            TRIM(int_to_str(NINT(AXIAL_STEPS_PER_PERIOD)))//': its axial dynamics are damped and its tension peaks '// &
            'can be wrong. A dtM of at most '//TRIM(ADJUSTL(b4))//' s resolves them'
   END SUBROUTINE axial_period_note
+
+  SUBROUTINE line_mode1_omega(line_id, sections, types, omega1, ErrStat, ErrMsg)
+    !! The first axial frequency [rad/s] that OPTION axialDampingRatio mode1 sets a negative BA
+    !! of the line by: the first axial mode of the line fixed at both ends, from its deck
+    !! sections (CD_Axial_Mode1_Omega: unstretched lengths, EA, dry mass per length, on a fixed
+    !! internal mesh), so it does not depend on the line's mesh. A section whose axial stiffness is not one EA
+    !! (viscoelastic ElasticMod 2 or 3, Syrope) fails by name: its first axial mode is not set
+    !! by one BA.
+    INTEGER, INTENT(IN) :: line_id
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    REAL(wp), INTENT(OUT) :: omega1
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), ALLOCATABLE :: len_s(:), ea_s(:), m_s(:)
+    INTEGER :: j, k, es
+    CHARACTER(1024) :: em
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    omega1 = CD_ZERO
+    ALLOCATE (len_s(0), ea_s(0), m_s(0))
+    DO j = 1, SIZE(sections)
+      IF (sections(j)%line_id /= line_id) CYCLE
+      k = find_type(types, sections(j)%ltype_name)
+      IF (k < 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'internal: LINE '//TRIM(int_to_str(line_id))//' has a section of an unknown type')
+        RETURN
+      END IF
+      IF (types(k)%is_syrope .OR. types(k)%elastic_mod > 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'OPTION axialDampingRatio mode1: LINE '//TRIM(int_to_str(line_id))// &
+                  ' has a negative BA and the section type '//TRIM(types(k)%name)//', whose axial stiffness is '// &
+                  'viscoelastic or a Syrope working curve: the damping ratio of its first axial mode is not set by '// &
+                  'one BA. Give BA in N s or use axialDampingRatio segment')
+        RETURN
+      END IF
+      len_s = [len_s, sections(j)%length]
+      ea_s = [ea_s, types(k)%ea]
+      m_s = [m_s, types(k)%mass]
+    END DO
+    CALL CD_Axial_Mode1_Omega(len_s, ea_s, m_s, omega1, es, em)
+    IF (es /= CD_DAMP_OK) THEN
+      CALL fail(ErrStat, ErrMsg, 'OPTION axialDampingRatio mode1: LINE '//TRIM(int_to_str(line_id))//': '//TRIM(em))
+      RETURN
+    END IF
+  END SUBROUTINE line_mode1_omega
+
+  SUBROUTINE axial_damping_note(summary, sections, types, opts, note)
+    !! A line whose negative BA is the damping ratio of each segment (MoorDyn's convention, the
+    !! default of OPTION axialDampingRatio): the damping ratio this gives the line's first axial
+    !! mode, from the line's final mesh and resolved BA (summary%axial_zeta1,
+    !! CD_Axial_Mode1_Damping: the line fixed at both ends), with the number of elements, since
+    !! it falls as the mesh is refined (zeta pi/(2N) on a uniform line). A line with a
+    !! viscoelastic or Syrope section is noted without the ratio. Only a note: nothing is changed.
+    TYPE(CD_LineInitSummary), INTENT(IN) :: summary
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    CHARACTER(*), INTENT(OUT) :: note
+    INTEGER :: j, k
+    LOGICAL :: negative, simple
+    CHARACTER(32) :: b1
+
+    note = ''
+    IF (opts%axial_damping_mode1) RETURN
+    negative = .FALSE.
+    simple = .TRUE.
+    DO j = 1, SIZE(sections)
+      IF (sections(j)%line_id /= summary%line_id) CYCLE
+      k = find_type(types, sections(j)%ltype_name)
+      IF (k < 1) RETURN
+      IF (types(k)%ba < CD_ZERO) negative = .TRUE.
+      IF (types(k)%is_syrope .OR. types(k)%elastic_mod > 1) simple = .FALSE.
+    END DO
+    IF (.NOT. negative) RETURN
+    note = 'LINE '//TRIM(int_to_str(summary%line_id))//': its negative BA is a damping ratio per segment, BA = '// &
+           'zeta L0 sqrt(EA m) on each element'
+    IF (simple .AND. summary%axial_zeta1 >= CD_ZERO .AND. summary%axial_elements > 0) THEN
+      IF (100.0_wp*summary%axial_zeta1 >= 0.01_wp) THEN
+        WRITE (b1, '(F12.3)') 100.0_wp*summary%axial_zeta1
+      ELSE
+        WRITE (b1, '(ES10.3)') 100.0_wp*summary%axial_zeta1
+      END IF
+      note = TRIM(note)//', which damps the first axial mode of the line (both ends held) at '// &
+             TRIM(ADJUSTL(b1))//' % of critical on its '//TRIM(int_to_str(summary%axial_elements))// &
+             ' elements (zeta pi/(2N) on a uniform line of N elements): the axial damping depends on the mesh'
+    ELSE
+      note = TRIM(note)//': the axial damping of the line depends on the mesh'
+    END IF
+    note = TRIM(note)//'. With OPTION mode1 axialDampingRatio a negative BA is the damping ratio of the '// &
+           'first axial mode, the same on any mesh'
+  END SUBROUTINE axial_damping_note
+
+  SUBROUTINE summary_axial_damping(summary, l0, ea, mass_per_length, ba)
+    !! The damping ratio of the first axial mode of a built line (CD_Axial_Mode1_Damping), for its
+    !! initialisation note (axial_damping_note); left unset (-1) when it cannot be worked out.
+    TYPE(CD_LineInitSummary), INTENT(INOUT) :: summary
+    REAL(wp), INTENT(IN) :: l0(:), ea(:), mass_per_length(:), ba(:)
+    REAL(wp) :: zeta1, omega1
+    INTEGER :: es
+    CHARACTER(256) :: em
+
+    summary%axial_zeta1 = -CD_ONE
+    summary%axial_elements = 0
+    IF (SIZE(l0) < 1 .OR. SIZE(ea) /= SIZE(l0) .OR. SIZE(mass_per_length) /= SIZE(l0) .OR. &
+        SIZE(ba) /= SIZE(l0)) RETURN
+    CALL CD_Axial_Mode1_Damping(l0, ea, mass_per_length, ba, zeta1, omega1, es, em)
+    IF (es /= CD_DAMP_OK) RETURN
+    summary%axial_zeta1 = zeta1
+    summary%axial_elements = SIZE(l0)
+  END SUBROUTINE summary_axial_damping
 
   SUBROUTINE warn_line_below_anchor(lines, points, sections, q_all, q_off)
     !! Standard-output WARNING for a deck with no seabed (no WtrDpth or bathymetryFile) on
@@ -17408,6 +17586,17 @@ CONTAINS
         opts%output_element_recovery = .TRUE.
       CASE DEFAULT
         CALL fail(ErrStat, ErrMsg, 'OPTION OutputRecovery "'//TRIM(val)//'" must be equilibrium or element')
+      END SELECT
+    CASE ('axialdampingratio', 'axial_damping_ratio')
+      ! what a negative LINE TYPES BA is the damping ratio of: each segment (MoorDyn) or the
+      ! line's first axial mode
+      SELECT CASE (to_lower(TRIM(strip_quotes(val))))
+      CASE ('segment')
+        opts%axial_damping_mode1 = .FALSE.
+      CASE ('mode1')
+        opts%axial_damping_mode1 = .TRUE.
+      CASE DEFAULT
+        CALL fail(ErrStat, ErrMsg, 'OPTION axialDampingRatio "'//TRIM(val)//'" must be segment or mode1')
       END SELECT
     CASE ('cable_load_feedback', 'cableloadfeedback')
       CALL rd_bool(val, opts%cable_load_feedback, ErrStat, ErrMsg)
@@ -36971,6 +37160,7 @@ CONTAINS
           RETURN
         END IF
         CALL set_init_summary(lines(i)%id, tension, declination, azimuth, agg%init_lines(i), fair_force=fair_force)
+        CALL cable_axial_damping(agg%init_lines(i), agg%cables(agg%line_obj_index(lines(i)%id)))
         IF (ALLOCATED(agg%cable_note)) agg%init_lines(i)%note = agg%cable_note(agg%line_obj_index(lines(i)%id))
       ELSE IF (agg%has_sys) THEN
         ! The force the EI=0 line exerts on its fairlead (internal last node), as the
@@ -36983,6 +37173,7 @@ CONTAINS
           RETURN
         END IF
         CALL set_init_summary(lines(i)%id, tension, declination, azimuth, agg%init_lines(i), fair_force=fair_force)
+        CALL model_axial_damping(agg%init_lines(i), agg%sys%lines(agg%line_obj_index(lines(i)%id)))
       ELSE
         CALL set_init_summary(lines(i)%id, tension, declination, azimuth, agg%init_lines(i))
       END IF
@@ -37050,6 +37241,7 @@ CONTAINS
         RETURN
       END IF
       CALL set_init_summary(lines(i)%id, tension, declination, azimuth, summaries(i), fair_force=fair_force)
+      CALL model_axial_damping(summaries(i), models(i))
     END DO
     IF (PRESENT(opts)) CALL add_model_fold_notes(lines, points, opts, models, summaries, FOLD_FRICTION_FULL)
   END SUBROUTINE collect_model_init_summaries
@@ -37090,6 +37282,7 @@ CONTAINS
         RETURN
       END IF
       CALL set_init_summary(lines(i)%id, tension, declination, azimuth, summaries(i), fair_force=fair_force)
+      CALL model_axial_damping(summaries(i), system%lines(i))
     END DO
     IF (PRESENT(opts)) THEN
       IF (PRESENT(friction_support)) THEN
@@ -37125,8 +37318,28 @@ CONTAINS
       CALL set_init_summary(lines(i)%id, tension, declination, azimuth, summaries(i), fair_force=fair_force)
       summaries(i)%seabed_drift = cable_seabed_drift(opts, cables(i))
       summaries(i)%friction_refused = friction_support == FOLD_FRICTION_NONE
+      CALL cable_axial_damping(summaries(i), cables(i))
     END DO
   END SUBROUTINE collect_hermite_init_summaries
+
+  SUBROUTINE model_axial_damping(summary, model)
+    !! summary_axial_damping of an EI = 0 line: its plain axial damping (zero on viscoelastic and
+    !! Syrope elements, whose own laws carry theirs).
+    TYPE(CD_LineInitSummary), INTENT(INOUT) :: summary
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    IF (.NOT. (ALLOCATED(model%ba_dyn) .AND. ALLOCATED(model%l0) .AND. ALLOCATED(model%ea) .AND. &
+               ALLOCATED(model%rho_a))) RETURN
+    CALL summary_axial_damping(summary, model%l0, model%ea, model%rho_a, model%ba_dyn)
+  END SUBROUTINE model_axial_damping
+
+  SUBROUTINE cable_axial_damping(summary, cable)
+    !! summary_axial_damping of a finite-EI cable, on its final mesh.
+    TYPE(CD_LineInitSummary), INTENT(INOUT) :: summary
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
+    IF (.NOT. (ALLOCATED(cable%line%BA) .AND. ALLOCATED(cable%line%l0) .AND. ALLOCATED(cable%line%EA) .AND. &
+               ALLOCATED(cable%line%rho_a))) RETURN
+    CALL summary_axial_damping(summary, cable%line%l0, cable%line%EA, cable%line%rho_a, cable%line%BA)
+  END SUBROUTINE cable_axial_damping
 
   SUBROUTINE print_deck_init_report(deck_path, lines, points, sections, n_finite, summaries, types, opts)
     !! The initialization report goes to stderr (see doc/cli.rst).
@@ -37185,6 +37398,8 @@ CONTAINS
         IF (LEN_TRIM(strain_note) > 0) WRITE (error_unit, '(A)') '      Note: '//TRIM(strain_note)//'.'
         IF (opts%has_dtm .AND. opts%tmax > CD_ZERO) THEN
           CALL axial_period_note(summaries(i)%line_id, opts%dtM, sections, types, strain_note)
+          IF (LEN_TRIM(strain_note) > 0) WRITE (error_unit, '(A)') '      Note: '//TRIM(strain_note)//'.'
+          CALL axial_damping_note(summaries(i), sections, types, opts, strain_note)
           IF (LEN_TRIM(strain_note) > 0) WRITE (error_unit, '(A)') '      Note: '//TRIM(strain_note)//'.'
         END IF
       END IF

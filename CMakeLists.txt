@@ -1290,6 +1290,13 @@ add_executable(test_end_tangent_channels tests/test_end_tangent_channels.f90)
 target_link_libraries(test_end_tangent_channels PRIVATE cabledyn_core)
 add_test(NAME end_tangent_channels COMMAND test_end_tangent_channels WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(end_tangent_channels PROPERTIES LABELS "fortran;integration;static;outputs" TIMEOUT 600)
+# The end reactions of a finite-EI cable at rest in a uniform current, pinned or clamped,
+# suspended or touching down, balance its weight and its Morison drag integrated independently.
+add_executable(test_static_current_balance tests/test_static_current_balance.f90)
+target_link_libraries(test_static_current_balance PRIVATE cabledyn_core)
+add_test(NAME static_current_balance COMMAND test_static_current_balance
+         WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(static_current_balance PROPERTIES LABELS "fortran;integration;static;hydro" TIMEOUT 600)
 
 add_executable(test_viv_kernels tests/test_viv_kernels.f90)
 target_link_libraries(test_viv_kernels PRIVATE cabledyn_core)
@@ -2876,6 +2883,15 @@ if(Python3_Interpreter_FOUND)
                    $<TARGET_FILE:cabledyn>)
   set_tests_properties(driver_end_tangent_channels PROPERTIES
     LABELS "python;driver;integration;static;outputs"
+    TIMEOUT 600
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+  # A negative BA damps the first axial mode of a line at zeta pi/(2N) per segment (the
+  # default), and at zeta on every mesh under axialDampingRatio mode1, uniform and composite.
+  add_test(NAME driver_axial_damping_ratio
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_axial_damping_ratio.py
+                   $<TARGET_FILE:cabledyn>)
+  set_tests_properties(driver_axial_damping_ratio PROPERTIES
+    LABELS "python;driver;integration;dynamic;validation"
     TIMEOUT 600
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 endif()

@@ -21,7 +21,13 @@ MODULE CableDyn_Damping
   !! -- a non-negative value IS the coefficient (N.s); a NEGATIVE
   !! value is the desired damping ratio -zeta, giving BA = zeta * L_seg * sqrt(EA * w)
   !! (w = mass per unstretched metre), so each segment's axial mode carries that
-  !! fraction of critical damping.
+  !! fraction of critical damping. That ratio belongs to the segment, so the line's own axial
+  !! modes are damped less on a finer mesh (zeta_1 = zeta pi/(2N) on a uniform line of N
+  !! elements, CD_Axial_Mode1_Damping). The mesh-independent alternative
+  !! (CD_Resolve_Mode1_BA) makes -zeta the damping ratio of the line's first axial mode:
+  !! BA = 2 zeta EA / omega_1, a damping proportional to the stiffness, with omega_1 the
+  !! line's first axial frequency (CD_Axial_Mode1_Omega), so the first mode of a composite
+  !! line is damped at zeta too.
   !!
   !! Load convention (matches CD_Cable_Dynamic_Load_Proc / CableDyn_Hydro): the
   !! returned `force` is the external load to SUBTRACT from the residual, and
@@ -33,6 +39,9 @@ MODULE CableDyn_Damping
   PRIVATE
 
   PUBLIC :: CD_Resolve_Legacy_BA
+  PUBLIC :: CD_Resolve_Mode1_BA
+  PUBLIC :: CD_Axial_Mode1_Omega
+  PUBLIC :: CD_Axial_Mode1_Damping
   PUBLIC :: CD_Cable_Axial_Damping_Force
   PUBLIC :: CD_Cable_Axial_Damping_Load
   PUBLIC :: CD_Axial_Damping_Element_Force
@@ -77,6 +86,195 @@ CONTAINS
     END IF
     ba = (-ba_input)*segment_length*SQRT(ea*mass_per_length)
   END SUBROUTINE CD_Resolve_Legacy_BA
+
+  SUBROUTINE CD_Resolve_Mode1_BA(ba_input, ea, omega1, ba, ErrStat, ErrMsg)
+    !! Resolve a BA/-zeta line-type value with -zeta the damping ratio of the line's first axial
+    !! mode: BA = 2 zeta EA / omega_1 [N.s] on every element, the same for any mesh. The damping
+    !! is then proportional to the stiffness, so the axial mode n of a uniform line has the
+    !! ratio zeta omega_n / omega_1. ba_input >= 0 is the coefficient directly.
+    REAL(wp), INTENT(IN)  :: ba_input   !! BA value (negative => -zeta ratio of the first axial mode)
+    REAL(wp), INTENT(IN)  :: ea         !! axial stiffness EA of the element [N] (> 0 if -zeta)
+    REAL(wp), INTENT(IN)  :: omega1     !! first axial frequency of the line [rad/s] (> 0 if -zeta)
+    REAL(wp), INTENT(OUT) :: ba         !! resolved damping coefficient [N.s]
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    ba = CD_ZERO
+    ErrStat = CD_DAMP_OK
+    ErrMsg = ''
+    IF (.NOT. CD_Is_Finite(ba_input)) THEN
+      CALL fail(ErrStat, ErrMsg, 'BA must be finite'); RETURN
+    END IF
+    IF (ba_input >= CD_ZERO) THEN
+      ba = ba_input
+      RETURN
+    END IF
+    IF (.NOT. (CD_Is_Finite(ea) .AND. ea > CD_ZERO) .OR. .NOT. (CD_Is_Finite(omega1) .AND. omega1 > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'resolving a -zeta first-mode damping ratio needs a positive EA and '// &
+                'first axial frequency')
+      RETURN
+    END IF
+    ba = 2.0_wp*(-ba_input)*ea/omega1
+  END SUBROUTINE CD_Resolve_Mode1_BA
+
+  SUBROUTINE CD_Axial_Mode1_Omega(length, ea, mass_per_length, omega1, ErrStat, ErrMsg)
+    !! First axial natural frequency [rad/s] of a line of sections (unstretched length, EA and
+    !! dry mass per length each) fixed at both ends: the first mode of the axial chain of a
+    !! fixed mesh of the sections (CD_Axial_Mode1_Damping on MODE1_ELEMENTS elements shared by
+    !! the sections in proportion to their axial-wave transit times, at least
+    !! MODE1_SECTION_ELEMENTS each), so it does not depend on the line's own mesh. It is
+    !! (pi/L) sqrt(EA/m) on a uniform line, low by (pi/(2 MODE1_ELEMENTS))^2/6 = 1e-7. Added
+    !! mass is left out.
+    REAL(wp), INTENT(IN)  :: length(:)            !! section unstretched lengths [m] (> 0)
+    REAL(wp), INTENT(IN)  :: ea(:)                !! section EA [N] (> 0)
+    REAL(wp), INTENT(IN)  :: mass_per_length(:)   !! section dry mass per length [kg/m] (> 0)
+    REAL(wp), INTENT(OUT) :: omega1
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER, PARAMETER :: MODE1_ELEMENTS = 2048, MODE1_SECTION_ELEMENTS = 16
+    REAL(wp), ALLOCATABLE :: l0(:), ea_e(:), m_e(:), ba_e(:)
+    REAL(wp) :: transit, zeta1
+    INTEGER :: i, j, e, ns
+    INTEGER, ALLOCATABLE :: n_sec(:)
+
+    omega1 = CD_ZERO
+    ErrStat = CD_DAMP_OK
+    ErrMsg = ''
+    ns = SIZE(length)
+    IF (ns < 1 .OR. SIZE(ea) /= ns .OR. SIZE(mass_per_length) /= ns) THEN
+      CALL fail(ErrStat, ErrMsg, 'the first axial frequency needs one length, EA and mass per section'); RETURN
+    END IF
+    DO i = 1, ns
+      IF (.NOT. (CD_Is_Finite(length(i)) .AND. length(i) > CD_ZERO .AND. CD_Is_Finite(ea(i)) .AND. &
+                 ea(i) > CD_ZERO .AND. CD_Is_Finite(mass_per_length(i)) .AND. mass_per_length(i) > CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'the first axial frequency needs a positive length, EA and mass per length'); RETURN
+      END IF
+    END DO
+    transit = SUM(length*SQRT(mass_per_length/ea))
+    IF (.NOT. (CD_Is_Finite(transit) .AND. transit > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'the first axial frequency is not finite'); RETURN
+    END IF
+    ALLOCATE (n_sec(ns))
+    DO i = 1, ns
+      n_sec(i) = MAX(MODE1_SECTION_ELEMENTS, NINT(REAL(MODE1_ELEMENTS, wp)*length(i)*SQRT(mass_per_length(i)/ea(i))/ &
+                                                  transit))
+    END DO
+    ALLOCATE (l0(SUM(n_sec)), ea_e(SUM(n_sec)), m_e(SUM(n_sec)), ba_e(SUM(n_sec)))
+    e = 0
+    DO i = 1, ns
+      DO j = 1, n_sec(i)
+        e = e + 1
+        l0(e) = length(i)/REAL(n_sec(i), wp)
+        ea_e(e) = ea(i)
+        m_e(e) = mass_per_length(i)
+      END DO
+    END DO
+    ba_e = CD_ZERO
+    CALL CD_Axial_Mode1_Damping(l0, ea_e, m_e, ba_e, zeta1, omega1, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_DAMP_OK) RETURN
+    IF (.NOT. (CD_Is_Finite(omega1) .AND. omega1 > CD_ZERO)) THEN
+      omega1 = CD_ZERO
+      CALL fail(ErrStat, ErrMsg, 'the first axial frequency is not finite'); RETURN
+    END IF
+  END SUBROUTINE CD_Axial_Mode1_Omega
+
+  SUBROUTINE CD_Axial_Mode1_Damping(l0, ea, mass_per_length, ba, zeta1, omega1, ErrStat, ErrMsg)
+    !! Damping ratio zeta_1 and frequency omega_1 [rad/s] of the first axial mode of a line of
+    !! elements (unstretched length, EA, dry mass per length and resolved BA each) fixed at both
+    !! ends: the axial chain of the mesh, element stiffness EA/L0 and damping BA/L0, the mass
+    !! lumped at the nodes. The undamped first mode u (inverse iteration) gives
+    !! omega_1^2 = u'Ku / u'Mu and zeta_1 = u'Cu / (2 omega_1 u'Mu). On a uniform line with
+    !! BA = zeta L0 sqrt(EA m), zeta_1 = zeta sin(pi/(2N)) ~ zeta pi/(2N). A one-element line,
+    !! which has no free node, takes the continuous bar: omega_1 = (pi/L0) sqrt(EA/m).
+    REAL(wp), INTENT(IN)  :: l0(:), ea(:), mass_per_length(:), ba(:)
+    REAL(wp), INTENT(OUT) :: zeta1, omega1
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), PARAMETER :: PI = 3.14159265358979323846_wp
+    INTEGER, PARAMETER :: MAX_ITER = 2000
+    REAL(wp), PARAMETER :: RAYLEIGH_TOL = 1.0e-14_wp
+    REAL(wp), ALLOCATABLE :: k(:), c(:), m(:), u(:), rhs(:), cp(:), dp(:)
+    REAL(wp) :: ukk, umm, ucc, rq, rq_old, denom
+    INTEGER :: n, i, it
+
+    zeta1 = CD_ZERO
+    omega1 = CD_ZERO
+    ErrStat = CD_DAMP_OK
+    ErrMsg = ''
+    n = SIZE(l0)
+    IF (n < 1 .OR. SIZE(ea) /= n .OR. SIZE(mass_per_length) /= n .OR. SIZE(ba) /= n) THEN
+      CALL fail(ErrStat, ErrMsg, 'the first axial mode needs one length, EA, mass and BA per element'); RETURN
+    END IF
+    DO i = 1, n
+      IF (.NOT. (CD_Is_Finite(l0(i)) .AND. l0(i) > CD_ZERO .AND. CD_Is_Finite(ea(i)) .AND. ea(i) > CD_ZERO .AND. &
+                 CD_Is_Finite(mass_per_length(i)) .AND. mass_per_length(i) > CD_ZERO .AND. &
+                 CD_Is_Finite(ba(i)) .AND. ba(i) >= CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'the first axial mode needs a positive length, EA and mass and a '// &
+                  'non-negative BA on every element'); RETURN
+      END IF
+    END DO
+    IF (n == 1) THEN
+      omega1 = (PI/l0(1))*SQRT(ea(1)/mass_per_length(1))
+      zeta1 = ba(1)*omega1/(2.0_wp*ea(1))
+      RETURN
+    END IF
+    ! element stiffness and damping, node masses of the n - 1 free nodes (node i joins
+    ! elements i and i + 1)
+    ALLOCATE (k(n), c(n), m(n - 1), u(n - 1), rhs(n - 1), cp(n - 1), dp(n - 1))
+    k = ea/l0
+    c = ba/l0
+    DO i = 1, n - 1
+      m(i) = 0.5_wp*(mass_per_length(i)*l0(i) + mass_per_length(i + 1)*l0(i + 1))
+    END DO
+    u = CD_ONE
+    rq_old = -CD_ONE
+    DO it = 1, MAX_ITER
+      ! solve K y = M u (K tridiagonal, symmetric positive definite: Thomas without pivoting)
+      rhs = m*u
+      cp(1) = -k(2)/(k(1) + k(2))
+      dp(1) = rhs(1)/(k(1) + k(2))
+      DO i = 2, n - 1
+        denom = (k(i) + k(i + 1)) + k(i)*cp(i - 1)
+        IF (i < n - 1) cp(i) = -k(i + 1)/denom
+        dp(i) = (rhs(i) + k(i)*dp(i - 1))/denom
+      END DO
+      u(n - 1) = dp(n - 1)
+      DO i = n - 2, 1, -1
+        u(i) = dp(i) - cp(i)*u(i + 1)
+      END DO
+      u = u/MAXVAL(ABS(u))
+      CALL forms(u, ukk, umm, ucc)
+      rq = ukk/umm
+      IF (ABS(rq - rq_old) <= RAYLEIGH_TOL*rq) EXIT
+      rq_old = rq
+    END DO
+    omega1 = SQRT(rq)
+    zeta1 = ucc/(2.0_wp*omega1*umm)
+    IF (.NOT. (CD_Is_Finite(omega1) .AND. CD_Is_Finite(zeta1))) THEN
+      zeta1 = CD_ZERO
+      omega1 = CD_ZERO
+      CALL fail(ErrStat, ErrMsg, 'the first axial mode is not finite'); RETURN
+    END IF
+
+  CONTAINS
+
+    SUBROUTINE forms(x, xkx, xmx, xcx)
+      !! The quadratic forms of K, M and C at the free-node displacements x (both ends held).
+      REAL(wp), INTENT(IN) :: x(:)
+      REAL(wp), INTENT(OUT) :: xkx, xmx, xcx
+      REAL(wp) :: dx
+      INTEGER :: e
+      ! the end elements stretch by the displacement of their free node alone
+      xkx = k(1)*x(1)**2 + k(n)*x(n - 1)**2
+      xcx = c(1)*x(1)**2 + c(n)*x(n - 1)**2
+      DO e = 2, n - 1
+        dx = x(e) - x(e - 1)
+        xkx = xkx + k(e)*dx*dx
+        xcx = xcx + c(e)*dx*dx
+      END DO
+      xmx = SUM(m*x*x)
+    END SUBROUTINE forms
+  END SUBROUTINE CD_Axial_Mode1_Damping
 
   SUBROUTINE CD_Cable_Element_Damping_Tension(q, v, elem_conn, l0, ba, td, ErrStat, ErrMsg, l0_dot)
     !! Signed per-element axial damping tension Td = (BA/L0)(t . (v_b - v_a)).

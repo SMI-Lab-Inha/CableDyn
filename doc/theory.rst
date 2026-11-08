@@ -811,9 +811,31 @@ so the element-scale modes (:math:`n \approx N`) are damped at up to :math:`(\pi
 ``BA``), while the line's global axial modes are damped much less, and less again on a finer
 mesh: ``BA = -1`` on 100 elements gives the first axial mode 1.6 %, and 0.8 % on 200 elements.
 Results that depend on the axial damping (tension peaks of snatch loads, the decay of axial
-oscillations) therefore change with the mesh. For mesh-independent damping give ``BA`` in N·s:
-a material damping ratio :math:`\zeta_1` of the first axial mode of a line of length :math:`L` is
-:math:`BA = 2\,\zeta_1\,EA/\omega_1` with :math:`\omega_1 = (\pi/L)\sqrt{EA/\rho_A}`.
+oscillations) therefore change with the mesh. The initialisation of a dynamic run notes, for every
+line with a negative ``BA``, the damping ratio this gives its first axial mode on its final mesh:
+the Rayleigh quotient :math:`\zeta_1 = \mathbf u^\mathsf T\mathbf C\mathbf u /
+(2\,\omega_1\,\mathbf u^\mathsf T\mathbf M\mathbf u)` of the first mode :math:`\mathbf u` of the
+line's axial chain with both ends held (element stiffness :math:`EA/L_0`, damping
+:math:`BA/L_0`, the dry mass lumped at the nodes), which is :math:`\zeta\sin(\pi/(2N))` on a
+uniform line and holds for a composite one.
+
+**First-mode damping ratio** (``mode1 axialDampingRatio``, :doc:`options`). A negative ``BA`` is
+then the damping ratio of the line's first axial mode, the same on any mesh:
+
+.. math::
+
+   BA = \frac{2\,\zeta\,EA}{\omega_1}
+
+on every element, with :math:`\omega_1` the first axial natural frequency of the line with both
+ends held, from its sections' unstretched lengths, ``EA`` and dry mass per length (the first mode
+of the axial chain on a fixed internal mesh of 2048 elements, so independent of the line's mesh;
+:math:`\omega_1 = (\pi/L)\sqrt{EA/\rho_A}` on a uniform line, to 1e-7). The damping is then
+proportional to the stiffness, :math:`\mathbf C = (2\zeta/\omega_1)\,\mathbf K`, so the first
+axial mode of a composite line is damped at :math:`\zeta` too and the mode :math:`n` at
+:math:`\zeta\,\omega_n/\omega_1`. Added mass and the tension are left out of :math:`\omega_1`. A
+viscoelastic or Syrope section has no single ``EA`` that sets the first mode, so a line with one
+and a negative ``BA`` is refused under this option; ``BA`` in N·s is used as given under both
+conventions.
 
 Viscoelastic rope (MoorDyn ``ElasticMod`` 2 and 3)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -988,7 +1010,17 @@ With the relative velocity :math:`\mathbf{u}_r = \mathbf{u}_f - \mathbf{v}` spli
                 + \tfrac{1}{2}\rho\,\pi d\,C_{d,t}\,\lvert\mathbf{u}_{r,t}\rvert\,\mathbf{u}_{r,t}.
 
 Its derivatives with respect to position (through :math:`\mathbf{t}`) and velocity enter the
-implicit tangent exactly.
+implicit tangent exactly. The length is the element's unstretched length :math:`L_0` on the
+``EI = 0`` path (with the chord tangent and the wet-weighted relative velocity) and
+the deformed length :math:`\lvert\mathbf r_{,\xi}\rvert\,\mathrm{d}\xi` of the cubic centreline
+on the Hermite path (three Gauss points per element). At rest in a current the end reactions
+(``FairTen``/``AnchTen``, ``Point<P>F``) balance the weight and this drag to the static
+tolerance, about :math:`10^{-8}` of the end force, pinned or clamped ends alike. A check of the
+balance must integrate the drag the same way: on straight chords between the nodes of a
+finite-EI line it misses by a share that falls with the square of the element length
+(:math:`3\times10^{-5}` of the end force on 1.25 m elements of a cable in a 1 m/s current,
+:math:`4.5\times10^{-4}` on 5 m elements), and per unstretched length by about the axial strain
+times the drag.
 
 Added mass and fluid inertia
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1092,6 +1124,8 @@ coupled routes the phase follows the host's fluid field (a SeaState current or w
 phases, the running mean squares and the averaging time are part of the checkpoint state, so a
 restart continues the uninterrupted run bit for bit. The OpenFAST correction iterations rewind
 them with the rest of the state.
+
+.. _theory-dry-buoyancy:
 
 Buoyancy and wetting
 ~~~~~~~~~~~~~~~~~~~~
@@ -1420,7 +1454,15 @@ laid node sinks into the penalty seabed along its normal by its static penetrati
 slope moves it horizontally by :math:`w_i\,(z_{,x}, z_{,y})/k_i`, with :math:`w_i` its nodal
 load: its share of the line's submerged weight, plus the net weight of a discrete attachment
 lumped at it (the finite-EI solve first smears an attachment over the two elements at its
-node, then rebuilds the reference for the discrete loads before it polishes to them). Where
+node, then rebuilds the reference for the discrete loads before it polishes to them). It is the
+normal load the solver applies to the node resting at its laid position: a finite-EI section
+that lies within its radius of the still-water level there (a seabed shallower than the cable
+radius) carries the buoyancy of its dry part, as in the static solve and the dynamics
+(:ref:`buoyancy recovery <theory-dry-buoyancy>`), at the height the node sinks to under that
+load, :math:`z_f - w_i s^2/k_i`, and an attachment above the level its dry weight. The seabed
+lies below the still-water level everywhere (a positive ``WtrDpth`` and positive bathymetry
+depths), so a grounded node with its attachment stays submerged; an ``EI = 0`` line, whose
+submergence follows its node heights, is wholly submerged where it is grounded. Where
 the slope varies, the laid tension turns at every node and adds
 :math:`-T_\text{laid}\,(\mathbf{t}_{i}^{+} - \mathbf{t}_{i}^{-})\cdot\mathbf{n}_i` to the
 normal load (it presses the line into a crest and lifts it from a hollow), with

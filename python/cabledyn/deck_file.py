@@ -268,6 +268,8 @@ _OPTION_ALIASES = {
     "as_laid_tension": "as_laid_tension",
     "outputrecovery": "output_recovery",
     "output_recovery": "output_recovery",
+    "axialdampingratio": "axial_damping_ratio",
+    "axial_damping_ratio": "axial_damping_ratio",
 }
 # Per-line static friction rows (native apply_option): ``layAzimuth<ID>`` and ``asLaidTension<ID>``
 # with the LINE id appended; the id is a plain decimal suffix, and leading zeros name the same line.
@@ -1341,6 +1343,13 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
             None
             if value.lower() in {"continuation", "sequenced"}
             else "must be continuation or sequenced"
+        )
+    if key == "axial_damping_ratio":
+        # native: the value is dequoted and compared case-insensitively
+        return (
+            None
+            if _strip_quotes(value).lower() in {"segment", "mode1"}
+            else "must be segment or mode1"
         )
     if key == "output_recovery":
         return (
