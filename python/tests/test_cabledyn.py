@@ -220,3 +220,34 @@ def test_error_types_import_without_loading_the_library():
     assert issubclass(ConvergenceError, CableDynError)
     error = ConvergenceError("CableDyn_Step", "tolerance not met", n_iter=40, stalled=True)
     assert error.status == 4 and error.n_iter == 40 and error.stalled
+
+
+@pytest.mark.parametrize("dt", [1e-101, 1e-160, 1e-300, 5e-324])
+def test_a_step_below_the_smallest_time_step_is_named(dt):
+    # the implicit march divides by dt^2: below 1e-100 s the step is refused by name, not left
+    # to overflow inside the line solve
+    with cabledyn.CableDyn(VOLTURNUS_DECK) as m:
+        q, v, a = m.get_coupled_motion()
+        before = m.calc_output()
+        with pytest.raises(
+            cabledyn.CableDynError, match=r"below the smallest time step, 1e-100 s"
+        ) as err:
+            m.step(dt, q, v, a)
+        assert "BAD_INPUT" in str(err.value)
+        assert np.array_equal(m.calc_output(), before)
+        m.step(1e-100, q, v, a)  # the bound itself steps
+        assert np.all(np.isfinite(m.calc_output()))
+    with cabledyn.CableDyn() as m:
+        m.init_line(
+            [0, 0, 0, 1, 0, 0, 2, 0, 0],
+            np.zeros(9),
+            [1, 2, 2, 3],
+            [1.0, 1.0],
+            [1e6, 1e6],
+            [1.0, 1.0],
+            [1, 2, 3, 7, 8, 9],
+            False,
+            0.5,
+        )
+        with pytest.raises(cabledyn.CableDynError, match=r"below the smallest time step, 1e-100 s"):
+            m.step(dt, [0, 0, 0, 2, 0, 0], np.zeros(6), np.zeros(6))

@@ -30,7 +30,7 @@ MODULE CableDyn_DeckDriver
   !! connected to Rigid6 bodies and rods (moment returned) are supported within the documented
   !! scope. Features outside it parse but FAIL CLOSED with a clear error naming the unsupported
   !! feature.
-  USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE
+  USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_MIN_TIME_STEP
   USE CableDyn_FatalReport, ONLY: CD_Fatal_Report_Time
   USE CableDyn_Loads, ONLY: CD_Submerged_Weight, CD_Equivalent_Buoyant_Section, CD_Assemble_Distributed_Load
   USE CableDyn_Assemble, ONLY: CD_Compute_Cable_Tension, CD_Cable_Free_Bandwidth, &
@@ -18207,8 +18207,10 @@ CONTAINS
       IF (key(1:13) == 'aslaidtension' .AND. VERIFY(TRIM(key(14:)), '0123456789') == 0) key = 'aslaidtension'
     END IF
     SELECT CASE (TRIM(key))
-    CASE ('g', 'gravity', 'rhow', 'wtrdnsty', 'water_density', 'wtrdpth', 'water_depth', 'dtm', 'dt', 'dtwave')
+    CASE ('g', 'gravity', 'rhow', 'wtrdnsty', 'water_density', 'wtrdpth', 'water_depth', 'dtwave')
       rule = 'positive'
+    CASE ('dtm', 'dt')
+      rule = 'time step'
     CASE ('tmax', 'tensile_strain_tolerance', 'tensilestraintolerance', 'ramptime', 'ramp_time', 'tramp', &
           'maxstrain', 'max_strain', 'rangestart', 'range_start', 'vivrmswindow', 'viv_rms_window')
       rule = 'non-negative'
@@ -18245,6 +18247,9 @@ CONTAINS
       IF (x < CD_ZERO) CALL fail(ErrStat, ErrMsg, 'OPTION '//TRIM(kw)//' must be >= 0')
     CASE ('unit')
       IF (x < CD_ZERO .OR. x > CD_ONE) CALL fail(ErrStat, ErrMsg, 'OPTION '//TRIM(kw)//' must lie in [0, 1]')
+    CASE ('time step')
+      IF (.NOT. (x >= CD_MIN_TIME_STEP)) CALL fail(ErrStat, ErrMsg, 'OPTION '//TRIM(kw)//' must be at least '// &
+                                                  '1e-100 s: the time integration divides by its square')
     END SELECT
   END SUBROUTINE check_option_row_value
 

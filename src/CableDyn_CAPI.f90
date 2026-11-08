@@ -35,7 +35,7 @@ MODULE CableDyn_CAPI
                                CD_FAST_NCoupledDOF, CD_FAST_NPoints, CD_FAST_NLines, CD_FAST_OK, CD_FAST_BADINPUT, &
                                CD_FAST_NOT_INITIALIZED, CD_FAST_ALLOCFAIL, CD_FAST_UpdatePointFluidFields
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_Section_Curvature, CD_HFMF_OK
-  USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE
+  USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_MIN_TIME_STEP
   USE CableDyn_System, ONLY: CD_SystemType, CD_System_Line_NDOF, CD_Get_System_PointBlocks, CD_SYSTEM_OK, &
                              CD_POINT_COUPLED
   IMPLICIT NONE
@@ -1369,6 +1369,12 @@ CONTAINS
     n_iter = 0_C_INT
     CALL coupled_inputs(handle, q_ptr, v_ptr, a_ptr, n_coupled_dof, h, q_c, v_c, a_c, err_stat)
     IF (err_stat /= CD_C_OK) RETURN
+    ! a positive step too small to integrate (NaN, Inf and dt <= 0 are named by the route)
+    IF (dt > 0.0_C_DOUBLE .AND. dt < REAL(CD_MIN_TIME_STEP, C_DOUBLE)) THEN
+      CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_Step: dt is below the smallest time step, 1e-100 s: '// &
+                      'the time integration divides by dt^2', err_stat)
+      RETURN
+    END IF
     IF (h%use_agg) THEN
       IF (h%agg_host_fluid .AND. .NOT. h%fluid_ready) THEN
         CALL set_status(h, CD_C_BAD_INPUT, 'CableDyn_Step: the model takes a host fluid field: call '// &

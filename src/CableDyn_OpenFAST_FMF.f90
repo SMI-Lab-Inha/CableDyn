@@ -8,7 +8,7 @@ MODULE CableDyn_OpenFAST_FMF
   !! current registry-style types, point-mesh adapter, and lifecycle shell into a
   !! single Init/UpdateStates/CalcOutput/End object graph. The generated OpenFAST
   !! binding must preserve this behavior when it is linked against OpenFAST types.
-  USE CableDyn_Precision, ONLY: wp, CD_ZERO
+  USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_MIN_TIME_STEP
   USE CableDyn_Model, ONLY: CD_ModelType
   USE CableDyn_System, ONLY: CD_SystemType, CD_SystemPointType, CD_LineEndpointBinding, CD_Get_System_PointBlocks, &
                              CD_System_NDynamicPoints, &
@@ -113,6 +113,12 @@ CONTAINS
       ErrMsg = 'CableDyn_OpenFAST_FMF: dt must be positive'
       RETURN
     END IF
+    IF (dt < CD_MIN_TIME_STEP) THEN
+      ErrStat = CD_FMF_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_FMF: dt is below the smallest time step, 1e-100 s: the time '// &
+               'integration divides by dt^2'
+      RETURN
+    END IF
     candidate%init_input%n_coupled_dof = 0
     candidate%init_input%dt = dt
     CALL CD_FAST_Init_From_Points(candidate%fast, models, points, bindings, es, em)
@@ -169,6 +175,12 @@ CONTAINS
     IF (.NOT. (dt > CD_ZERO)) THEN
       ErrStat = CD_FMF_BADINPUT
       ErrMsg = 'CableDyn_OpenFAST_FMF: dt must be positive'
+      RETURN
+    END IF
+    IF (dt < CD_MIN_TIME_STEP) THEN
+      ErrStat = CD_FMF_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_FMF: dt is below the smallest time step, 1e-100 s: the time '// &
+               'integration divides by dt^2'
       RETURN
     END IF
     candidate%init_input%dt = dt
@@ -228,6 +240,12 @@ CONTAINS
     IF (.NOT. (dt > CD_ZERO)) THEN
       ErrStat = CD_FMF_BADINPUT
       ErrMsg = 'CableDyn_OpenFAST_FMF: dt must be positive'
+      RETURN
+    END IF
+    IF (dt < CD_MIN_TIME_STEP) THEN
+      ErrStat = CD_FMF_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_FMF: dt is below the smallest time step, 1e-100 s: the time '// &
+               'integration divides by dt^2'
       RETURN
     END IF
     candidate%init_input%dt = dt
@@ -333,6 +351,12 @@ CONTAINS
     IF (.NOT. (dt > CD_ZERO)) THEN
       ErrStat = CD_FMF_BADINPUT
       ErrMsg = 'CableDyn_OpenFAST_FMF: step dt must be positive'
+      RETURN
+    END IF
+    IF (dt < CD_MIN_TIME_STEP) THEN
+      ErrStat = CD_FMF_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_FMF: dt is below the smallest time step, 1e-100 s: the time '// &
+               'integration divides by dt^2'
       RETURN
     END IF
     CALL CD_FAST_Set_PointMesh_State(self%point_mesh, position, velocity, acceleration, es, em)
