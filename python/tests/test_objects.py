@@ -608,3 +608,88 @@ def test_c_api_takes_bodies_or_rods_not_both(tmp_path):
     still.write_text(base, encoding="utf-8")
     with CableDyn() as model:
         model.init_deck(still)
+
+
+_SPLIT_LINE_DECK = """Split line: an EI = 0 chain section and a finite-EI section of one line
+--- LINE TYPES ---
+Name Diam Mass EA BA EI Cdn Cdt Can Cat
+chain 0.252 390.0 1.674e9 -1.0 0.0 1.37 0.64 1.0 0.0
+stiff 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0
+--- POINTS ---
+ID Type X Y Z Mass Vol CdA Ca
+1 Fixed 400.0 0.0 -50.0 0 0 0 0
+2 Coupled 0.0 0.0 0.0 0 0 0 0
+--- LINES ---
+ID NodeA NodeB Outputs
+1 2 1 -
+--- SECTIONS ---
+LineID LineType Length NumSegs
+{sections}--- OPTIONS ---
+9.80665 g
+1025.0 rhoW
+50.0 WtrDpth
+0.1 dtM
+1.0 TMax
+{motion}--- OUTPUTS ---
+FairTen1
+AnchTen1
+L1N10px
+L1N10pz
+Ten1N30
+L1N35pz
+Curv1N35
+--- need this line ---
+"""
+
+
+def _surge(t: float) -> tuple[float, float, float]:
+    """A smooth 0.5 m surge of the fairlead from rest over the first second."""
+    s = min(max(t, 0.0), 1.0)
+    return (
+        0.5 * (10 * s**3 - 15 * s**4 + 6 * s**5),
+        0.5 * (30 * s**2 - 60 * s**3 + 30 * s**4),
+        0.5 * (60 * s - 180 * s**2 + 120 * s**3),
+    )
+
+
+@needs_driver
+@pytest.mark.parametrize(
+    "sections",
+    ["1 chain 200.0 20\n1 stiff 210.0 21\n", "1 stiff 210.0 21\n1 chain 200.0 20\n"],
+    ids=["chain-at-fairlead", "chain-at-anchor"],
+)
+def test_split_line_runs_standalone_as_on_the_c_api(tmp_path, sections):
+    # a line of EI = 0 and finite-EI sections is one finite-EI cable on every route
+    times = [round(0.1 * k, 10) for k in range(11)]
+    (tmp_path / "m.txt").write_text(
+        "".join(
+            f"{t:.10g} 2 {_surge(t)[0]!r} 0 0 {_surge(t)[1]!r} 0 0 {_surge(t)[2]!r} 0 0\n"
+            for t in times
+        ),
+        encoding="utf-8",
+    )
+    deck = _write(
+        tmp_path,
+        "split.dat",
+        _SPLIT_LINE_DECK.format(sections=sections, motion="m.txt motionFile\n"),
+    )
+    result = _driver_run(deck, tmp_path)
+    main = result.read_main()
+    channels = list(main.channels[1:])
+    host = _write(tmp_path, "split_host.dat", _SPLIT_LINE_DECK.format(sections=sections, motion=""))
+    with CableDyn(host) as model:
+        (line,) = model.lines
+        assert line.finite_ei
+        q0, _, _ = model.get_coupled_motion()
+        for k, t in enumerate(times):
+            if k:
+                x, v, a = _surge(t)
+                model.step(
+                    0.1,
+                    q0 + np.array([x, 0.0, 0.0]),
+                    np.array([v, 0.0, 0.0]),
+                    np.array([a, 0.0, 0.0]),
+                )
+            row = int(np.argmin(np.abs(main.values[:, 0] - t)))
+            assert abs(main.values[row, 0] - t) < 1.0e-9
+            _assert_close(model.channels(channels), main.values[row, 1:], f"channels at t={t}")

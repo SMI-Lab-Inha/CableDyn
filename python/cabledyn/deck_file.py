@@ -4822,17 +4822,6 @@ class DeckFile:
                 f"{self._label}: a mixed-topology deck (bodies, rods, dynamic points, EI=0 and "
                 "finite-EI lines together) does not support motionFile coupling"
             )
-        if deck_driver_route and not needs_multibody:
-            # native CD_Run_Deck_Driver: the standalone finite-EI march builds every line as a
-            # finite-EI cable, so a line's sections all need a finite EI
-            for line_id, section_types in section_types_by_line.items():
-                finite_sections = [line_type_meta[name][3] > 0.0 for name in section_types]
-                if any(finite_sections) and not all(finite_sections):
-                    raise DeckFormatError(
-                        f"{self._label}: LINE {line_id} combines EI=0 and finite-EI sections, "
-                        "which the standalone finite-EI march does not take: give every section "
-                        "of the line a finite EI"
-                    )
         if deck_driver_route and needs_multibody and (has_dtm or has_tmax):
             self._check_multibody_cable_ends(
                 finite_line_ids,
