@@ -90,6 +90,17 @@ V_TOLERANCE = (0.02, 0.03, 0.05, 0.03)
 WC_TOLERANCE = 0.15
 
 
+def executable(name: str) -> Path:
+    """An executable given as a path (absolute, or relative to the working directory) or as a bare
+    name searched on PATH, as an absolute path."""
+    if os.sep in name or (os.altsep and os.altsep in name) or Path(name).is_file():
+        return Path(name).resolve()
+    found = shutil.which(name)
+    if found is None:
+        raise SystemExit(f"executable {name!r} not found on PATH")
+    return Path(found).resolve()
+
+
 # --------------------------------------------------------------------------------------------
 # Process timing
 # --------------------------------------------------------------------------------------------
@@ -304,7 +315,7 @@ def write_cabledyn_case(case: str, site: str | None, directory: Path) -> dict:
 
 
 def run_cabledyn(args, case: str, site: str | None) -> dict:
-    driver = Path(args.cabledyn_driver).resolve()
+    driver = executable(args.cabledyn_driver)
     directory = args.work / "cabledyn" / args.cabledyn_label / (case if site is None else f"{case}_{site}")
     if directory.exists():
         shutil.rmtree(directory)
@@ -407,7 +418,7 @@ def run_orcaflex(args, case: str, site: str | None) -> dict:
 def run_moordyn_f(args, case: str, site: str) -> dict:
     from moordyn_lazywave_dynamic_reference import score
 
-    driver = Path(args.moordyn_f_driver).resolve()
+    driver = executable(args.moordyn_f_driver)
     base = args.work / "moordyn-f" / f"{case}_{site}"
 
     def one(k: int) -> dict:
@@ -452,10 +463,10 @@ def moordyn_c_exe(args) -> Path:
     if not dll.exists():
         raise FileNotFoundError(f"MoorDyn-C library not found: {dll}")
     include = [src / "source", build / "source", src / "source" / "Eigen", build]
-    cmd = [args.gxx, "-O2", "-std=gnu++17", *[f"-I{p}" for p in include],
+    cmd = [str(executable(args.gxx)), "-O2", "-std=gnu++17", *[f"-I{p}" for p in include],
            str(SCRIPTS / "moordyn_c_driver.cpp"), str(dll), "-o", str(exe)]
     env = dict(os.environ)
-    env["PATH"] = str(Path(args.gxx).parent) + os.pathsep + env.get("PATH", "")
+    env["PATH"] = str(executable(args.gxx).parent) + os.pathsep + env.get("PATH", "")
     subprocess.run(cmd, check=True, env=env)
     shutil.copy2(dll, exe_dir / dll.name)
     return exe
@@ -470,7 +481,7 @@ def run_moordyn_c(args, case: str) -> dict:
     cmd = [str(exe), "deck.txt", str(pm.WC_AMP), str(pm.WC_PERIOD), str(pm.WC_WARMUP), str(pm.WC_SCORE),
            str(pm.WC_COUPLING_DT), "tension.txt"]
     env = dict(os.environ)
-    env["PATH"] = str(exe.parent) + os.pathsep + str(Path(args.gxx).parent) + os.pathsep + env.get("PATH", "")
+    env["PATH"] = str(exe.parent) + os.pathsep + str(executable(args.gxx).parent) + os.pathsep + env.get("PATH", "")
 
     def one(k: int) -> dict:
         record = run_process(cmd, base, env)
