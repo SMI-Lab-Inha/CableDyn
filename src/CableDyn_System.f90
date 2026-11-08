@@ -1493,27 +1493,24 @@ CONTAINS
     ! Line models own disjoint state and Newton workspaces. Workers stage results;
     ! the following serial pass selects the first error and reduces flags in deck order.
     n_team = line_team_size(system)
-    !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(i) NUM_THREADS(n_team) IF(n_team > 1)
-    CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
-    ! DYNAMIC: a line that is sub-stepped (CD_Step_Model) costs several of its plain steps, so the
-    ! lines take unequal times; each line's result does not depend on the thread that steps it
-    !$OMP DO SCHEDULE(DYNAMIC)
-    DO i = 1, system%n_lines
-      ! the halves of a stall recovery (0 < depth < MAX_SUBDIV) take their steps as given, as the
-      ! rungs of CD_Step_Model_Recovering do: no rotation- and snap-resolved sub-steps of
-      ! sub-steps. The plain full-dt rerun at the depth floor (depth = MAX_SUBDIV) steps every line
-      ! as the nominal step (depth 0) does, so its result is that of the step without the
-      ! fallback; the junction step (JUNCTION_NO_SUBDIV = MAX_SUBDIV) likewise, its armed lines
-      ! being taken as given by CD_Step_Model itself
-      CALL CD_Step_Model(system%lines(i), dt, system%line_converged(i), system%line_stalled(i), &
-                         system%line_iter(i), system%line_stat(i), system%line_msg(i), &
-                         prescribed_q=system%lines(i)%q_prescribed_work, &
-                         prescribed_v=system%lines(i)%v_prescribed_work, &
-                         prescribed_a=system%lines(i)%a_prescribed_work, &
-                         as_given=depth > 0 .AND. depth < MAX_SUBDIV)
-    END DO
-    !$OMP END DO
-    !$OMP END PARALLEL
+    IF (n_team > 1) THEN
+      !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(i) NUM_THREADS(n_team)
+      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+      ! DYNAMIC: a line that is sub-stepped (CD_Step_Model) costs several of its plain steps, so the
+      ! lines take unequal times; each line's result does not depend on the thread that steps it
+      !$OMP DO SCHEDULE(DYNAMIC)
+      DO i = 1, system%n_lines
+        CALL step_line(i)
+      END DO
+      !$OMP END DO
+      !$OMP END PARALLEL
+    ELSE
+      ! one thread: the same loop without entering a parallel region
+      CALL CD_Fatal_Thread_Init()
+      DO i = 1, system%n_lines
+        CALL step_line(i)
+      END DO
+    END IF
     DO i = 1, system%n_lines
       IF (system%line_stat(i) /= CD_MODEL_OK) THEN
         CALL restore_failed_step(system, system%line_stat(i), 'line step failed: '//TRIM(system%line_msg(i)), &
@@ -1676,6 +1673,25 @@ CONTAINS
     END IF
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
+
+  CONTAINS
+
+    SUBROUTINE step_line(il)
+      !! Step line il with its staged prescribed motion. The halves of a stall recovery
+      !! (0 < depth < MAX_SUBDIV) take their steps as given, as the rungs of
+      !! CD_Step_Model_Recovering do: no rotation- and snap-resolved sub-steps of sub-steps. The
+      !! plain full-dt rerun at the depth floor (depth = MAX_SUBDIV) steps every line as the
+      !! nominal step (depth 0) does, so its result is that of the step without the fallback; the
+      !! junction step (JUNCTION_NO_SUBDIV = MAX_SUBDIV) likewise, its armed lines being taken as
+      !! given by CD_Step_Model itself.
+      INTEGER, INTENT(IN) :: il
+      CALL CD_Step_Model(system%lines(il), dt, system%line_converged(il), system%line_stalled(il), &
+                         system%line_iter(il), system%line_stat(il), system%line_msg(il), &
+                         prescribed_q=system%lines(il)%q_prescribed_work, &
+                         prescribed_v=system%lines(il)%v_prescribed_work, &
+                         prescribed_a=system%lines(il)%a_prescribed_work, &
+                         as_given=depth > 0 .AND. depth < MAX_SUBDIV)
+    END SUBROUTINE step_line
   END SUBROUTINE CD_Step_System
 
   SUBROUTINE CD_Step_System_Junction(system, dt, q_coupled, v_coupled, a_coupled, active, warm, loads, kmat, &
@@ -2432,17 +2448,23 @@ CONTAINS
       RETURN
     END IF
     n_team = line_team_size(system)
-    !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(i, lo, hi) NUM_THREADS(n_team) IF(n_team > 1)
-    CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
-    !$OMP DO SCHEDULE(STATIC)
-    DO i = 1, system%n_lines
-      lo = system%line_off(i)
-      hi = system%line_off(i + 1) - 1
-      CALL CD_Calc_Model_CoupledLoads(system%lines(i), system%line_load_work(lo:hi), &
-                                      system%line_stat(i), system%line_msg(i))
-    END DO
-    !$OMP END DO
-    !$OMP END PARALLEL
+    IF (n_team > 1) THEN
+      !$OMP PARALLEL DEFAULT(SHARED) PRIVATE(i) NUM_THREADS(n_team)
+      CALL CD_Fatal_Thread_Init() ! this thread can report its own stack overflow
+      !$OMP DO SCHEDULE(STATIC)
+      DO i = 1, system%n_lines
+        CALL line_coupled_loads(i)
+      END DO
+      !$OMP END DO
+      !$OMP END PARALLEL
+    ELSE
+      ! one thread: the same loop without entering a parallel region (whose team setup costs
+      ! more than a short line's loads)
+      CALL CD_Fatal_Thread_Init()
+      DO i = 1, system%n_lines
+        CALL line_coupled_loads(i)
+      END DO
+    END IF
     DO i = 1, system%n_lines
       IF (system%line_stat(i) /= CD_MODEL_OK) THEN
         ErrStat = CD_SYSTEM_SOLVEFAIL
@@ -2453,6 +2475,18 @@ CONTAINS
       hi = system%line_off(i + 1) - 1
       CALL accumulate_mapped_loads(system, lo, hi, system%line_load_work(lo:hi), coupled_loads)
     END DO
+
+  CONTAINS
+
+    SUBROUTINE line_coupled_loads(il)
+      !! The coupled loads of line il into its slice of the per-line workspace.
+      INTEGER, INTENT(IN) :: il
+      INTEGER :: l_lo, l_hi
+      l_lo = system%line_off(il)
+      l_hi = system%line_off(il + 1) - 1
+      CALL CD_Calc_Model_CoupledLoads(system%lines(il), system%line_load_work(l_lo:l_hi), &
+                                      system%line_stat(il), system%line_msg(il))
+    END SUBROUTINE line_coupled_loads
   END SUBROUTINE CD_Calc_System_CoupledLoads
 
   INTEGER FUNCTION line_team_size(system) RESULT(n_team)
