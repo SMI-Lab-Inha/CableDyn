@@ -567,7 +567,9 @@ _STATIC_CASES = [
 def _shipped_decks() -> list[str]:
     decks = [path.name for path in sorted(EXAMPLES.glob("*.dat"))]
     decks.remove("cabledyn_options_reference.dat")
-    return [*decks, "moordynC_wavekin/chain_wavekin7_currents1.dat"]
+    # the decks of the MoorDyn-C kinematics folders, which read fixed-name files beside them
+    folders = sorted(EXAMPLES.glob("moordynC_*/*.dat"))
+    return [*decks, *(path.relative_to(EXAMPLES).as_posix() for path in folders)]
 
 
 def _carries_waves(name: str) -> bool:

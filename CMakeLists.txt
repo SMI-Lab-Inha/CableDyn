@@ -2032,6 +2032,39 @@ if(Python3_Interpreter_FOUND)
     message(STATUS "viv_lockin: skipped (numpy not importable in ${Python3_EXECUTABLE})")
   endif()
 
+  # Deck-driver end-to-end oracles (need numpy): one linear sea written as deck wave rows, as a
+  # MoorDyn-C WaveKin 7 table and as a WaveKin 3 record gives one line response; the modes of a
+  # two-section string are the roots of its closed-form frequency equation; a cylindrical bend
+  # stiffener is the section of cable and sleeve, and a cable clamped at the angle a off its
+  # tangent carries the root moment a sqrt(EI T).
+  if(_range_tdp_numpy_rc EQUAL 0)
+    add_test(NAME wave_input_equivalence
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_wave_input_equivalence.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --output ${CMAKE_BINARY_DIR}/wave_input_equivalence)
+    set_tests_properties(wave_input_equivalence PROPERTIES
+      LABELS "python;driver;integration;dynamic;validation"
+      TIMEOUT 600
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
+    add_test(NAME composite_string_modes
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_composite_string_modes.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --output ${CMAKE_BINARY_DIR}/composite_string_modes)
+    set_tests_properties(composite_string_modes PROPERTIES
+      LABELS "python;driver;integration;static;modal;validation"
+      TIMEOUT 600
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
+    add_test(NAME stiffener_section_equivalence
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_stiffener_section_equivalence.py
+                     --exe $<TARGET_FILE:cabledyn>
+                     --examples ${CMAKE_CURRENT_SOURCE_DIR}/examples
+                     --output ${CMAKE_BINARY_DIR}/stiffener_section_equivalence)
+    set_tests_properties(stiffener_section_equivalence PROPERTIES
+      LABELS "python;driver;integration;static;dynamic;finite_ei;validation"
+      TIMEOUT 600
+      ENVIRONMENT "${_cabledyn_python_test_environment}")
+  endif()
+
   # Node channels on a refined finite-EI line name deck nodes: the static profile's DeckNode
   # column, the standalone static and dynamic cubic-Hermite routes, the mixed route (the OpenFAST
   # aggregate evaluator) and the C API on the coarse lazy-wave deck the static solve refines
@@ -3476,18 +3509,36 @@ foreach(_dyn_example IN ITEMS dynamic_chain_held dynamic_chain_current dynamic_c
 endforeach()
 # Feature examples (vessel motion and RAOs, discrete buoyancy, range graphs and touchdown, wave
 # spectra, stream waves, anisotropic friction, modal analysis, clamped ends on bodies, MoorDyn-C
-# kinematics files, bodies and rods, line failure): every shipped deck must run to completion.
+# kinematics files, bodies and rods, line failure, cross-flow VIV, the mode-1 axial damping ratio,
+# composite synthetic ropes on a floater, a cable between two moving ends, attachments under a
+# bend stiffener, bathymetry with as-laid friction, torsion with one end free): every shipped
+# deck must run to completion.
 foreach(_feature_example IN ITEMS
     lazy_wave_vessel_motion lazy_wave_vessel_rao lazy_wave_bend_stiffener lazy_wave_buoyancy_modules lazy_wave_buoyancy_smeared
     chain_range_tdp chain_torsethaugen_spread chain_two_train_sea stream_wave_shallow_chain
     airy_wave_shallow_chain laid_cable_cross_current chain_modes lazy_wave_modes buoy_clamped_cable
     moordynC_wavekin/chain_wavekin7_currents1 spar_pinned_rods mixed_body_rods_points
-    als_volturnus_line_break_time als_volturnus_line_break_tension)
+    als_volturnus_line_break_time als_volturnus_line_break_tension
+    viv_taut_line_crossflow composite_axial_damping_mode1 composite_ve_syrope_jonswap
+    composite_chain_poly_chain_modes shared_cable_two_floaters lazy_wave_modules_stiffener
+    chain_sloped_bathymetry_friction torsion_free_end_armoured_cable
+    moordynC_currents/chain_wavekin3_currents2 moordynC_currents/chain_currents5_grid)
   get_filename_component(_feature_name "${_feature_example}" NAME)
   add_test(NAME example_${_feature_name}
     COMMAND cabledyn "${CMAKE_CURRENT_SOURCE_DIR}/examples/${_feature_example}.dat"
       "${CMAKE_CURRENT_BINARY_DIR}/example_${_feature_name}")
   set_tests_properties(example_${_feature_name} PROPERTIES LABELS "fortran;driver;integration;example;dynamic")
+endforeach()
+# The shipped decks no other test runs by name (static moorings, a buoy and a spar on legs):
+# each must run as shipped.
+foreach(_shipped_example IN ITEMS
+    composite_chain_wire nylon_taut_mooring semitaut_chain_polyester spread_4line_chain
+    taut_chain_steep ve_nylon_loaddependent_mooring wd0050_chain wire_catenary_mooring
+    rigid6_buoy rod_moored_spar)
+  add_test(NAME example_${_shipped_example}
+    COMMAND cabledyn "${CMAKE_CURRENT_SOURCE_DIR}/examples/${_shipped_example}.dat"
+      "${CMAKE_CURRENT_BINARY_DIR}/example_${_shipped_example}")
+  set_tests_properties(example_${_shipped_example} PROPERTIES LABELS "fortran;driver;integration;example")
 endforeach()
 
 # Composite grounded moorings must initialize at every mesh refinement of the shipped decks.

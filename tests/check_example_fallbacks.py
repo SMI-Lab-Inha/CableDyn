@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Run every shipped example deck and fail on a solver fallback note.
 
-Each deck of the examples directory runs on the given driver, single-threaded, with its output
-root under a scratch directory. A deck offends when the driver does not exit with 0, runs past
+Each deck of the examples directory and of its MoorDyn-C kinematics folders (moordynC_*) runs on
+the given driver, single-threaded, from its own folder, with its output root under a scratch
+directory. A deck offends when the driver does not exit with 0, runs past
 the timeout, or writes a fallback note to the console: a deck that should converge cleanly must
 not reach its result through a failed Newton solve, a stall, a looser tolerance or a sub-step that
 gave up. Such a note marks round-off fragility, which a different BLAS kernel can turn into a
@@ -71,6 +72,15 @@ def fallback_notes(console: str) -> list[str]:
             line = console[start : stop if stop >= 0 else len(console)].strip()
             found.append(f"{name}: {line[:200]}")
     return found
+
+
+def example_decks(examples: Path) -> list[Path]:
+    """The shipped decks: every .dat of the examples directory and of its MoorDyn-C kinematics
+    folders (moordynC_*), whose decks read fixed-name files beside them. The data and openfast
+    folders hold auxiliary files and coupled decks, not standalone decks."""
+    decks = [path for path in examples.glob("*.dat") if path.is_file()]
+    decks += [path for path in examples.glob("moordynC_*/*.dat") if path.is_file()]
+    return sorted(decks, key=lambda path: path.name)
 
 
 def run_deck(
@@ -185,7 +195,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--kernel-only needs --coretype")
 
     examples = args.examples.resolve()
-    decks = sorted(path for path in examples.glob("*.dat") if path.is_file())
+    decks = example_decks(examples)
     if not decks:
         print(f"FAIL: no example decks in {examples}")
         return 2
