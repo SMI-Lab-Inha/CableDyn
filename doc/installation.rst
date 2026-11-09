@@ -6,8 +6,8 @@ Installation
 There are two ways to get CableDyn:
 
 * **Windows release (recommended for users).** Two single-file executables and a Python wheel,
-  attached to the `v0.4.1 GitHub release
-  <https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.1>`_. No installer, no compiler,
+  attached to the `v0.4.2 GitHub release
+  <https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.2>`_. No installer, no compiler,
   and no runtime DLLs. Start here if you want a first result in five minutes.
 * **Build from source** (Windows, Linux, macOS). Needed for the C/Python in-process API, for
   development, and on every platform other than Windows x64.
@@ -35,11 +35,11 @@ What is on the release page
      - OpenFAST v5.0.0 (maintained by NLR, the National Laboratory of the Rockies, formerly
        NREL) with CableDyn built in as ``CompMooring = 5``; stock MoorDyn
        (``CompMooring = 3``) is still available in the same binary (:doc:`openfast`). It names
-       itself ``OpenFAST-v5.0.0-CableDyn-0.4.1`` (``openfast.exe -v`` and the start of every run).
-   * - ``cabledyn-0.4.1-py3-none-any.whl``
+       itself ``OpenFAST-v5.0.0-CableDyn-0.4.2`` (``openfast.exe -v`` and the start of every run).
+   * - ``cabledyn-0.4.2-py3-none-any.whl``
      - the pure-Python package: deck editing, case generation, driver automation, result
        readers, fatigue and spectral post-processing (:doc:`python`)
-   * - ``cabledyn-0.4.1.tar.gz``
+   * - ``cabledyn-0.4.2.tar.gz``
      - the Python source distribution (same package as the wheel)
    * - ``SHA256SUMS.txt``
      - SHA-256 checksums of the four files above
@@ -65,7 +65,7 @@ Download and verify
 ~~~~~~~~~~~~~~~~~~~
 
 1. Create a folder, for example ``C:\CableDyn``, and download into it ``CableDyn_driver.exe``,
-   ``openfast.exe`` (only if you will couple with OpenFAST), ``cabledyn-0.4.1-py3-none-any.whl``
+   ``openfast.exe`` (only if you will couple with OpenFAST), ``cabledyn-0.4.2-py3-none-any.whl``
    (only if you will use Python), ``SHA256SUMS.txt``, and ``Source code (zip)``.
 2. Verify every downloaded asset against ``SHA256SUMS.txt`` in PowerShell:
 
@@ -85,8 +85,8 @@ Download and verify
 
       OK              CableDyn_driver.exe
       OK              openfast.exe
-      OK              cabledyn-0.4.1-py3-none-any.whl
-      not downloaded  cabledyn-0.4.1.tar.gz
+      OK              cabledyn-0.4.2-py3-none-any.whl
+      not downloaded  cabledyn-0.4.2.tar.gz
 
    ``not downloaded`` only reports an asset you chose to skip.
 
@@ -95,7 +95,7 @@ Download and verify
    ``(Get-FileHash .\CableDyn_driver.exe -Algorithm SHA256).Hash`` with its line in
    ``SHA256SUMS.txt`` (the comparison is case-insensitive).
 
-3. Unzip ``Source code (zip)``. It expands to a folder such as ``CableDyn-0.4.1``; copy (or move)
+3. Unzip ``Source code (zip)``. It expands to a folder such as ``CableDyn-0.4.2``; copy (or move)
    its ``examples`` folder into ``C:\CableDyn`` so the layout is::
 
       C:\CableDyn\
@@ -121,7 +121,7 @@ Check that it runs
 .. code-block:: text
 
     ===================================================================
-      CableDyn  v0.4.1
+      CableDyn  v0.4.2
       Geometrically exact finite-element statics and dynamics of
       mooring lines and dynamic power cables for floating offshore wind
     -------------------------------------------------------------------
@@ -177,8 +177,8 @@ the CableDyn shared library and the standalone driver, so the package runs decks
 release executables. On another platform pip builds from the source distribution, which needs a
 Fortran compiler and LAPACK.
 
-The pure Python wheel on the release page (``cabledyn-0.4.1-py3-none-any.whl``) carries no
-solver; install it with ``py -m pip install .\cabledyn-0.4.1-py3-none-any.whl``. The package
+The pure Python wheel on the release page (``cabledyn-0.4.2-py3-none-any.whl``) carries no
+solver; install it with ``py -m pip install .\cabledyn-0.4.2-py3-none-any.whl``. The package
 finds the driver in this order:
 
 #. an explicit path, ``CableDynDriver(r"C:\CableDyn\CableDyn_driver.exe")`` or
@@ -273,7 +273,7 @@ The script downloads the LAPACK source from its release tag and verifies its SHA
 integration to OpenFAST itself (do not pre-apply it), builds
 both executables, rejects any non-system DLL import, runs a standalone and a coupled
 ``CompMooring = 5`` / ``CompMooring = 3`` smoke case with a system-only ``PATH``, and writes
-``SHA256SUMS.txt`` into ``build-static-release\dist``. The v0.4.1 assets were built from
+``SHA256SUMS.txt`` into ``build-static-release\dist``. The v0.4.2 assets were built from
 OpenFAST revision ``2895884d2be01862173c88d70f86b358d2f1a50a`` and smoke-tested against
 ``r-test`` revision ``dd5feaaaa500ba7283140107806300d551cff0a7``.
 

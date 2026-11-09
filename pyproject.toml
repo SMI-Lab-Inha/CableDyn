@@ -12,7 +12,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "cabledyn"
-version = "0.4.1"
+version = "0.4.2"
 description = "Python tools for CableDyn, a geometrically exact finite-element solver for mooring lines and dynamic power cables"
 readme = "python/README.md"
 requires-python = ">=3.10"

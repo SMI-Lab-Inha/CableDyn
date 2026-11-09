@@ -8,6 +8,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-09
+
 ### Added
 
 - OPTION `axialDampingRatio` (`segment` or `mode1`): under `mode1` a negative `BA` is the damping
@@ -1048,7 +1050,8 @@ Corrections made during the pre-release review.
   values of the shipped example decks and states which tension (end element or
   `FairTen` end force) each comparison uses.
 
-[Unreleased]: https://github.com/SMI-Lab-Inha/CableDyn/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/SMI-Lab-Inha/CableDyn/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.2
 [0.4.1]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.1
 [0.4.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.0
 [0.3.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.3.0

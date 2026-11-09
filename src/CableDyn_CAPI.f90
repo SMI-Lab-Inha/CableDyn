@@ -88,9 +88,9 @@ MODULE CableDyn_CAPI
   INTEGER(C_INT), PARAMETER :: CD_C_NOT_INITIALIZED = 5_C_INT
   INTEGER(C_INT), PARAMETER :: CD_C_VERSION_MAJOR = 0_C_INT
   INTEGER(C_INT), PARAMETER :: CD_C_VERSION_MINOR = 4_C_INT
-  INTEGER(C_INT), PARAMETER :: CD_C_VERSION_PATCH = 1_C_INT
+  INTEGER(C_INT), PARAMETER :: CD_C_VERSION_PATCH = 2_C_INT
   INTEGER(C_INT), PARAMETER :: CD_C_ABI_VERSION = 1_C_INT
-  CHARACTER(*), PARAMETER :: CD_C_VERSION_STRING = 'CableDyn 0.4.1 C-ABI 1'
+  CHARACTER(*), PARAMETER :: CD_C_VERSION_STRING = 'CableDyn 0.4.2 C-ABI 1'
   !> Minor extension level of ABI 1: 1 adds the in-process object queries, 2 the host-coupling
   !> calls (initialization at host positions, state save/restore, the coupled layout query), 3
   !> the host rotations (initialization for a host that turns its coupled points, their

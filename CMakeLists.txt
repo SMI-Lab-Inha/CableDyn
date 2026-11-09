@@ -8,7 +8,7 @@
 #
 cmake_minimum_required(VERSION 3.20)
 # VERSION is a bare numeric triple matching the release version.
-project(CableDynCore VERSION 0.4.1 LANGUAGES C Fortran
+project(CableDynCore VERSION 0.4.2 LANGUAGES C Fortran
         DESCRIPTION "CableDyn geometrically exact cable/mooring solver — Fortran core")
 
 option(CABLEDYN_ENABLE_COVERAGE "Instrument the GNU Fortran core for gcov/gcovr source coverage" OFF)
