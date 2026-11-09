@@ -8,6 +8,77 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- OPTION `axialDampingRatio` (`segment` or `mode1`): under `mode1` a negative `BA` is the damping
+  ratio of the line's first axial mode, the same on any mesh (BA = 2 zeta EA / omega_1, omega_1
+  from the line's sections). `segment`, MoorDyn's damping ratio per segment, stays the default.
+- An initialisation note for every line with a negative `BA` per segment: the damping ratio this
+  gives the line's first axial mode on its mesh, about zeta pi/(2N) on N elements.
+- `VIVphaseSeed zero` starts every VIV phase at zero, the start of MoorDyn-F in OpenFAST v5.0.0,
+  which does not carry its phase seed into its state; the default `spread` keeps MoorDyn-C's
+  `2 pi i/N`.
+- Initialisation notes for a modal analysis about an unstable static state (the line and the
+  number of its modes with omega^2 < 0) and for a `Point3` buoy that starts off balance under
+  the default `bodyIC static` (the unbalanced force and the distance to the buoy's static
+  balance as a `Free` point). The static solve does not place a `Point3` buoy: a 112 t, 259 m^3
+  buoy started with 1.5 MN unbalanced and surfaced in 2 s without a word.
+- Example decks for cross-flow VIV, the mode-1 axial damping ratio, MoorDyn-C `WaveKin 3` and
+  `Currents 2`/`5` files, viscoelastic and Syrope composite legs on an RAO-driven floater, a
+  cable shared by two moving floaters, buoyancy modules under a bend stiffener, a sloping
+  bathymetry with as-laid friction, torsion with one end free, and the modes of a composite
+  line; every shipped deck, those of the `moordynC_*` folders included, now runs in CTest and in
+  the example fallback scan.
+- Regression tests through the deck driver: one linear sea as deck wave rows, `WaveKin 7` and
+  `WaveKin 3` gives one response; the modes of a two-section string match its closed-form
+  frequency equation at second order in the element length; a cylindrical bend stiffener
+  matches the equivalent cable-and-sleeve section, and a clamped cable's root moment is
+  `a sqrt(EI T)`.
+
+### Changed
+
+- The modal analysis (`nModes`) of a long line is many times faster. Its lowest eigenvalues come
+  from a shift-invert block Lanczos iteration on the banded Cholesky factor of the stiffness,
+  their count certified by the inertia of `K - σM`, instead of the band reduction (LAPACK
+  `dsbgvx`), whose time grew with the square of the line length. The 10 modes of a 1024-element
+  finite-EI line take 0.14 s instead of 3.7 s; on a 4000-element line 10 modes take 0.5 s
+  instead of 55 s and 50 modes 2.9 s instead of 59 s (GNU build, one thread). Shapes and
+  frequencies still come from inverse iteration and the quadruple-precision Rayleigh quotient:
+  on the same matrices the frequencies agree to 1e-15, and `lazy_wave_modes.dat` writes the same
+  frequencies and shapes within 2e-8 of a unit displacement. Short lines, an indefinite or
+  singular stiffness, and an iteration that is not certified keep the band reduction. A mode
+  whose largest components are equally large (the mirrored nodes of a symmetric line) takes its
+  sign from the first of them in node order instead of from round-off.
+- The finite-EI dynamic step does less redundant work: band operators are swept over their stored
+  rows only, the step mass is summed in one pass, the rigid-end transport tangent and the rigid
+  end-connection moment are formed from the rows they need, the element kernels form their
+  Gauss-point factors once, and each element kernel is evaluated once for its load and its
+  tangent where a tangent follows at the same state. Results are bit-identical; the finite-EI
+  example decks run 2-15 % faster.
+- The coupled loads of an `EI = 0` line attached at its end nodes are formed from those nodes'
+  rows only, and a system stepped on one thread runs its per-line loops without entering an
+  OpenMP region. Results are bit-identical; a moored Rigid6 body on three chains runs about 7 %
+  faster.
+- With `modified_newton True`, a finite-EI cable in the monolithic step of the multibody march
+  keeps full Newton: it is stepped again from the same start at every coupling iteration, where
+  reuse cost more than it saved (`mixed_body_rods_points.dat` with the option: 7.0 s, now 5.6 s).
+  The documented speed trade-off of the option is measured again on the examples.
+- A finite-EI static solve whose equilibrium is in axial compression (with `tensile_safety True`)
+  stops refining once two passes leave the compression where it was (to 0.1 %), instead of
+  splitting elements up to the element budget: a power cable given twice its length fails in 6 s
+  instead of 76 s, with the same compression named. Decks that refinement does resolve are
+  unchanged (the static matrix and every example give identical outputs).
+- The standalone driver runs a line combining `EI = 0` and finite-EI sections as one finite-EI
+  cable, as the C API and OpenFAST do, whatever the other lines of the deck; it refused such a
+  line unless the deck also had a separate `EI = 0` line. Its results match the C API's stepping
+  of the same deck to the digits of the output file.
+- The L5 wall-clock records (`validation/performance` and the L5 rows of `VALIDATION.md`) are
+  measured again on one host, with the v0.4.1 release driver and a GNU build. The new
+  `validation/scripts/performance_records.py` builds the lazy-wave span, one-hour mooring and
+  tension-only chain models for CableDyn, OrcaFlex, MoorDyn-F and MoorDyn-C, checks each against
+  its reference response (the records are written only inside it), times them and writes the
+  records.
+
 ### Fixed
 
 - Finite-EI node tension, curvature and bend moment next to the touchdown point: the floor
@@ -18,6 +89,154 @@ All notable changes to CableDyn are recorded in this file. The format follows
   The touchdown element now takes the reaction of its grounded stretch, from the grounded node
   to the touchdown point located from the two nodes' clearances: the error falls at the second
   order (2.1, 0.7, 0.2 N) and the outputs vary continuously.
+- The tangent outputs of a finite-EI line take the line's tangent, the node's Hermite tangent
+  DOF, instead of a difference of node positions. At an end clamped by an `END CONNECTIONS`
+  `Rigid` row they now give the direction the clamp holds: a cable clamped 15 deg off the
+  vertical read 163.8 deg for a 165 deg clamp, and up to 14 deg off where the line bends within
+  its first element.
+- The VIV lift of a line written fairlead first pointed against MoorDyn's: the node tangent ran
+  from End B to End A, which is MoorDyn's model started from the phases plus pi. The lift and the
+  `V` line files now match MoorDyn's on either deck order. Where two lock-in branches coexist the
+  start can select the other one.
+- A negative `BA` of an `EI = 0` line of several sections is resolved with the length, `EA` and
+  mass of its own element. It took those of the element at the mirrored position from the other
+  end, so the line types of an asymmetric composite line exchanged their axial damping.
+- Finite-EI dynamic step at rest under a large axial damping coefficient: the round-off floor of
+  the step's force scale left out the axial damping, whose strain rate is formed from the Newmark
+  velocity and carries gamma/(beta dtM) times the rounding of the coordinates. A held line damped
+  near its first axial mode (`BA` = 2 zeta EA/omega_1, as `mode1 axialDampingRatio` gives, or a
+  direct `BA` of that size) stalled at a few times the tolerance and stopped (3 of 30 runs of a
+  400 m wire held at rest, `BA` 5e7 to 8e8 N s, `dtM` 0.002 to 0.01 s). The floor now includes
+  `BA` gamma/(beta dtM), as the twist floor includes its damping.
+- Finite-EI statics on a strongly graded deck mesh: when the route fails on the deck mesh and on
+  its uniform refinement, it is repeated on the deck mesh with each element longer than half the
+  bending length split to that length. A lazy wave meshed 4 m / 0.9 m / 10 m (sag bend, buoyant
+  section, touchdown) failed in an oblique or cross current with "already in axial compression
+  without the current", and now agrees with the same deck on 2 m elements.
+- The static solve of a finite-EI line in a current named an element-mean axial compression on
+  elements longer than half the bending length as a limit of the current (the friction holding
+  the grounded run, or the run pushed along the seabed), and on that diagnosis skipped the
+  mesh-sequenced route. On such elements the axial force of a stiff line oscillates, so the
+  compression names the mesh: the message now says so and how to refine, and the other routes
+  still run (a lazy wave on a graded mesh in a 0.2 m/s cross current now solves).
+- Static solve of discrete `ATTACHMENTS` in a current across the line's vertical plane: the
+  smeared start now carries the attachments' drag as well as their weight, and the attachment
+  polish moves both to the nodes. It applied the whole attachment drag to a state without it, and
+  on a frictional seabed its Newton solves diverged, so the discrete state was reached only
+  through the fallback solves or not at all (a lazy wave with 25 modules in 0.3 m/s across its
+  plane). A current along the plane takes the former path.
+- Finite-EI statics with discrete `ATTACHMENTS`: a solve of the attachment polish that stalled on
+  a residual floor above the tight static tolerance (a few times 1e-8, on a fine or locally
+  refined mesh) went on to the fallbacks and halved its load steps until the static start
+  failed, although the line's own static solve accepts such a floor at the coupled static
+  tolerance 1e-6. A clamped cable arriving at its anchor in a tight bend with one clump failed
+  for every clump mass and position tried. The polish now repeats a stalled solve at 1e-6 from
+  the same state before its fallbacks, and the run notes the residual of the discrete
+  equilibrium when it lies above the tight tolerance.
+- Finite-EI statics in a current with a `Rigid` end connection: when the drag load steps stall at
+  a limit point, the pseudo-arclength continuation that follows the path around it was skipped
+  for a line with a `Rigid` end, so the statics failed where the same line with a stiff
+  rotational spring solved (a 3 km cable clamped at its fairlead in 1.1 m/s, folded back past
+  its anchor). The continuation now takes a `Rigid` end in the basis of its direction, with the
+  transverse components of the end tangent held, as the static solve does.
+- Finite-EI statics that restart at full stiffness no longer depend on the line's azimuth. When
+  the first stage of the stiffness continuation fails (a clamped end on a mesh too coarse for
+  its boundary layer), the energy descent from the seed was cut at a fixed count (1600
+  iterations at the default allowance). On a 3.8 km clamped lazy wave that descent takes 1171
+  to 1661 iterations depending on the last digits of the input, so turning the deck about the
+  vertical failed the statics at 328.3 and 329 deg and solved them elsewhere. Past its allowance
+  the descent now runs on while the norm of its residual keeps halving within an allowance, to
+  one and a half allowances. The lazy wave solves at all 28 azimuths tried, with the same
+  tensions, and the static states of the decks that solved before are unchanged.
+- Finite-EI statics: the note "static residual floor above the dynamic tolerance" could report a
+  residual below that tolerance (accepted at 6.91e-9 against 1e-8): a polish repeated at the
+  coupled static tolerance after the tight one failed can still end below the tight tolerance.
+  The note is now printed only when the residual reached lies above it.
+- `staticsFriction asLaid` on a bathymetry: the friction reference of a finite-EI line sinks each
+  node under the normal load the solver applies at its laid position, with the buoyancy of the
+  dry part of a section laid within its radius of the surface (a seabed shallower than the
+  cable radius) and the dry weight of an attachment above it. It took the submerged weights, so
+  such a run rested off its laid path across a slope (0.8 mm on a 0.5 m cable 0.1 m deep),
+  held there by a spurious friction force. The dry-part load is solved by Newton's method with
+  halved steps, which converge where full steps cycle between a wholly dry and a wholly wet node
+  (a net-buoyant cable on a seabed shallower than its radius).
+- `EI = 0` statics: a residual inside the round-off floor of the nodal forces but above the
+  relative tolerance was converged only when it stayed flat. Iterates that alternated between two
+  values there ran every stage out of iterations, so a line could fail to find its equilibrium or
+  find it depending on the last digits of its coordinates (13 of 32 small translations of a
+  suspended three-section line in a current failed, as did translated copies of point systems). A
+  residual inside the floor that sets no new minimum over three iterations is now converged.
+- Static balance of `Connect`/`Free` points, bodies and rods: a step that raised the force
+  residual was accepted when the Newton step from it was half the current one. Near the
+  slack/taut kink of a line the Newton step can grow again, and the steps then cycled (a
+  Connect point between a near-vertical heavy chain and two wires on the seabed: 4e4 N to 6e6 N
+  and back, every four steps) until the solve failed from every seed, although an independent
+  catenary solution gives the balance. Such a step is now accepted only when the new Newton step
+  is also half the shortest of the solve so far.
+- Syrope lines of one section: the static start took one secant EA from the working curve at
+  the line's mean strain, so where the tension varies along the rope (its weight on a long or
+  inclined taut line) the elements away from the mean started off their curve and their slow
+  strains settled the line at rest (a 991 m rope moved its fairlead tension by 3.4e-4 in 1 s;
+  63 of 125 random Syrope lines drifted by more than 1e-5). Every Syrope element now takes its
+  own secant at its own tension, as on a composite line: the same lines start at rest to 1e-6.
+  An update that reverses without contracting takes a secant step on the line's response, so a
+  strongly concave working curve converges instead of cycling.
+- A bend stiffener over an element that two STIFFENERS rows share no longer gives it a negative
+  EI: their covered lengths can sum past the element length by round-off, which a soft cable's EI
+  (1e-12 N m^2 and below) turned into a negative compliance, and the static solve then failed
+  with an internal message. STIFFENERS `RootOD` and `TipOD` are now at most 1e3 m, the bound of a
+  line type's `Diam`, in the solver and the Python deck validator.
+- C API and Python on a deck of `EI = 0` lines in a current that varies in space (a `profile`
+  current, a `Currents 1` table or a steady grid): the lines took the current at the nodes of
+  their straight seeds, while the static solve sampled it at its own nodes. The start was not
+  the static state's (end loads off by up to 1.7 % of a component), and a line held at rest
+  drifted (0.4 % of its fairlead tension and 12 % of a force component in 2 s). The field is
+  now sampled at the static nodes and at the step-start nodes before every step, as the
+  standalone driver samples it, and a step that does not commit puts back the field it
+  replaced; a uniform current is unchanged.
+- A time step below 1e-100 s is refused by name (`dtM`, `CableDyn_Step` and the OpenFAST glue
+  `DT`): the time integration divides by its square, which overflowed near 1e-155 s inside the
+  line solve ("banded model load q/v must be finite", "non-finite Jacobian"). The Python deck
+  validator applies the `dtM` bound.
+- A `waves` or `current` row overridden by a later one no longer leaves a bound behind: an Airy
+  or stream `waves` row after a JONSWAP row was refused for that row's gamma above 1e3, and a
+  `profile` current row after a `uniform` one for that row's velocity above 1e3 m/s. The Python
+  deck validator now applies the magnitude bounds of these rows (wave height and period, JONSWAP
+  gamma, current speed and depth) to the row in effect only, as the solver does, instead of
+  refusing a deck for an out-of-range row a later row overrides.
+- A finite-EI line type with `MassDenInAir` of zero or less is refused by name
+  (`MassDenInAir must be > 0 on a finite-EI line`) instead of failing inside the model build.
+- The Python deck validator refuses, as the solver does, `TDP<L>` channels on a standalone deck
+  without a seabed, `Point<P>p` channels of a Coupled/Vessel point that only finite-EI lines reach
+  on the aggregate and of any point on a standalone multibody march without an `EI = 0` line,
+  and a finite-EI line type without mass.
+- Python: `CableDyn.channel` and `channels` refuse a token holding a NUL character, which the
+  library read only up to the NUL (`"FairTen1\0x"` returned `FairTen1`).
+- Documentation: the length the Morison drag is taken over on each path (unstretched on `EI = 0`
+  lines, the deformed centreline on finite-EI lines), and how an independent check of the static
+  force balance in a current must integrate it. The end reactions of a finite-EI cable at rest
+  in a current, pinned or clamped, balance its weight and drag to 2e-8 of the end force; a test
+  checks it. The signed frequency of a mode with omega^2 < 0 (`Omega` = -sqrt(|omega^2|),
+  `Frequency` = `Omega`/2 pi, period 0) is documented, and a troubleshooting entry covers a long
+  line that solves at one orientation and not at another.
+
+### Upgrading
+
+- On finite-EI lines `L<L>N<J>Dec` and `L<L>N<J>Azi`, `FairDecl`/`AnchDecl`, `FairIncl`/`AnchIncl`
+  and `FairAngle`/`AnchAngle`, the `Declination`, `Inclination` and `Azimuth` columns of
+  `.static.out`, the `Declination` envelope of the range graph and the `line tangent` of the
+  initialisation reports (driver, mixed route, C API notes and OpenFAST) change: by up to 3.1 deg
+  at the clamped end of `buoy_clamped_cable.dat`, 1.8 deg in the static profile of
+  `lozon_gomex80_power_cable_motion.dat` (1.4 deg in `iea15mw_umaine_mixed_cabledyn.dat`, 0.5 deg
+  in `torsion_lazy_wave_hangoff_twist.dat`) and 0.6 deg in the `FairIncl1` history of
+  `lazy_wave_vessel_motion.dat`, and by 0.2 deg or less on the other finite-EI examples.
+  Positions, forces, tensions, curvatures and every `EI = 0` line are unchanged.
+- The VIV lift of a line written fairlead first changes direction (see Fixed); a deck run with VIV
+  gives MoorDyn's response on either deck order.
+- The static tensions of a one-section Syrope line move by up to 3e-4 (relative); the Syrope
+  example is unchanged.
+- On the C API and Python point route, a deck in a current that varies in space starts from the
+  driver's static state and stays at rest when held.
 
 ## [0.4.1] - 2026-11-08
 
