@@ -75,7 +75,7 @@ All notable changes to CableDyn are recorded in this file. The format follows
   line unless the deck also had a separate `EI = 0` line. Its results match the C API's stepping
   of the same deck to the digits of the output file.
 - The L5 wall-clock records (`validation/performance` and the L5 rows of `VALIDATION.md`) are
-  measured again on one host, with the v0.4.1 release driver and a GNU build. The new
+  measured again on one host, with the release driver and a GNU build. The new
   `validation/scripts/performance_records.py` builds the lazy-wave span, one-hour mooring and
   tension-only chain models for CableDyn, OrcaFlex, MoorDyn-F and MoorDyn-C, checks each against
   its reference response (the records are written only inside it), times them and writes the
