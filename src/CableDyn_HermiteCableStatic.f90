@@ -3585,6 +3585,10 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: fres(:), kband(:, :), kwork(:, :), dvec(:)
     LOGICAL, ALLOCATABLE :: free(:)
     REAL(wp) :: wq
+    ! A Rigid end in the arclength solve: the end tangent in the basis of its direction (the
+    ! static solve's residual and tangent come in it), the two transverse components held.
+    REAL(wp) :: arc_basis(3, 3, 2)
+    LOGICAL :: arc_rigid(2)
     CHARACTER(1024) :: first_msg
     CHARACTER(16) :: frac_txt
     ! Seabed friction of the current (active in every stage after the still-water one).
@@ -3628,6 +3632,7 @@ CONTAINS
     END IF
     IF (use_fric) ALLOCATE (fric_stage, SOURCE=current%friction)
     drag_homotopy = PRESENT(current)
+    arc_rigid = .FALSE.
     CALL ei_homotopy()
     IF (.NOT. PRESENT(current)) THEN
       IF (ErrStat /= CD_HCSTAT_OK) RETURN
@@ -3672,7 +3677,7 @@ CONTAINS
         planar_run_limit = .FALSE.
         IF (.NOT. picard_ok .AND. COUNT(MOD(fixed_dofs - 1, 6) == 1) >= nn) &
           planar_run_limit = frictionless_run_limit(q)
-        IF (.NOT. picard_ok .AND. .NOT. has_rigid_end() .AND. .NOT. planar_run_limit) THEN
+        IF (.NOT. picard_ok .AND. .NOT. planar_run_limit) THEN
           arc_msg = em
           iters_out = 0
           IF (use_fric) THEN
@@ -3877,13 +3882,6 @@ CONTAINS
       iters_out = iters_out + iters_before
     END SUBROUTINE full_fixed_point
 
-    LOGICAL FUNCTION has_rigid_end() RESULT(rig)
-      !! A rigid end connection solves its end tangent in a rotated basis (not supported by
-      !! the bordered arclength solve).
-      rig = .FALSE.
-      IF (PRESENT(endconn_mode)) rig = ANY(endconn_mode == CD_ENDCONN_RIGID)
-    END FUNCTION has_rigid_end
-
     LOGICAL FUNCTION frictionless_run_limit(qx) RESULT(run_limit)
       !! TRUE when the diagnosis of state qx is a grounded run driven along a frictionless
       !! seabed (see current_compression_note).
@@ -3955,6 +3953,21 @@ CONTAINS
       DO k = 1, SIZE(fixed_dofs)
         free(fixed_dofs(k)) = .FALSE.
       END DO
+      ! A Rigid end: the static solve returns its end-tangent rows and columns in the basis of
+      ! the end direction (CD_EndConn_Basis), whose first component is the free tangent
+      ! magnitude and whose two transverse components are held.
+      arc_rigid = .FALSE.
+      IF (PRESENT(endconn_mode) .AND. PRESENT(endconn_direction)) THEN
+        DO k = 1, 2
+          IF (endconn_mode(k) /= CD_ENDCONN_RIGID) CYCLE
+          CALL CD_EndConn_Basis(endconn_direction(:, k), arc_basis(:, :, k), es_a, em)
+          IF (es_a /= CD_ENDCONN_OK) THEN
+            em = 'arclength continuation: '//TRIM(em); RETURN
+          END IF
+          arc_rigid(k) = .TRUE.
+          free(arc_tangent_base(k) + 2:arc_tangent_base(k) + 3) = .FALSE.
+        END DO
+      END IF
       ei_stage = EI
       IF (PRESENT(endconn_stiffness)) k_stage = endconn_stiffness
       wq = CD_ONE/SUM(l0)
@@ -3994,6 +4007,8 @@ CONTAINS
           z2 = dvec
           CALL CD_Solve_Banded(kwork, KL_H, KU_H, z2, es_a, em)
           IF (es_a /= CD_LINALG_OK) EXIT
+          CALL arc_to_global(z1)
+          CALL arc_to_global(z2)
           CALL CD_Arclength_Bordered_Update(wq, tq, tl, g, z1, z2, qc, lamc, es_a)
           IF (es_a /= 0) EXIT
           IF (.NOT. CD_All_Finite(qc) .OR. .NOT. CD_Is_Finite(lamc)) EXIT
@@ -4087,6 +4102,12 @@ CONTAINS
       IF (esx /= CD_HCSTAT_OK) RETURN
       CALL CD_HermiteCable_Current_Load(l0, qx, current, dvec, esx, em)
       IF (esx /= CD_HCSTAT_OK) RETURN
+      ! the drag load in the basis of a Rigid end, as the residual and tangent are
+      DO kk = 1, 2
+        IF (.NOT. arc_rigid(kk)) CYCLE
+        jj = arc_tangent_base(kk)
+        dvec(jj + 1:jj + 3) = MATMUL(TRANSPOSE(arc_basis(:, :, kk)), dvec(jj + 1:jj + 3))
+      END DO
       ! Held DOFs: zero residual and load, identity rows and columns of the band.
       DO kk = 1, SIZE(dvec)
         IF (free(kk)) CYCLE
@@ -4114,8 +4135,26 @@ CONTAINS
         esx = CD_HCSTAT_NOCONVERGE; RETURN
       END IF
       esx = CD_HCSTAT_OK
+      CALL arc_to_global(tqx)
       CALL CD_Arclength_Unit_Tangent(wq, tqx, tlx)
     END SUBROUTINE arc_tangent
+
+    INTEGER FUNCTION arc_tangent_base(iend) RESULT(base)
+      !! The DOF before the end tangent of End A (iend 1) or End B (iend 2).
+      INTEGER, INTENT(IN) :: iend
+      base = MERGE(3, 6*(nn - 1) + 3, iend == 1)
+    END FUNCTION arc_tangent_base
+
+    SUBROUTINE arc_to_global(vx)
+      !! A solved increment from the basis of each Rigid end back to the global components.
+      REAL(wp), INTENT(INOUT) :: vx(:)
+      INTEGER :: ie, b0
+      DO ie = 1, 2
+        IF (.NOT. arc_rigid(ie)) CYCLE
+        b0 = arc_tangent_base(ie)
+        vx(b0 + 1:b0 + 3) = MATMUL(arc_basis(:, :, ie), vx(b0 + 1:b0 + 3))
+      END DO
+    END SUBROUTINE arc_to_global
 
     SUBROUTINE drag_load_steps(ok)
       !! Bring the current in at full stiffness from the still-water equilibrium in load
