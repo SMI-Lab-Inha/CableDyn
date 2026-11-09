@@ -70,12 +70,13 @@ OrcaFlex values of the L3-7 gate (within that gate's bands). The responses are i
 
 ## Provenance
 
-Measured on 2026-11-08 on an AMD Ryzen Threadripper PRO 7965WX (24 cores), Windows 11 Pro.
+Measured on an AMD Ryzen Threadripper PRO 7965WX (24 cores), Windows 11 Pro: OrcaFlex, MoorDyn-F and
+MoorDyn-C on 2026-11-08, CableDyn 0.4.2 on 2026-11-09.
 
 | Code | Build |
 | --- | --- |
-| CableDyn `ifx-release-0.4.1` | the v0.4.1 release `CableDyn_driver.exe` (IFX 2025.3.2, static, `/fp:precise /arch:CORE-AVX2 /Qfma-`, reference LAPACK 3.12.1) |
-| CableDyn `gnu-release-dev` | `dev` at `b7c883b` (v0.4.1-2-gb7c883b): GNU Fortran 16.2.0 (conda-forge), CMake `Release` (`-O3`), baseline x86-64, OpenBLAS 0.3.33 |
+| CableDyn `ifx-release-0.4.2` | the v0.4.2 release `CableDyn_driver.exe` (IFX 2025.3.2, static, `/fp:precise /arch:CORE-AVX2 /Qfma-`, reference LAPACK 3.12.1) |
+| CableDyn `gnu-release-0.4.2` | the v0.4.2 source (`release/0.4.2` at `25bdfc1`): GNU Fortran 16.2.0 (conda-forge), CMake `Release` (`-O3`), baseline x86-64, OpenBLAS 0.3.33 |
 | OrcaFlex | OrcaFlex 11.6d (OrcFxAPI DLL 11.6d) from Python, `threadCount = 1` |
 | MoorDyn-F | MoorDyn v2.3.8 in the OpenFAST v5.0.0 MoorDyn driver: GNU Fortran 16.2.0, CMake `Release` (`-O3`), `DOUBLE_PRECISION=OFF` |
 | MoorDyn-C | v2.7.2 release source: `libmoordyn` by GNU g++ 16.2.0, CMake `Release` (`-O3`); `moordyn_c_driver.cpp` by `g++ -O2` |

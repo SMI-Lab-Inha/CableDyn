@@ -88,9 +88,9 @@ article's methods, are compared in
 | **L4-rot** | Coupled mooring rotational stiffness | held 1° pitch geometry | upwind −16.0 kN, downwind +7.8 kN each; first-order restoring moment | signs + first-order | Pass |
 | **L5-stab** | Snap-load Δt-stability | sub-CFL fine-dt (0.5 ms) self-ref | peak 1.5% at dt = 20 ms (explicit limit 3.2 ms) | — | Pass |
 | **L5-stab** | Snap-load Δt-stability, implicit and explicit steps | MoorDyn-C explicit step limit | 20 ms implicit; ~1 ms explicit | — | Pass |
-| **L5-V** | VolturnUS-S 1-hr mooring wall-clock | OrcaFlex 11.6d, same drive and host | CableDyn 4.44 s (IFX release) / 6.18 s (GNU) vs OrcaFlex 19.72 s; the timed deck reproduces the L3-7 response | — | Pass measured |
-| **L5-wc** | Wall-clock, tension-only chain | MoorDyn-C v2.7.2, explicit RK2 (WD0050 chain) | CableDyn 0.200 s (IFX) / 0.277 s (GNU) vs MoorDyn-C 0.482 s; tensions 1.35 / 1.71% (mean / max) | matched comparison reported | Pass measured |
-| **L5-DPC** | Pinned-TDP lazy-wave spans, 80/200/800 m | OrcaFlex / refined MoorDyn-F | CableDyn 1.44/2.56/5.29 s (IFX release; GNU 2.06/3.40/7.59 s); OrcaFlex 2.69/5.31/27.81 s; MoorDyn-F 327/192/321 s | resolved meshes, same host, one thread | Pass measured |
+| **L5-V** | VolturnUS-S 1-hr mooring wall-clock | OrcaFlex 11.6d, same drive and host | CableDyn 4.30 s (IFX release) / 6.05 s (GNU) vs OrcaFlex 19.72 s; the timed deck reproduces the L3-7 response | — | Pass measured |
+| **L5-wc** | Wall-clock, tension-only chain | MoorDyn-C v2.7.2, explicit RK2 (WD0050 chain) | CableDyn 0.197 s (IFX) / 0.268 s (GNU) vs MoorDyn-C 0.482 s; tensions 1.35 / 1.71% (mean / max) | matched comparison reported | Pass measured |
+| **L5-DPC** | Pinned-TDP lazy-wave spans, 80/200/800 m | OrcaFlex / refined MoorDyn-F | CableDyn 1.34/2.37/4.98 s (IFX release; GNU 1.91/3.18/6.87 s); OrcaFlex 2.69/5.31/27.81 s; MoorDyn-F 327/192/321 s | resolved meshes, same host, one thread | Pass measured |
 | **L5-pk** | Snap-load peak, 3-code | MoorDyn-C + OrcaFlex | 4.86 / 6.32 / 10.22 MN | — | Informative |
 | **T-1** | Torsion kernel: twist of the centreline, gradient, Hessian | automatic differentiation; finite differences | ≤3.8e-15; ≤5.3e-11 | <1e-10; <1e-6 | Pass |
 | **T-2** | Pure torsion (multi-section, end springs, five turns) | `Φ/C`; OrcaFlex 11.6d | round-off; ≤1.7e-8 | <1e-12; <1e-7 | Pass |
@@ -505,18 +505,18 @@ scripts, results, and source provenance are in
 
 ### Wall-clock time
 
-The measurements below were made on 2026-11-08 on one host (AMD Ryzen Threadripper PRO 7965WX,
+The measurements below were made on 2026-11-08 and 2026-11-09 (CableDyn 0.4.2) on one host (AMD Ryzen Threadripper PRO 7965WX,
 Windows 11 Pro) with one thread per code, as the median of three runs after one warm-up. They
 come from [`validation/scripts/performance_records.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/performance_records.py),
 which also checks each timed model against its reference response. CableDyn is timed with the
-Windows release driver (IFX, the shipped binary) and with a GNU Release build of `dev`. Their
+Windows release driver (IFX, the shipped binary) and with a GNU Release build of the same source. Their
 versions and hashes, the ranges and the timing definitions are in
 [`validation/performance`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/performance/README.md).
 The figures depend on each code's configuration and on this host; they are not rankings.
 
 - **Tension-only chain (L5-wc)**: the WD0050 grounded chain (`examples/wd0050_chain.dat`)
-  under the L2-2 A1 heave for 80 s. CableDyn at dt 0.05 s takes **0.200 s** (IFX) and
-  **0.277 s** (GNU); MoorDyn-C v2.7.2 through `moordyn_c_driver.cpp` (explicit RK2, dtM 1 ms)
+  under the L2-2 A1 heave for 80 s. CableDyn at dt 0.05 s takes **0.197 s** (IFX) and
+  **0.268 s** (GNU); MoorDyn-C v2.7.2 through `moordyn_c_driver.cpp` (explicit RK2, dtM 1 ms)
   takes **0.482 s**, of which 0.452 s is its stepping loop. Over the 20 s scored window the
   fairlead tensions of the two codes differ by 1.35% in mean and 1.71% in maximum. The
   original external solver of this row was MoorDyn-C v2.6.1 through the same driver, whose deck
@@ -527,7 +527,7 @@ The figures depend on each code's configuration and on this host; they are not r
 | Case | CableDyn (IFX) | CableDyn (GNU) | OrcaFlex 11.6d | Note |
 |------|---------------:|---------------:|---------------:|------|
 | All-chain static IC, `FairTen` | 2437 kN | 2437 kN | 2427 kN | 0.42% from OrcaFlex, 0.08% from MoorDyn (2439 kN); anchor 0.77% (L2) |
-| 1-hour dynamic, dt 0.1 s | **4.44 s** (4.44–4.45) | **6.18 s** (6.16–6.19) | **19.72 s** (19.33–19.74) | 36,000 steps, 2.03 Newton iterations per step; OrcaFlex adds a 200 s build-up |
+| 1-hour dynamic, dt 0.1 s | **4.30 s** (4.26–4.31) | **6.05 s** (6.00–6.09) | **19.72 s** (19.33–19.74) | 36,000 steps, 2.03 Newton iterations per step; OrcaFlex adds a 200 s build-up |
 
   The timed CableDyn deck reproduces the L3-7 response: fairlead tension mean, standard
   deviation, minimum and maximum within 0.27, 0.26, 0.50 and 0.43% of OrcaFlex.
@@ -542,9 +542,9 @@ The figures depend on each code's configuration and on this host; they are not r
 
 | Depth | CableDyn (IFX) | CableDyn (GNU) | OrcaFlex | Refined MoorDyn-F |
 |------:|---------------:|---------------:|---------:|------------------:|
-| 80 m | 1.44 s | 2.06 s | 2.69 s | 326.6 s |
-| 200 m | 2.56 s | 3.40 s | 5.31 s | 191.9 s |
-| 800 m | 5.29 s | 7.59 s | 27.81 s | 320.7 s |
+| 80 m | 1.34 s | 1.91 s | 2.69 s | 326.6 s |
+| 200 m | 2.37 s | 3.18 s | 5.31 s | 191.9 s |
+| 800 m | 4.98 s | 6.87 s | 27.81 s | 320.7 s |
 
 Totals include initialisation and the dynamic interval. The timed CableDyn and refined
 MoorDyn-F models reproduce the OrcaFlex hang-off tension mean, minimum and maximum of the L3-6

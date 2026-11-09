@@ -73,8 +73,8 @@ Run times on one processor thread, same host and protocol, with the timing scrip
 
 | Case | CableDyn 0.4.2 | OrcaFlex 11.6d |
 |---|---|---|
-| 80 / 200 / 800 m lazy-wave spans, 60 s of heave | 1.4 / 2.6 / 5.3 s | 2.7 / 5.3 / 27.8 s |
-| One-hour VolturnUS-S chain mooring | 4.4 s | 19.7 s |
+| 80 / 200 / 800 m lazy-wave spans, 60 s of heave | 1.3 / 2.4 / 5.0 s | 2.7 / 5.3 / 27.8 s |
+| One-hour VolturnUS-S chain mooring | 4.3 s | 19.7 s |
 
 The method and the lazy-wave comparisons are peer-reviewed
 ([Ocean Engineering 368, 128332, 2026](https://doi.org/10.1016/j.oceaneng.2026.128332)).
