@@ -27576,8 +27576,9 @@ CONTAINS
     !! whose radius starts at the first Newton step (capped at a quarter of the shortest moving
     !! line), widens after a well-predicted step on its boundary and shrinks after a rejected
     !! one, with Levenberg-Marquardt steps as the fallback. A trial is accepted when the residual
-    !! drops or when the Newton step from it is at most half the current one (a taut line
-    !! swinging about its anchor: every straight step overstretches it by its sagitta). Each
+    !! drops or when the Newton step from it is at most half the current one and half the shortest
+    !! of the phase (a taut line swinging about its anchor: every straight step overstretches it
+    !! by its sagitta). Each
     !! step turns an object by at most 0.25 rad, and accepted rotations are folded into the base
     !! orientation (rebase_rotations) so the Jacobian stays exact. Converged when the largest
     !! scaled residual is below 1e-9 of the force scale (largest net weight or line end force)
@@ -27660,6 +27661,9 @@ CONTAINS
     INTEGER :: nobj, n, i, j, k, it, inner, info, worst, jk
     LOGICAL :: ok, only_points
     REAL(wp) :: sc, rnorm, rnorm_try, mu, step_cap, len_min, dmax, trust, pred
+    ! the shortest Newton step of the phase so far (the natural-level test of a step that grew
+    ! the residual)
+    REAL(wp) :: dn_min
     ! the completion line: the deck pose of every point, and the largest turn of a body or rod
     REAL(wp), ALLOCATABLE :: pos_deck(:, :)
     REAL(wp) :: turn_rot(3, 3), turn_max
@@ -27873,6 +27877,7 @@ CONTAINS
       rnorm = NORM2(r)
       mu = 1.0e-8_wp
       trust = -CD_ONE
+      dn_min = HUGE(CD_ONE)
       DO it = 1, MAX_IT
         IF (MAXVAL(ABS(r)) <= 1.0e-9_wp*sc) EXIT
         ! the analytic Jacobian, and a central-difference one of the full residual when the
@@ -27918,7 +27923,12 @@ CONTAINS
                 ! centimetres although the pose is nearer the equilibrium. The Newton step length
                 ! measures the distance in displacement units, where the overstretch counts only
                 ! as its small length: the step is also accepted when the Newton step from the
-                ! trial point (its own analytic Jacobian) is at most half the current one.
+                ! trial point (its own analytic Jacobian) is at most half the current one, and
+                ! half the shortest Newton step of the phase so far: a Newton step that grows
+                ! again (a near-singular Jacobian at a slack/taut kink, whose long step lands on an
+                ! overstretched line) cannot reset the measure, which the residual then descends
+                ! back from, so the steps could otherwise cycle forever (a Connect point between a
+                ! near-vertical heavy chain and a wire lying nearly taut on the seabed).
                 IF (.NOT. ok .AND. jk == 1) THEN
                   CALL analytic_jacobian(x_try, jtry, ok)
                   IF (ok) THEN
@@ -27930,7 +27940,7 @@ CONTAINS
                     END IF
                     ok = info == CD_LINALG_OK
                     IF (ok) ok = ALL(IEEE_IS_FINITE(dxc))
-                    IF (ok) ok = NORM2(dxc) <= 0.5_wp*NORM2(dxn)
+                    IF (ok) ok = NORM2(dxc) <= 0.5_wp*MIN(NORM2(dxn), dn_min)
                   END IF
                 END IF
               END IF
@@ -27975,6 +27985,8 @@ CONTAINS
         END DO
         IF (.NOT. ok) EXIT
         mu = MAX(0.25_wp*mu, 1.0e-12_wp)
+        ! the Newton step of the iterate just left (the last solve of dxn, from x)
+        IF (ALL(IEEE_IS_FINITE(dxn))) dn_min = MIN(dn_min, NORM2(dxn))
         x = x_try
         r = r_try
         rnorm = rnorm_try

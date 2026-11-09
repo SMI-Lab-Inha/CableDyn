@@ -1913,6 +1913,17 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 300
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # The static balance of a Connect point between a heavy chain and two wires on the seabed does
+  # not cycle between trial steps, and agrees with the independent catenary balance.
+  add_test(NAME point_static_cycle
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_point_static_cycle.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --output ${CMAKE_BINARY_DIR}/point_static_cycle)
+  set_tests_properties(point_static_cycle PROPERTIES
+    LABELS "python;static;points;robustness"
+    TIMEOUT 300
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # The note on grounded lines that a current moves over a seabed without friction: once per run
   # on every standalone route, and never without a grounded node, a current, or a march, or
   # with friction.
