@@ -942,6 +942,8 @@ _STIFFENER_ROOT = "1       A    0.4     0.45    0.45   0.17    5.0e7   1150"
         ("1 A 0.0 0.45 0.45 0.17 5.0e7 1150", "Length, RootOD, TipOD and E must be > 0"),
         ("1 A 0.4 0.45 0.45 -0.1 5.0e7 1150", "InnerD and Density must be >= 0"),
         ("1 A 0.4 0.45 0.15 0.17 5.0e7 1150", "InnerD must be smaller than RootOD and TipOD"),
+        ("1 A 0.4 1.0e6 0.45 0.17 5.0e7 1150", "RootOD and TipOD must be at most 1e3 m"),
+        ("1 A 0.4 0.45 1001.0 0.17 5.0e7 1150", "RootOD and TipOD must be at most 1e3 m"),
         ("1 B 167.0 0.45 0.45 0.17 5.0e7 1150", "are longer than the line"),
     ],
 )
@@ -2785,3 +2787,38 @@ def test_a_compression_refinement_leaves_where_it_was_stops_the_refinement(tmp_p
         -900:
     ]
     assert _accepted(deck)
+
+
+@pytest.mark.parametrize(
+    ("od", "accepted"), [("1000.0", True), ("1000.001", False), ("1e6", False)]
+)
+def test_stiffener_diameter_bound_matches_the_driver(od, accepted, tmp_path):
+    # a sleeve as wide as the widest line type (Diam <= 1e3 m) at most
+    text = _example(
+        "lazy_wave_bend_stiffener.dat",
+        (_STIFFENER_ROOT, f"1       A    0.4     {od}    0.45   0.17    5.0e7   1150"),
+    )
+    if accepted:
+        DeckFile.from_text(text)
+    else:
+        _rejects(text, "RootOD and TipOD must be at most 1e3 m")
+    if not _PARITY_DRIVER or not Path(_PARITY_DRIVER).is_file():
+        return
+    deck = tmp_path / "stiffener.dat"
+    deck.write_text(_static_check(text), encoding="utf-8")
+    shutil.copytree(EXAMPLES / "data", tmp_path / "data")
+    completed = subprocess.run(
+        [_PARITY_DRIVER, str(deck), str(tmp_path / "stiffener")],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        cwd=tmp_path,
+        timeout=600,
+        env={**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"},
+        check=False,
+    )
+    if accepted:
+        assert completed.returncode != 1 or "at most 1e3 m" not in completed.stderr
+    else:
+        assert completed.returncode == 1, completed.stderr[-600:]
+        assert "RootOD and TipOD must be at most 1e3 m" in completed.stderr

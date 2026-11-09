@@ -11627,7 +11627,9 @@ CONTAINS
       IF (.NOT. (covered > CD_ZERO)) CYCLE
       IF (PRESENT(ei)) THEN
         IF (ei_line > CD_ZERO) THEN
-          compliance = compliance + (l0(e) - covered)/ei_line
+          ! the bare part: rows meeting inside the element can sum past its length by round-off,
+          ! which a soft cable's EI would turn into a negative compliance
+          compliance = compliance + MAX(CD_ZERO, l0(e) - covered)/ei_line
           ei(e) = l0(e)/compliance
         ELSE IF (covered >= l0(e)*(CD_ONE - 1.0e-12_wp)) THEN
           ! an EI = 0 element bends only where the sleeve covers all of it; a bare part has an
@@ -17089,6 +17091,10 @@ CONTAINS
     END IF
     IF (.NOT. (vals(4) < MIN(vals(2), vals(3)))) THEN
       CALL fail(ErrStat, ErrMsg, 'STIFFENERS InnerD must be smaller than RootOD and TipOD'); RETURN
+    END IF
+    ! as wide as the widest line type at most (LINE TYPES Diam <= 1e3 m)
+    IF (MAX(vals(2), vals(3)) > 1.0e3_wp) THEN
+      CALL fail(ErrStat, ErrMsg, 'STIFFENERS RootOD and TipOD must be at most 1e3 m, as a line type''s Diam'); RETURN
     END IF
     ! a segment starts where the previous segment of the same line end stops
     s0 = CD_ZERO

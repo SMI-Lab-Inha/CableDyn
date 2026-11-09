@@ -3146,6 +3146,12 @@ class DeckFile:
                 raise DeckFormatError(
                     f"{where}: STIFFENERS InnerD must be smaller than RootOD and TipOD"
                 )
+            # as wide as the widest line type at most (native, LINE TYPES Diam <= 1e3 m)
+            if max(root_od, tip_od) > _NATIVE_MAX_DIAMETER:
+                raise DeckFormatError(
+                    f"{where}: STIFFENERS RootOD and TipOD must be at most 1e3 m, as a line "
+                    "type's Diam"
+                )
             extent[(line_id, end)] = extent.get((line_id, end), 0.0) + length
         for line_id in sorted({key[0] for key in extent}, key=int):
             if not any(

@@ -36,6 +36,7 @@ PROGRAM test_bend_stiffener
 
   CALL case_cylinder()
   CALL case_cone()
+  CALL case_row_boundary_roundoff()
   CALL case_node_stiffness()
   CALL case_grammar()
   CALL case_coupled()
@@ -142,6 +143,31 @@ CONTAINS
     CALL require(ei(5) == EI_C .AND. mpl(5) == M_C .AND. dv(5) == D_C, &
                  'cone: bare elements unchanged')
   END SUBROUTINE case_cone
+
+  SUBROUTINE case_row_boundary_roundoff()
+    !! Two stiffener rows meeting inside an element (a 0.4 m cylinder, then a cone) cover it in two
+    !! parts whose sum can exceed the element length by round-off. Divided by a soft cable's
+    !! EI, that excess once made the compliance negative and the element EI negative. Swept
+    !! over the cable EI and the element length (the second length is that of the shipped
+    !! lazy-wave example, 68.114 m in 448 elements).
+    REAL(wp), PARAMETER :: EI_C(5) = [1.0e-300_wp, 1.0e-12_wp, 1.0e-3_wp, 1.0_wp, 2.0e4_wp]
+    REAL(wp), PARAMETER :: L_ELEM(3) = [0.15_wp, 68.114_wp/448.0_wp, 0.3_wp/7.0_wp]
+    REAL(wp), PARAMETER :: OD_ROOT(3) = [0.45_wp, 10.0_wp, 1.0e6_wp]
+    REAL(wp) :: stf(8, 2), l0(40), ei(40), mpl(40), dv(40)
+    INTEGER :: i, j, k
+    DO k = 1, SIZE(OD_ROOT)
+      stf(:, 1) = [1.0_wp, 0.0_wp, 0.4_wp, OD_ROOT(k), OD_ROOT(k), 0.17_wp, 5.0e7_wp, 1150.0_wp]
+      stf(:, 2) = [1.0_wp, 0.4_wp, 4.0_wp, OD_ROOT(k), 0.18_wp, 0.17_wp, 5.0e7_wp, 1150.0_wp]
+      DO j = 1, SIZE(L_ELEM)
+        DO i = 1, SIZE(EI_C)
+          l0 = L_ELEM(j); ei = EI_C(i); mpl = 36.7_wp; dv = 0.16_wp
+          CALL CD_Stiffener_Overlay(stf, l0, dv, ei=ei, mpl=mpl)
+          CALL require(ALL(ei >= EI_C(i)*(1.0_wp - 1.0e-12_wp)) .AND. ALL(ei < HUGE(ei)), &
+                       'row boundary: every element EI is at least the cable EI and finite')
+        END DO
+      END DO
+    END DO
+  END SUBROUTINE case_row_boundary_roundoff
 
   SUBROUTINE case_node_stiffness()
     !! Ten 1 m elements, line type EI_C on the first six and 2 EI_C beyond, under a cylinder over
