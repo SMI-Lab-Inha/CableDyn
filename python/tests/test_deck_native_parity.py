@@ -2824,3 +2824,58 @@ def test_stiffener_diameter_bound_matches_the_driver(od, accepted, tmp_path):
     else:
         assert completed.returncode == 1, completed.stderr[-600:]
         assert "RootOD and TipOD must be at most 1e3 m" in completed.stderr
+
+
+# ------------------------------------------------------------------ the smallest time step
+
+# the implicit marches divide by dt^2, which overflows the inertia terms near 1e-155 s
+_TINY_STEPS = [
+    ("1e-100", True),
+    ("1e-60", True),
+    ("1e-101", False),
+    ("1e-160", False),
+    ("1e-300", False),
+]
+
+
+@pytest.mark.parametrize(("dt", "accepted"), _TINY_STEPS)
+def test_dtm_has_a_smallest_value(dt, accepted):
+    text = _edit(_HELD, ("0.1 dtM\n10.0 TMax\n", f"{dt} dtM\n{2 * float(dt)!r} TMax\n"))
+    if accepted:
+        DeckFile.from_text(text)
+    else:
+        _rejects(text, r"dtM must be at least 1e-100 s")
+        # every row is checked, also one a later row overrides
+        _rejects(
+            _edit(_HELD, ("0.1 dtM\n", f"{dt} dtM\n0.1 dtM\n")), r"dtM must be at least 1e-100 s"
+        )
+
+
+@pytest.mark.skipif(
+    not _PARITY_DRIVER or not Path(_PARITY_DRIVER).is_file(),
+    reason="set CABLEDYN_TEST_DRIVER to a built native driver to run the time-step parity",
+)
+@pytest.mark.parametrize(("dt", "accepted"), _TINY_STEPS)
+@pytest.mark.parametrize("ei", ["0.0", "1.0e4"], ids=["ei0", "finite-ei"])
+def test_dtm_bound_matches_the_driver(dt, accepted, ei, tmp_path):
+    text = _edit(
+        _HELD,
+        ("0.1 dtM\n10.0 TMax\n", f"{dt} dtM\n{2 * float(dt)!r} TMax\n"),
+        (" -1.0 0.0 1.37", f" -1.0 {ei} 1.37"),
+    )
+    deck = tmp_path / "step.dat"
+    deck.write_text(text, encoding="utf-8")
+    completed = subprocess.run(
+        [_PARITY_DRIVER, str(deck), str(tmp_path / "step")],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        cwd=tmp_path,
+        timeout=600,
+        env={**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"},
+        check=False,
+    )
+    assert completed.returncode == (0 if accepted else 1), completed.stderr[-600:]
+    assert _accepted(deck) == accepted
+    if not accepted:
+        assert "dtM must be at least 1e-100 s" in completed.stderr

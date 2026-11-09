@@ -563,6 +563,17 @@ CONTAINS
     LOGICAL :: ca, cf, sa, sf
 
     CALL write_volturnus_deck('agg_pure.dat')
+    ! a host step below the smallest time step (1e-100 s) is refused by name at initialisation
+    BLOCK
+      TYPE(CD_AGG_ModuleType) :: tiny_agg
+      TYPE(CD_FMF_ModuleType) :: tiny_fmf
+      CALL CD_AGG_Init_From_Deck(tiny_agg, 'agg_pure.dat', 1.0e-200_wp, es, em)
+      CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'smallest time step, 1e-100 s') > 0, &
+                   'pure:agg-init refuses dt = 1e-200 s by name: '//TRIM(em))
+      CALL CD_FMF_Init_From_Deck(tiny_fmf, 'agg_pure.dat', 1.0e-200_wp, es, em)
+      CALL require(es /= CD_FMF_OK .AND. INDEX(em, 'smallest time step, 1e-100 s') > 0, &
+                   'pure:fmf-init refuses dt = 1e-200 s by name: '//TRIM(em))
+    END BLOCK
     CALL CD_AGG_Init_From_Deck(agg, 'agg_pure.dat', DT, es, em)
     CALL require(es == CD_AGG_OK .AND. CD_AGG_IsInitialized(agg), 'pure:agg-init: '//TRIM(em))
     IF (es /= CD_AGG_OK) RETURN

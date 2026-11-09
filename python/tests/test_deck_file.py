@@ -4108,7 +4108,8 @@ def test_subnormal_dtm_is_rejected_before_the_step_count():
         DeckFile.from_text(text)
 
 
-@pytest.mark.parametrize("dtm", ["1e-300", "1e-12"])
+# (a dtM below 1e-100 s is refused before the step count: test_deck_native_parity)
+@pytest.mark.parametrize("dtm", ["1e-90", "1e-12"])
 def test_step_count_beyond_the_native_counter_is_a_format_error(dtm):
     text = _minimal_chain_source().replace(
         "100.0        WtrDpth", f"100.0 WtrDpth\n{dtm} dtM\n30.0 TMax", 1

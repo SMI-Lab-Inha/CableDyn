@@ -787,8 +787,8 @@ active ANSI code page; a path that code page cannot represent is rejected with `
 :class:`cabledyn.CableDynError` and leaves the model at the start of the step. A step that ends
 without meeting the Newton tolerance raises :class:`cabledyn.ConvergenceError`, which carries
 ``n_iter`` and ``stalled``; the model has then already advanced to ``t + dt`` with its best
-iterate, so retrying the same step would advance time twice. ``dt`` must be a finite positive
-real number, and array arguments must be real-valued: a string, complex, or boolean ``dt`` and a
+iterate, so retrying the same step would advance time twice. ``dt`` must be a finite real number
+of at least ``1e-100``, and array arguments must be real-valued: a string, complex, or boolean ``dt`` and a
 complex or non-numeric array raise ``TypeError`` before the library is called. Calls on one
 ``CableDyn`` instance are serialised by an internal lock; separate instances may run on separate
 threads. Deck initialisation is serialised inside the library, so instances created from many

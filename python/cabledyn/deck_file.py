@@ -327,6 +327,8 @@ _NATIVE_MIN_DIAMETER = 1.0e-6
 _NATIVE_MAX_GRAVITY = 1.0e3
 _NATIVE_MAX_WATER_DENSITY = 1.0e5
 _NATIVE_MAX_FLUID_SPEED = 1.0e3
+# native CD_MIN_TIME_STEP: the smallest dtM (the time integration divides by dtM^2)
+_NATIVE_MIN_TIME_STEP = 1.0e-100
 _NATIVE_MAX_WAVE_HEIGHT = 1.0e3
 _NATIVE_WAVE_PERIOD_RANGE = (0.1, 1.0e5)
 _DISABLED_MOTION_FILE_VALUES = frozenset({"0", "none"})
@@ -1261,6 +1263,9 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
             return "must be finite"
         if positive and numeric <= 0.0:
             return "must be positive"
+        # native check_option_row_value rule 'time step'
+        if key == "dtm" and numeric < _NATIVE_MIN_TIME_STEP:
+            return "must be at least 1e-100 s: the time integration divides by its square"
         if lower is not None and numeric < lower:
             return f"must be >= {lower:g}"
         if upper is not None and numeric > upper:

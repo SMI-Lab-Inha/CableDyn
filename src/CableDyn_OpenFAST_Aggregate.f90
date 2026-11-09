@@ -41,7 +41,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   !! pattern) -- the coupling dt freezes at Init and CD_AGG_Step_Moving fails closed on a step
   !! dt that differs from it (a mismatched size would silently desync the cables, whose
   !! generalised-alpha step carries the Init dt, from the mooring columns).
-  USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_All_Finite
+  USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE, CD_All_Finite, CD_MIN_TIME_STEP
   USE CableDyn_PathIO, ONLY: CD_Open_Write
   USE CableDyn_FatalReport, ONLY: CD_Fatal_Thread_Init
   USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: int64
@@ -380,6 +380,12 @@ CONTAINS
     IF (.NOT. (dt > CD_ZERO)) THEN
       ErrStat = CD_AGG_BADINPUT
       ErrMsg = 'CableDyn_OpenFAST_Aggregate: dt must be positive'
+      RETURN
+    END IF
+    IF (dt < CD_MIN_TIME_STEP) THEN
+      ErrStat = CD_AGG_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: dt is below the smallest time step, 1e-100 s: the time '// &
+               'integration divides by dt^2'
       RETURN
     END IF
     ALLOCATE (candidate, parts, STAT=istat)
@@ -1126,6 +1132,12 @@ CONTAINS
     IF (.NOT. (dt > CD_ZERO)) THEN
       ErrStat = CD_AGG_BADINPUT
       ErrMsg = 'CableDyn_OpenFAST_Aggregate: step dt must be positive'
+      RETURN
+    END IF
+    IF (dt < CD_MIN_TIME_STEP) THEN
+      ErrStat = CD_AGG_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: dt is below the smallest time step, 1e-100 s: the time '// &
+               'integration divides by dt^2'
       RETURN
     END IF
     ! Fixed-dt contract: the cables advance with the Init dt frozen into their gen-alpha step, so a

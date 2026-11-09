@@ -1452,7 +1452,8 @@ is stored. A non-finite field returns ``CD_C_BAD_INPUT``.
      - ``double``
      - --
      - --
-     - step size [s], finite and greater than 0
+     - step size [s], finite and at least ``1e-100`` (the time integration divides by
+       ``dt**2``; a smaller step is ``CD_C_BAD_INPUT``)
    * - ``q_coupled``, ``v_coupled``, ``a_coupled``
      - in
      - ``const double *``

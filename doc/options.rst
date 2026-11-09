@@ -261,7 +261,8 @@ Clock and initial condition
    * - ``dtM`` / ``dt``
      - real, s
      - absent (static-only)
-     - finite, > 0. In the standalone driver ``dtM`` and ``TMax`` are given together or not at
+     - finite, at least ``1e-100`` (the time integration divides by ``dtM**2``). In the
+       standalone driver ``dtM`` and ``TMax`` are given together or not at
        all; only ``TMax = 0``, which marches no step, needs no ``dtM``
      - standalone step; OpenFAST targets ``0.1`` s when absent, rounds it to at least one whole
        glue ``DT``, and reports the value used

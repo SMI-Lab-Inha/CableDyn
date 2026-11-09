@@ -810,7 +810,8 @@ class CableDyn:
         without meeting the Newton tolerance raises :class:`ConvergenceError`;
         the model has then already advanced to ``t + dt`` with its best iterate.
         ``dt`` must be a finite positive real number (a string, complex, or
-        boolean value raises :class:`TypeError`).
+        boolean value raises :class:`TypeError`); the library refuses one below
+        ``1e-100`` s, as the time integration divides by ``dt**2``.
         """
         step_dt = _as_real_scalar(dt, "dt", positive=True)
         with self._lock:

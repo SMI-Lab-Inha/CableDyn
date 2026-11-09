@@ -15,6 +15,9 @@ MODULE CableDyn_Precision
 
   REAL(wp), PARAMETER, PUBLIC :: CD_ZERO = 0.0_wp
   REAL(wp), PARAMETER, PUBLIC :: CD_ONE = 1.0_wp
+  ! The smallest time step any march takes: the implicit integrators divide by dt^2, which
+  ! overflows the inertia terms near 1e-155 s; this bound keeps a wide margin above that.
+  REAL(wp), PARAMETER, PUBLIC :: CD_MIN_TIME_STEP = 1.0e-100_wp
 
   PUBLIC :: CD_All_Finite, CD_Is_Finite
 
