@@ -318,7 +318,7 @@ scripts, results, and source provenance are in
   over the full 30-condition period-radius matrix, cycle-maximum upper-end force
   has RMSE 1.58 N, mean absolute percentage error 3.11%, Pearson correlation
   0.993, and Lin concordance 0.989. Two phase-averaged measured histories had
-  waveform RMSEs of 5.93% and 2.56% of their force ranges with 0.3.0 (not rerun for 0.4.0 or 0.4.1).
+  waveform RMSEs of 5.93% and 2.56% of their force ranges with 0.3.0 (not rerun for 0.4.0, 0.4.1 or 0.4.2).
   Halving the mesh length and the time step changes the mean cycle maximum by at most
   0.29% and 0.27%. The
   0.3125 ms step resolves the segment axial modes that the snap loads excite (and the axial
