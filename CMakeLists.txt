@@ -1935,6 +1935,17 @@ if(Python3_Interpreter_FOUND)
     TIMEOUT 900
     ENVIRONMENT "${_cabledyn_python_test_environment}")
 
+  # The finite-EI statics of a clamped lazy wave do not depend on its azimuth: its restart at full
+  # stiffness runs while the residual keeps falling instead of to a fixed count.
+  add_test(NAME hermite_static_azimuth
+           COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_hermite_static_azimuth.py
+                   --exe $<TARGET_FILE:cabledyn>
+                   --output ${CMAKE_BINARY_DIR}/hermite_static_azimuth)
+  set_tests_properties(hermite_static_azimuth PROPERTIES
+    LABELS "python;hermite;static;robustness"
+    TIMEOUT 900
+    ENVIRONMENT "${_cabledyn_python_test_environment}")
+
   # The note on grounded lines that a current moves over a seabed without friction: once per run
   # on every standalone route, and never without a grounded node, a current, or a march, or
   # with friction.
