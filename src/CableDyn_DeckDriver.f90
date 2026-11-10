@@ -15706,7 +15706,9 @@ CONTAINS
       END IF
       t%bb = -second*t%ei/(PI_L*freq)
     END IF
-    IF (t%bb > CD_ZERO .AND. .NOT. (t%ei > CD_ZERO)) THEN
+    ! a damping asked for (a ratio form, or Bb > 0) needs a finite EI: on EI = 0 the ratio form would
+    ! resolve to Bb = 0 and the request would pass unnoticed
+    IF ((bar2 > 0 .OR. t%bb > CD_ZERO) .AND. .NOT. (t%ei > CD_ZERO)) THEN
       CALL fail(ErrStat, ErrMsg, 'LINE TYPES '//TRIM(t%name)//': bending damping (EI|Bb) needs a '// &
                 'finite-EI cable (EI > 0)'); RETURN
     END IF

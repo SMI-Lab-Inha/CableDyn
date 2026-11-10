@@ -8,7 +8,8 @@ PROGRAM test_bending_damping_deck
   !!      printed digits;
   !!   E2 the damping lowers the hang-off curvature range against the undamped deck, and EI|0 is
   !!      the undamped deck exactly;
-  !!   E3 bending damping on an EI = 0 type and malformed EI columns are refused by name.
+  !!   E3 bending damping on an EI = 0 type (as Bb or as a ratio) and malformed EI columns are
+  !!      refused by name.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   IMPLICIT NONE
@@ -165,6 +166,11 @@ CONTAINS
     WRITE (*, '(A)') 'E3 EI = 0: '//TRIM(msg)
     CALL require(.NOT. ok .AND. INDEX(msg, 'bending damping (EI|Bb) needs a finite-EI cable') > 0, &
                  'E3: bending damping on an EI = 0 type')
+    CALL write_deck('bdd_rope_ratio.dat', '0.0|-0.05|0.5', 0.0_wp, rope=.TRUE.)
+    CALL run('bdd_rope_ratio.dat', 'bdd_rope_ratio', ok, msg)
+    WRITE (*, '(A)') 'E3 EI = 0, ratio form: '//TRIM(msg)
+    CALL require(.NOT. ok .AND. INDEX(msg, 'bending damping (EI|Bb) needs a finite-EI cable') > 0, &
+                 'E3: a damping ratio on an EI = 0 type')
     CALL write_deck('bdd_neg.dat', '2.0e4|-250.0', 0.0_wp)
     CALL run('bdd_neg.dat', 'bdd_neg', ok, msg)
     WRITE (*, '(A)') 'E3 negative without f: '//TRIM(msg)

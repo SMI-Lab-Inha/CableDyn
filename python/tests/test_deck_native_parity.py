@@ -975,6 +975,7 @@ def test_bending_damping_forms_are_accepted(ei):
         ("1.99e4|-1.5|1.5", "takes a damping ratio 0 < zeta < 1, written negative"),
         ("1.99e4|-0.02|0", "of EI|-zeta|f must be positive"),
         ("0.0|250.0", "bending damping (EI|Bb) needs a finite-EI cable"),
+        ("0.0|-0.05|0.5", "bending damping (EI|Bb) needs a finite-EI cable"),
     ],
 )
 def test_bending_damping_rows_are_native(ei, message):

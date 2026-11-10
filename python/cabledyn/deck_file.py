@@ -3822,7 +3822,9 @@ class DeckFile:
                         "of EI|-zeta|f must be positive [Hz]"
                     )
                 bend_damping = -ratio * ei / (math.pi * frequency)
-            if bend_damping > 0.0 and not ei > 0.0:
+            # a damping asked for (the ratio form, or Bb > 0) needs a finite EI: on EI = 0 the
+            # ratio form resolves to Bb = 0 and would pass unnoticed
+            if (len(ei_parts) == 3 or bend_damping > 0.0) and not ei > 0.0:
                 raise DeckFormatError(
                     f"{self._at(row)}: LINE TYPES {row.tokens[0]}: bending damping (EI|Bb) needs "
                     "a finite-EI cable (EI > 0)"
