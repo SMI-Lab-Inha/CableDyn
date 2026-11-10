@@ -381,7 +381,8 @@ CONTAINS
 
   END SUBROUTINE hermite_element_integrated
 
-  SUBROUTINE CD_HermiteCable_Bending_Damping(qr, vr, L, Bb, fdamp, Kq, Kv, ErrStat, ErrMsg, quadrature_order)
+  SUBROUTINE CD_HermiteCable_Bending_Damping(qr, vr, L, Bb, fdamp, Kq, Kv, ErrStat, ErrMsg, quadrature_order, &
+                                             l0_dot)
     !! Kelvin-Voigt bending damping of one cubic-Hermite element: the dissipation function
     !!   psi = integral_0^L 1/2 Bb |kdot|^2 ds,   kdot = (I - t t^T) d kappa/dt,
     !! with kappa = (a x b)/|a|^3 the curvature vector of the elastic energy (a = dr/ds,
@@ -397,19 +398,27 @@ CONTAINS
     !! and Kv = d fdamp/dv are the exact Jacobians (Kq is not symmetric in general). qr and vr
     !! are the element DOFs [r1, m1, r2, m2] and their rates; L the unstretched length; Bb >= 0
     !! [N m^2 s].
+    !!
+    !! l0_dot (optional): the unstretched-length rate of an element under active line control. The
+    !! shape functions depend on L: a = p/L + g and b = P/L^2 + G/L, with p, P the end-position parts
+    !! and g, G the tangent-handle parts, so at fixed DOFs a changes at -(L'/L) a_pos and b at
+    !! -(L'/L)(2 b_pos + b_tan). These join the rates of a and b, and their dependence on the end
+    !! positions and tangent handles joins Kq; Kv is unchanged.
     REAL(wp), INTENT(IN) :: qr(12), vr(12), L, Bb
     REAL(wp), INTENT(OUT) :: fdamp(12)
     REAL(wp), INTENT(OUT), OPTIONAL :: Kq(12, 12), Kv(12, 12)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
+    REAL(wp), INTENT(IN), OPTIONAL :: l0_dot
 
-    REAL(wp) :: gp(MAX_NG), gw(MAX_NG), H(4), dH(4), ddH(4), b1(4), b2(4)
+    REAL(wp) :: gp(MAX_NG), gw(MAX_NG), H(4), dH(4), ddH(4), b1(4), b2(4), rho, ca(4), cb(4)
     REAL(wp) :: av(3), bv(3), ad(3), bd(3), xd(6), cr(3), tv(3), s2, sp, g, ga, gaa2
     REAL(wp) :: Dcr(3, 6), Dg(6), J(3, 6), Pm(3, 3), Km(3, 6), kr(3), dK(3, 6, 6), T(3, 6, 6), dP(3, 3, 3)
     REAL(wp) :: g6(6), Q6(6, 6), V6(6, 6), a6(6), wgL, w11, w12, w21, w22, acc, dik, dmk
     INTEGER :: order, qg, i, jj, k, m, c, dd, ic, jc, kn, mn
     INTEGER, PARAMETER :: sd(4) = [0, 3, 6, 9]
+    LOGICAL :: has_rate
 
     ErrStat = CD_HCABLE_OK
     ErrMsg = ''
@@ -431,6 +440,14 @@ CONTAINS
     IF (order < 1 .OR. order > MAX_NG) THEN
       CALL fail('quadrature_order must lie in [1,6]'); RETURN
     END IF
+    rho = CD_ZERO
+    IF (PRESENT(l0_dot)) THEN
+      IF (.NOT. CD_Is_Finite(l0_dot)) THEN
+        CALL fail('l0_dot must be finite'); RETURN
+      END IF
+      rho = l0_dot/L
+    END IF
+    has_rate = ABS(rho) > CD_ZERO
     IF (.NOT. (Bb > CD_ZERO)) RETURN
 
     CALL CD_HermiteCable_Gauss_Rule(order, gp, gw)
@@ -444,6 +461,16 @@ CONTAINS
         av(c) = SUM(b1*qr(sd + c)); bv(c) = SUM(b2*qr(sd + c))
         ad(c) = SUM(b1*vr(sd + c)); bd(c) = SUM(b2*vr(sd + c))
       END DO
+      ! the length-rate weights of the effective rates: d a/dt -= rho sum_k ca(k) q_k and
+      ! d b/dt -= rho sum_k cb(k) q_k (end positions k = 1, 3; tangent handles k = 2, 4)
+      ca = [b1(1), CD_ZERO, b1(3), CD_ZERO]
+      cb = [2.0_wp*b2(1), b2(2), 2.0_wp*b2(3), b2(4)]
+      IF (has_rate) THEN
+        DO c = 1, 3
+          ad(c) = ad(c) - rho*SUM(ca*qr(sd + c))
+          bd(c) = bd(c) - rho*SUM(cb*qr(sd + c))
+        END DO
+      END IF
       xd(1:3) = ad; xd(4:6) = bd
       s2 = SUM(av*av)
       IF (s2 <= GEOM_TOL*GEOM_TOL) THEN
@@ -509,7 +536,7 @@ CONTAINS
         END DO
       END DO
       g6 = Bb*MATMUL(TRANSPOSE(Km), kr)
-      IF (PRESENT(Kv)) V6 = Bb*MATMUL(TRANSPOSE(Km), Km)
+      IF (PRESENT(Kv) .OR. (PRESENT(Kq) .AND. has_rate)) V6 = Bb*MATMUL(TRANSPOSE(Km), Km)
       IF (PRESENT(Kq)) THEN
         ! d (K^T K xd)_j / d x_k = sum_i dK(i,j,k) kr_i + K_ij sum_l dK(i,l,k) xd_l
         DO k = 1, 6
@@ -538,8 +565,14 @@ CONTAINS
             jc = sd(mn) + dd
             DO c = 1, 3
               ic = sd(kn) + c
-              IF (PRESENT(Kq)) Kq(ic, jc) = Kq(ic, jc) + w11*Q6(c, dd) + w12*Q6(c, 3 + dd) &
-                                            + w21*Q6(3 + c, dd) + w22*Q6(3 + c, 3 + dd)
+              IF (PRESENT(Kq)) THEN
+                Kq(ic, jc) = Kq(ic, jc) + w11*Q6(c, dd) + w12*Q6(c, 3 + dd) &
+                             + w21*Q6(3 + c, dd) + w22*Q6(3 + c, 3 + dd)
+                ! the effective rates' dependence on the DOFs under a length rate
+                IF (has_rate) Kq(ic, jc) = Kq(ic, jc) - rho*wgL* &
+                                           ((b1(kn)*V6(c, dd) + b2(kn)*V6(3 + c, dd))*ca(mn) + &
+                                            (b1(kn)*V6(c, 3 + dd) + b2(kn)*V6(3 + c, 3 + dd))*cb(mn))
+              END IF
               IF (PRESENT(Kv)) Kv(ic, jc) = Kv(ic, jc) + w11*V6(c, dd) + w12*V6(c, 3 + dd) &
                                             + w21*V6(3 + c, dd) + w22*V6(3 + c, 3 + dd)
             END DO

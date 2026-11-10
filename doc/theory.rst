@@ -854,7 +854,9 @@ dissipation function is
    \qquad \mathbf{t} = \mathbf{a}/\lvert\mathbf{a}\rvert ,
 
 and the damping force is :math:`\partial\psi/\partial\mathbf{v}`, with exact position and velocity
-Jacobians. Because :math:`\boldsymbol{\kappa}` is normal to :math:`\mathbf{t}`,
+Jacobians. Under active line control (``CONTROL``) the curvature rate also carries the change of
+the element's unstretched length, on which the shape functions depend, as the axial strain rate
+does. Because :math:`\boldsymbol{\kappa}` is normal to :math:`\mathbf{t}`,
 :math:`\mathring{\boldsymbol{\kappa}} = \dot{\boldsymbol{\kappa}} - (\mathbf{t}\times\dot{\mathbf{t}})
 \times\boldsymbol{\kappa}`: the curvature rate in the frame carried with the tangent by the smallest
 rotation. It vanishes for a rigid motion whose rotation

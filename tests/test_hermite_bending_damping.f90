@@ -10,9 +10,16 @@ PROGRAM test_hermite_bending_damping
   !!      tangent everywhere (a planar arc spun about the normal of its plane);
   !!   K4 the planar rate: a straight element bent in its plane at curvature rate kdot dissipates
   !!      Bb kdot^2 L, the dissipation function's closed form;
-  !!   K5 bad inputs are refused by name.
+  !!   K5 bad inputs are refused by name;
+  !!   K6 with a length rate l0_dot (active line control) the force is d psi / d v of the
+  !!      dissipation function built independently from the public curvature (kappa_b = t x kvec,
+  !!      CD_HermiteCable_Curvature) with its rate by central differences in the DOFs and the
+  !!      length, and a length change alone (v = 0) is damped;
+  !!   K7 Kq and Kv with a length rate equal the central differences of the force.
   USE CableDyn_Precision, ONLY: wp
-  USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Bending_Damping, CD_HCABLE_OK
+  USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_POSITIVE_INF
+  USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Bending_Damping, CD_HCABLE_OK, CD_HermiteCable_Curvature, &
+                                   CD_HermiteCable_Shapes, CD_HermiteCable_Gauss_Rule
   IMPLICIT NONE
   INTEGER :: nfail = 0
   REAL(wp), PARAMETER :: L = 2.5_wp, BB = 37.0_wp
@@ -22,6 +29,7 @@ PROGRAM test_hermite_bending_damping
   CALL check_rigid_motions()
   CALL check_planar_rate()
   CALL check_refusals()
+  CALL check_length_rate()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -152,6 +160,89 @@ CONTAINS
     CALL CD_HermiteCable_Bending_Damping(q, v, L, BB, f, ErrStat=es, ErrMsg=em)
     CALL require(es /= CD_HCABLE_OK .AND. INDEX(em, 'degenerate centreline') > 0, 'K5: collapsed element')
   END SUBROUTINE check_refusals
+
+  SUBROUTINE kappa_b(q, el, xi, kb)
+    !! The binormal curvature vector (a x b)/|a|^3 from the public routines: t x kvec, with
+    !! kvec = (r' x r'') x r'/|r'|^4 of CD_HermiteCable_Curvature and t from the shape derivatives.
+    REAL(wp), INTENT(IN) :: q(12), el, xi
+    REAL(wp), INTENT(OUT) :: kb(3)
+    REAL(wp) :: H(4), dH(4), a(3), kv(3), cv
+    INTEGER :: es, c
+    CHARACTER(256) :: em
+    CALL CD_HermiteCable_Shapes(xi, el, H, dH)
+    DO c = 1, 3
+      a(c) = (dH(1)*q(c) + dH(2)*q(3 + c) + dH(3)*q(6 + c) + dH(4)*q(9 + c))/el
+    END DO
+    CALL CD_HermiteCable_Curvature(q, el, xi, cv, es, em, kvec=kv)
+    kb = cross(a/NORM2(a), kv)
+  END SUBROUTINE kappa_b
+
+  REAL(wp) FUNCTION psi_fd(q, v, ldot) RESULT(psi)
+    !! 1/2 Bb int |(I - t t^T) dkappa_b/dt|^2 ds over the element, the rate by central differences
+    !! along (v, ldot), with the kernel's Gauss rule (order 4) on the unstretched length.
+    REAL(wp), INTENT(IN) :: q(12), v(12), ldot
+    REAL(wp) :: gp(6), gw(6), kp(3), km(3), kd(3), H(4), dH(4), a(3), tv(3), eps
+    INTEGER :: ig, c
+    eps = 1.0e-6_wp
+    CALL CD_HermiteCable_Gauss_Rule(4, gp, gw)
+    psi = 0.0_wp
+    DO ig = 1, 4
+      CALL kappa_b(q + eps*v, L + eps*ldot, gp(ig), kp)
+      CALL kappa_b(q - eps*v, L - eps*ldot, gp(ig), km)
+      kd = (kp - km)/(2.0_wp*eps)
+      CALL CD_HermiteCable_Shapes(gp(ig), L, H, dH)
+      DO c = 1, 3
+        a(c) = (dH(1)*q(c) + dH(2)*q(3 + c) + dH(3)*q(6 + c) + dH(4)*q(9 + c))/L
+      END DO
+      tv = a/NORM2(a)
+      kd = kd - tv*DOT_PRODUCT(tv, kd)
+      psi = psi + 0.5_wp*BB*DOT_PRODUCT(kd, kd)*gw(ig)*L
+    END DO
+  END FUNCTION psi_fd
+
+  SUBROUTINE check_length_rate()
+    REAL(wp) :: q(12), v(12), f(12), fx(12), dv(12), h, ldot, scale, Kq(12, 12), Kv(12, 12), fp(12), fm(12)
+    REAL(wp) :: Kq_fd(12, 12), Kv_fd(12, 12), eq, ev
+    INTEGER :: es, j
+    CHARACTER(256) :: em
+    CALL curved_state(q, v)
+    ldot = 0.37_wp
+    CALL CD_HermiteCable_Bending_Damping(q, v, L, BB, f, ErrStat=es, ErrMsg=em, l0_dot=ldot)
+    CALL require(es == CD_HCABLE_OK, 'K6: evaluation with l0_dot: '//TRIM(em))
+    ! d psi / d v by central differences (psi is quadratic in v)
+    h = 1.0e-2_wp
+    DO j = 1, 12
+      dv = 0.0_wp; dv(j) = h
+      fx(j) = (psi_fd(q, v + dv, ldot) - psi_fd(q, v - dv, ldot))/(2.0_wp*h)
+    END DO
+    scale = MAXVAL(ABS(fx))
+    WRITE (*, '(A,ES11.3)') 'K6: max |f - d psi/d v| / max |f| with l0_dot ', MAXVAL(ABS(f - fx))/scale
+    CALL require(MAXVAL(ABS(f - fx)) <= 1.0e-6_wp*scale, 'K6: the force is d psi/d v with the length rate')
+    v = 0.0_wp
+    CALL CD_HermiteCable_Bending_Damping(q, v, L, BB, f, ErrStat=es, ErrMsg=em, l0_dot=ldot)
+    CALL require(MAXVAL(ABS(f)) > 0.0_wp, 'K6: a length change alone is damped')
+    ! K7: Jacobians with the length rate
+    CALL curved_state(q, v)
+    CALL CD_HermiteCable_Bending_Damping(q, v, L, BB, f, Kq, Kv, es, em, l0_dot=ldot)
+    DO j = 1, 12
+      h = 1.0e-6_wp*MAX(1.0_wp, ABS(q(j)))
+      dv = 0.0_wp; dv(j) = h
+      CALL CD_HermiteCable_Bending_Damping(q + dv, v, L, BB, fp, ErrStat=es, ErrMsg=em, l0_dot=ldot)
+      CALL CD_HermiteCable_Bending_Damping(q - dv, v, L, BB, fm, ErrStat=es, ErrMsg=em, l0_dot=ldot)
+      Kq_fd(:, j) = (fp - fm)/(2.0_wp*h)
+      h = 1.0e-6_wp*MAX(1.0_wp, ABS(v(j)))
+      dv = 0.0_wp; dv(j) = h
+      CALL CD_HermiteCable_Bending_Damping(q, v + dv, L, BB, fp, ErrStat=es, ErrMsg=em, l0_dot=ldot)
+      CALL CD_HermiteCable_Bending_Damping(q, v - dv, L, BB, fm, ErrStat=es, ErrMsg=em, l0_dot=ldot)
+      Kv_fd(:, j) = (fp - fm)/(2.0_wp*h)
+    END DO
+    eq = MAXVAL(ABS(Kq - Kq_fd))/MAXVAL(ABS(Kq_fd))
+    ev = MAXVAL(ABS(Kv - Kv_fd))/MAXVAL(ABS(Kv_fd))
+    WRITE (*, '(A,2ES11.3)') 'K7: relative |Kq - FD|, |Kv - FD| with l0_dot ', eq, ev
+    CALL require(eq < 1.0e-6_wp .AND. ev < 1.0e-6_wp, 'K7: Jacobians with the length rate')
+    CALL CD_HermiteCable_Bending_Damping(q, v, L, BB, f, ErrStat=es, ErrMsg=em, l0_dot=IEEE_VALUE(1.0_wp, IEEE_POSITIVE_INF))
+    CALL require(es /= CD_HCABLE_OK .AND. INDEX(em, 'l0_dot must be finite') > 0, 'K5: non-finite l0_dot refused')
+  END SUBROUTINE check_length_rate
 
   PURE FUNCTION cross(a, b) RESULT(c)
     REAL(wp), INTENT(IN) :: a(3), b(3)

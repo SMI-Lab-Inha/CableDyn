@@ -3067,8 +3067,9 @@ CONTAINS
     !! The structural (Kelvin-Voigt) damping load of element e: the axial dashpot (BA, with the
     !! controlled-length rate) and the bending dashpot (Bb), summed, as an internal generalised
     !! force, with their exact Jacobians kdq = d/dq, kdv = d/dv when requested. Without bending
-    !! damping the axial kernel's output is returned as it stands (bit for bit). fixed_length = .TRUE.
-    !! takes the axial strain rate without the controlled-length rate l0_dot (the node recovery's form).
+    !! damping the axial kernel's output is returned as it stands (bit for bit). Under active line
+    !! control both rates include the controlled-length rate l0_dot; fixed_length = .TRUE. leaves it
+    !! out (the node recovery's form).
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: e
     REAL(wp), INTENT(IN) :: qe(12), ve(12)
@@ -3108,9 +3109,15 @@ CONTAINS
     END IF
     IF (.NOT. model%has_bend_damping) RETURN
     IF (.NOT. (model%Bb(e) > CD_ZERO)) RETURN
-    IF (want) THEN
+    IF (want .AND. ctrl) THEN
+      CALL CD_HermiteCable_Bending_Damping(qe, ve, model%l0(e), model%Bb(e), fb, kbq, kbv, es, ErrMsg, &
+                                           quadrature_order=model%bending_quadrature_order, l0_dot=model%l0_dot(e))
+    ELSE IF (want) THEN
       CALL CD_HermiteCable_Bending_Damping(qe, ve, model%l0(e), model%Bb(e), fb, kbq, kbv, es, ErrMsg, &
                                            quadrature_order=model%bending_quadrature_order)
+    ELSE IF (ctrl) THEN
+      CALL CD_HermiteCable_Bending_Damping(qe, ve, model%l0(e), model%Bb(e), fb, ErrStat=es, ErrMsg=ErrMsg, &
+                                           quadrature_order=model%bending_quadrature_order, l0_dot=model%l0_dot(e))
     ELSE
       CALL CD_HermiteCable_Bending_Damping(qe, ve, model%l0(e), model%Bb(e), fb, ErrStat=es, ErrMsg=ErrMsg, &
                                            quadrature_order=model%bending_quadrature_order)
