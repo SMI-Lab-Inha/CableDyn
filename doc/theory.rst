@@ -837,6 +837,47 @@ viscoelastic or Syrope section has no single ``EA`` that sets the first mode, so
 and a negative ``BA`` is refused under this option; ``BA`` in N·s is used as given under both
 conventions.
 
+Bending damping
+~~~~~~~~~~~~~~~
+
+A finite-EI cable can carry a bending Kelvin–Voigt damping (``EI|Bb`` or ``EI|-zeta|f`` in
+LINE TYPES, see :doc:`file_formats`). With :math:`\mathbf{a} = \mathbf{r}_{,s}`,
+:math:`\mathbf{b} = \mathbf{r}_{,ss}` and the curvature vector of the elastic energy
+:math:`\boldsymbol{\kappa} = \mathbf{a}\times\mathbf{b}/\lvert\mathbf{a}\rvert^3`, the element's
+dissipation function is
+
+.. math::
+
+   \psi = \int_0^{L_0} \tfrac{1}{2}\,B_b\,\lvert\mathring{\boldsymbol{\kappa}}\rvert^2\,\mathrm{d}s,
+   \qquad
+   \mathring{\boldsymbol{\kappa}} = (\mathbf{I} - \mathbf{t}\mathbf{t}^\mathsf{T})\,\dot{\boldsymbol{\kappa}},
+   \qquad \mathbf{t} = \mathbf{a}/\lvert\mathbf{a}\rvert ,
+
+and the damping force is :math:`\partial\psi/\partial\mathbf{v}`, with exact position and velocity
+Jacobians. Because :math:`\boldsymbol{\kappa}` is normal to :math:`\mathbf{t}`,
+:math:`\mathring{\boldsymbol{\kappa}} = \dot{\boldsymbol{\kappa}} - (\mathbf{t}\times\dot{\mathbf{t}})
+\times\boldsymbol{\kappa}`: the curvature rate in the frame carried with the tangent by the smallest
+rotation. It vanishes for a rigid motion whose rotation
+is normal to the tangent and equals :math:`\dot{\boldsymbol{\kappa}}` in planar bending. Without a
+twist state, a curvature that turns about the centreline cannot be told from a whirl and is damped
+as one; for a rigid rotation about the tangent of a curved span (the out-of-plane swing of a
+catenary) the force is of order :math:`B_b\kappa^2` and negligible against the span's inertia.
+
+The damping is stiffness-proportional in the bending stiffness alone. A uniform cable of tension
+:math:`T` vibrating in a mode of wavenumber :math:`k` and frequency :math:`\omega` has the damping
+ratio
+
+.. math::
+
+   \zeta = \frac{\omega\,B_b}{2\,EI}\;\frac{EI\,k^2}{EI\,k^2 + T} ,
+
+the pure-bending ratio times the bending share of the modal stiffness: a tension-dominated mode is
+damped much less than a bending one. ``EI|-zeta|f`` sets :math:`B_b = \zeta\,EI/(\pi f)`, the ratio
+:math:`\zeta` of a pure bending mode of frequency :math:`f`. The free decay of the first mode of a
+pinned cable reproduces this ratio to 0.05 % in the bending- and tension-dominated limits
+(``test_hermite_bending_damping_dynamic``). The force joins the axial damping as the structural
+damping load (it is in the reported end forces, not in the elastic ``BendMom`` output).
+
 Viscoelastic rope (MoorDyn ``ElasticMod`` 2 and 3)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

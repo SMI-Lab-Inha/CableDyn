@@ -994,6 +994,28 @@ def test_torsional_damping_round_trips_in_the_gj_column(tmp_path: Path) -> None:
     assert next(t for t in loaded.line_types if t.name == "cable").gj == (1.0e4, 0.0, -0.02)
 
 
+@pytest.mark.parametrize("ei", [(1.0e4, 250.0), (1.0e4, -0.02, 1.5)])
+def test_bending_damping_round_trips_in_the_ei_column(
+    tmp_path: Path, ei: tuple[float, ...]
+) -> None:
+    model = _chain_model(tmp_path)
+    cable = model.add_line_type("cable", diam=0.2, mass=40.0, ea=5.0e8, ei=ei)
+    assert cable.ei == ei
+    target = model.save(tmp_path / "bend_damped.dat")
+    deck = DeckFile.read(target)
+    row = next(r for r in deck.line_types if r.tokens[0] == "cable")
+    assert tuple(float(v) for v in row.tokens[5].split("|")) == ei
+    loaded = DeckModel.load(target)
+    assert next(t for t in loaded.line_types if t.name == "cable").ei == ei
+
+
+def test_bending_damping_ei_tuple_length_is_checked(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type("cable", diam=0.2, mass=40.0, ea=5.0e8, ei=(1.0e4, 1.0, 2.0, 3.0))
+    with pytest.raises(ValueError, match=r"ei is EI, \(EI, Bb\) or \(EI, -zeta, f\)"):
+        model.to_text()
+
+
 @pytest.mark.parametrize(
     ("gj", "ei", "message"),
     [

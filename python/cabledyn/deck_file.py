@@ -3729,6 +3729,8 @@ class DeckFile:
             for index in (1, 2, *range(5, len(row.tokens))):
                 if len(row.tokens) == 14 and index == 7:
                     continue  # the GJ column, GJ, GJ|K or GJ|K|Bt, is read below
+                if index == 5:
+                    continue  # the EI column, EI, EI|Bb or EI|-zeta|f, is read below
                 numeric(row.tokens[index], row, f"LINE TYPES column {index + 1}")
             ea_parts = row.tokens[3].split("|")
             ba_parts = row.tokens[4].split("|")
@@ -3790,7 +3792,41 @@ class DeckFile:
                     f"{self._at(row)}: LINE TYPES drag and added-mass coefficients "
                     "(Cd_n Cd_t Ca_n Ca_t) must be non-negative"
                 )
-            ei = numeric(row.tokens[5], row, "EI")
+            # native parse_ei_column: EI, EI|Bb (bending damping, N m^2 s) or EI|-zeta|f
+            ei_parts = row.tokens[5].split("|")
+            if len(ei_parts) > 3:
+                raise DeckFormatError(
+                    f'{self._at(row)}: LINE TYPES EI column "{row.tokens[5]}" takes EI, EI|Bb '
+                    "or EI|-zeta|f"
+                )
+            ei = numeric(ei_parts[0], row, "EI")
+            bend_damping = 0.0
+            if len(ei_parts) == 2:
+                bend_damping = numeric(ei_parts[1], row, "EI|Bb damping")
+                if bend_damping < 0.0:
+                    raise DeckFormatError(
+                        f'{self._at(row)}: LINE TYPES EI column "{row.tokens[5]}": a negative '
+                        "bending damping is -zeta and needs the frequency it holds at, EI|-zeta|f"
+                    )
+            elif len(ei_parts) == 3:
+                ratio = numeric(ei_parts[1], row, "EI|-zeta|f ratio")
+                frequency = numeric(ei_parts[2], row, "EI|-zeta|f frequency")
+                if not -1.0 < ratio < 0.0:
+                    raise DeckFormatError(
+                        f'{self._at(row)}: LINE TYPES EI column "{row.tokens[5]}": '
+                        "EI|-zeta|f takes a damping ratio 0 < zeta < 1, written negative"
+                    )
+                if not frequency > 0.0:
+                    raise DeckFormatError(
+                        f'{self._at(row)}: LINE TYPES EI column "{row.tokens[5]}": the frequency f '
+                        "of EI|-zeta|f must be positive [Hz]"
+                    )
+                bend_damping = -ratio * ei / (math.pi * frequency)
+            if bend_damping > 0.0 and not ei > 0.0:
+                raise DeckFormatError(
+                    f"{self._at(row)}: LINE TYPES {row.tokens[0]}: bending damping (EI|Bb) needs "
+                    "a finite-EI cable (EI > 0)"
+                )
             if len(row.tokens) in (11, 13):
                 # Native check_viv_columns: MoorDyn's cross-flow VIV columns Cl [dF cF]
                 cl = numeric(row.tokens[10], row, "Cl")

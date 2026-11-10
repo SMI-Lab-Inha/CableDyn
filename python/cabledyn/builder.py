@@ -188,8 +188,11 @@ class LineType:
         viscoelastic type, or a :class:`SyropeEA`.
     ba : float | tuple[float, ...]
         Axial damping in N s (negative: damping ratio), or ``(Bs, Bd)``.
-    ei : float
-        Bending stiffness, in N m^2.
+    ei : float | tuple[float, ...]
+        Bending stiffness, in N m^2; ``(EI, Bb)`` adds the bending damping
+        ``Bb`` in N m^2 s (written ``EI|Bb``), and ``(EI, -zeta, f)`` gives it
+        as the damping ratio ``zeta`` of a bending mode of frequency ``f`` in Hz
+        (written ``EI|-zeta|f``; ``Bb = zeta EI / (pi f)``).
     cdn, cdt, can, cat : float
         Normal and tangential drag and added-mass coefficients.
     gas, gj, irt, irn : float | None
@@ -211,7 +214,7 @@ class LineType:
     mass: float
     ea: float | tuple[float, ...] | SyropeEA
     ba: float | tuple[float, ...] = 0.0
-    ei: float = 0.0
+    ei: float | tuple[float, ...] = 0.0
     cdn: float = 0.0
     cdt: float = 0.0
     can: float = 0.0
@@ -1627,7 +1630,7 @@ class DeckModel:
         mass: float,
         ea: float | tuple[float, ...] | SyropeEA,
         ba: float | tuple[float, ...] = 0.0,
-        ei: float = 0.0,
+        ei: float | tuple[float, ...] = 0.0,
         cdn: float = 0.0,
         cdt: float = 0.0,
         can: float = 0.0,
@@ -2661,7 +2664,9 @@ class DeckModel:
                 row.append(f'"{_render(ea)}"')
             else:
                 row.append(_multi(item.ea, what))
-            row += [_multi(item.ba, what), _num(item.ei, what)]
+            if isinstance(item.ei, tuple) and len(item.ei) not in (2, 3):
+                raise ValueError(f"{what}: ei is EI, (EI, Bb) or (EI, -zeta, f)")
+            row += [_multi(item.ba, what), _multi(item.ei, what)]
             extra = (item.gas, item.gj, item.irt, item.irn)
             if all(value is not None for value in extra):
                 wide = True
@@ -3171,7 +3176,7 @@ class _Loader:
             mass=_f(values["mass"]),
             ea=ea,
             ba=_fmulti(values["ba"]),
-            ei=_f(values["ei"]),
+            ei=_fmulti(values["ei"]),
             cdn=_f(values["cdn"]),
             cdt=_f(values["cdt"]),
             can=_f(values["can"]),

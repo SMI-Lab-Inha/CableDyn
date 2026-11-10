@@ -766,6 +766,19 @@ add_executable(test_hermite_axial_damping tests/test_hermite_axial_damping.f90)
 target_link_libraries(test_hermite_axial_damping PRIVATE cabledyn_core)
 add_test(NAME hermite_axial_damping COMMAND test_hermite_axial_damping)
 set_tests_properties(hermite_axial_damping PROPERTIES LABELS "fortran;unit;dynamic;damping")
+add_executable(test_hermite_bending_damping tests/test_hermite_bending_damping.f90)
+target_link_libraries(test_hermite_bending_damping PRIVATE cabledyn_core)
+add_test(NAME hermite_bending_damping COMMAND test_hermite_bending_damping)
+set_tests_properties(hermite_bending_damping PROPERTIES LABELS "fortran;unit;damping")
+add_executable(test_hermite_bending_damping_dynamic tests/test_hermite_bending_damping_dynamic.f90)
+target_link_libraries(test_hermite_bending_damping_dynamic PRIVATE cabledyn_core)
+add_test(NAME hermite_bending_damping_dynamic COMMAND test_hermite_bending_damping_dynamic)
+set_tests_properties(hermite_bending_damping_dynamic PROPERTIES LABELS "fortran;unit;dynamic;damping")
+# Bending damping on a deck (EI|Bb, EI|-zeta|f): resolution, effect and refusals end to end.
+add_executable(test_bending_damping_deck tests/test_bending_damping_deck.f90)
+target_link_libraries(test_bending_damping_deck PRIVATE cabledyn_core)
+add_test(NAME bending_damping_deck COMMAND test_bending_damping_deck)
+set_tests_properties(bending_damping_deck PROPERTIES LABELS "fortran;driver;integration;dynamic;damping")
 
 # Active line control of a finite-EI cable: the length update rebuilds the caches a fresh
 # build carries (bit for bit), is atomic and rewinds exactly; hanging, taut and paid-out
@@ -3436,6 +3449,9 @@ if(CABLEDYN_ENABLE_COVERAGE)
       test_hermite_cable_dynamic
       test_hermite_drag_dynamics
       test_hermite_axial_damping
+      test_hermite_bending_damping
+      test_hermite_bending_damping_dynamic
+      test_bending_damping_deck
       test_hermite_cable_control
       test_control_torsion
       test_hermite_added_mass

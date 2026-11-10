@@ -238,7 +238,7 @@ Inside OUTPUTS, a row whose first token is `END` also closes the channel list.
 | `MassDenInAir` | dry mass per unstretched metre [kg/m] | submerged weight = (m − ρ_w·πd²/4)·g; its magnitude at most 1e6 where used |
 | `EA` | axial stiffness [N] | linear (T = EA·ε); at least 1e-3 and at most 1e15 where used; see the viscoelastic and Syrope forms below |
 | `BA/-zeta` | axial damping: ≥ 0 is BA [N·s], < 0 is −ζ (damping ratio): by default (MoorDyn's convention) of each segment, BA = ζ L0 √(EA m) per element, which damps the line's first axial mode at about ζ π/(2N) on N elements and so depends on the mesh (a run notes the ratio); under `mode1 axialDampingRatio` of the line's first axial mode, on any mesh (see the OPTIONS table) | active in EI = 0 and finite-EI dynamics; ignored in a static-only run |
-| `EI` | bending stiffness [N·m²] | finite and ≥ 0; see [EI routing](#ei-routing) |
+| `EI` | bending stiffness [N·m²]; `EI|Bb` or `EI|-zeta|f` adds bending damping (below) | finite and ≥ 0; see [EI routing](#ei-routing) |
 | `Cd_n`, `Cd_t` | normal / tangential drag coefficients | used by EI = 0 dynamic current and Airy-wave runs |
 | `Ca_n`, `Ca_t` | normal / tangential added-mass coefficients | used by EI = 0 dynamic Froude–Krylov and added-mass runs |
 
@@ -277,6 +277,17 @@ cable or wire rope (`T = EA ε + K τ`, `M = GJ τ + K ε`; see
 `l0 √(GJ Irn)` on the final mesh, as `BA` is for the axial damping (an element whose length
 active line control changes keeps its `ζ`). It needs a finite-EI type; `GJ|0|Bt` is damping
 without coupling.
+
+**Bending damping.** The `EI` column may be written `EI|Bb`, with `Bb` [N·m²·s] the bending
+Kelvin–Voigt damping of a finite-EI cable: a damping moment `Bb` times the rate of the curvature
+vector, taken in the frame carried with the cable's tangent (see [Bending damping](theory.rst)). It
+is stiffness-proportional: a bending mode of frequency `ω` whose strain energy is all bending has
+the damping ratio `ω Bb/(2 EI)`, and a mode that tension also stiffens is damped only in its
+bending share, `ω Bb/(2 EI) · EI k²/(EI k² + T)` for a uniform cable of wavenumber `k` under
+tension `T`. `EI|-zeta|f` gives it as the damping ratio `0 < ζ < 1` of a pure bending mode of
+frequency `f` [Hz], `Bb = ζ EI/(π f)`, set once per line type (it does not depend on the mesh).
+`EI|0` is the plain `EI`. It needs `EI > 0` and acts in the dynamics only (a static solve has no
+rates).
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:
