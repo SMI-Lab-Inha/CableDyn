@@ -3063,13 +3063,14 @@ CONTAINS
     END SUBROUTINE fail
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Bending_Damping
 
-  SUBROUTINE structural_damping_element(model, e, qe, ve, fdamp, ErrStat, ErrMsg, kdq, kdv, fixed_length)
+  SUBROUTINE structural_damping_element(model, e, qe, ve, fdamp, ErrStat, ErrMsg, kdq, kdv, fixed_length, &
+                                        fbend)
     !! The structural (Kelvin-Voigt) damping load of element e: the axial dashpot (BA, with the
     !! controlled-length rate) and the bending dashpot (Bb), summed, as an internal generalised
     !! force, with their exact Jacobians kdq = d/dq, kdv = d/dv when requested. Without bending
     !! damping the axial kernel's output is returned as it stands (bit for bit). Under active line
     !! control both rates include the controlled-length rate l0_dot; fixed_length = .TRUE. leaves it
-    !! out (the node recovery's form).
+    !! out (the node recovery's form). fbend (optional) returns the bending part of fdamp alone.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: e
     REAL(wp), INTENT(IN) :: qe(12), ve(12)
@@ -3078,6 +3079,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(OUT), OPTIONAL :: kdq(12, 12), kdv(12, 12)
     LOGICAL, INTENT(IN), OPTIONAL :: fixed_length
+    REAL(wp), INTENT(OUT), OPTIONAL :: fbend(12)
     REAL(wp) :: fb(12), kbq(12, 12), kbv(12, 12)
     LOGICAL :: want, ctrl
     INTEGER :: es
@@ -3090,6 +3092,7 @@ CONTAINS
     IF (want) THEN
       kdq = CD_ZERO; kdv = CD_ZERO
     END IF
+    IF (PRESENT(fbend)) fbend = CD_ZERO
     IF (model%has_axial_damping) THEN
       IF (want .AND. ctrl) THEN
         CALL CD_HermiteCable_Axial_Damping_Element(qe, ve, model%l0(e), model%BA(e), fdamp, kdq, kdv, ErrStat, ErrMsg, &
@@ -3126,6 +3129,7 @@ CONTAINS
       ErrStat = CD_HCDYN_NOCONVERGE; RETURN
     END IF
     fdamp = fdamp + fb
+    IF (PRESENT(fbend)) fbend = fb
     IF (want) THEN
       kdq = kdq + kbq; kdv = kdv + kbv
     END IF
@@ -6918,7 +6922,8 @@ CONTAINS
     !! Effective tension, curvature and bend moment at every node (internal order) recovered
     !! from nodal equilibrium, in one pass over the elements.
     !!
-    !! For element e the end residual g_e = f_int + f_damp - f_ext + M_e a_e holds the element's
+    !! For element e the end residual g_e = f_int + f_damp - f_ext + M_e a_e (without the tangent
+    !! rows of the bending damping, a viscous moment that is not EI r'') holds the element's
     !! own distributed loads (consistent submerged weight, dry-part buoyancy, drag,
     !! Froude-Krylov force, the seabed contact of its end nodes spread over their tributary
     !! lengths, and the structural and added-mass inertia): it is the generalized force the two
@@ -7583,7 +7588,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), PARAMETER :: PI_L = 3.14159265358979323846_wp
     INTEGER, PARAMETER :: ZS(4) = [3, 6, 9, 12]
-    REAL(wp) :: qe(12), ve(12), ae(12), fe(12), fx(12), energy, fdry(4), kdry(4, 4)
+    REAL(wp) :: qe(12), ve(12), ae(12), fe(12), fx(12), fbd(12), energy, fdry(4), kdry(4, 4)
     REAL(wp) :: dry_wl, dry_b, dry_r, hf_mid(3), l0, fca(3), fcb(3), c, a4(4), m4(4, 4)
     REAL(wp) :: support(3), dsupport(3), nin(3), xa, xb, ca(4), cb(4)
     INTEGER :: es, k, inode
@@ -7601,9 +7606,14 @@ CONTAINS
     IF (es /= CD_HCABLE_OK) GOTO 900
     g = fe
     IF (model%has_axial_damping .OR. model%has_bend_damping) THEN
-      CALL structural_damping_element(model, e, qe, ve, fx, es, em2, fixed_length=.TRUE.)
+      CALL structural_damping_element(model, e, qe, ve, fx, es, em2, fixed_length=.TRUE., fbend=fbd)
       IF (es /= CD_HCDYN_OK) GOTO 900
       g = g + fx
+      ! the viscous bending moment is not elastic: its tangent rows (the section moment the outputs
+      ! turn into curvature over EI) are left out, its position rows (the shear it carries) stay in
+      ! the section forces
+      g(4:6) = g(4:6) - fbd(4:6)
+      g(10:12) = g(10:12) - fbd(10:12)
     END IF
     ! consistent submerged weight (as assemble_residual)
     g(3) = g(3) + model%w(e)*0.5_wp*l0

@@ -12,10 +12,14 @@ PROGRAM test_hermite_bending_damping_dynamic
   !!   B2 a tension-dominated cable (share 0.2) decays at that smaller zeta to 1 %;
   !!   B3 Bb = 0 leaves the undamped decay (|zeta| below 1e-5) and installing an all-zero array
   !!      keeps the configuration off;
-  !!   B4 a negative coefficient or a wrong length is refused.
+  !!   B4 a negative coefficient or a wrong length is refused;
+  !!   B5 a straight cable moving in its first bending mode with zero acceleration has no elastic
+  !!      curvature: the node recovery reports none although the bending damping acts (its viscous
+  !!      moment is not EI kappa), while the end force carries the damping.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
                                           CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Set_Bending_Damping, &
+                                          CD_HermiteCable_Dyn_Node_Recovery, CD_HermiteCable_Dyn_End_Force, &
                                           CD_HCDYN_OK
   IMPLICIT NONE
   REAL(wp), PARAMETER :: PI = 3.14159265358979323846_wp
@@ -27,6 +31,7 @@ PROGRAM test_hermite_bending_damping_dynamic
   CALL decay_case('B2 tension-dominated', 1.0e4_wp, 0.02_wp)
   CALL decay_case('B3 undamped', 1.0e4_wp, 0.0_wp)
   CALL check_refusals()
+  CALL check_recovery()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -117,5 +122,38 @@ CONTAINS
     CALL CD_HermiteCable_Dyn_Set_Bending_Damping(model, [(0.0_wp, k=1, NE)], es, em)
     CALL require(es == CD_HCDYN_OK .AND. .NOT. model%has_bend_damping, 'B3: all-zero Bb keeps it off')
   END SUBROUTINE check_refusals
+
+  SUBROUTINE check_recovery()
+    TYPE(CD_HermiteCableDynType) :: model
+    REAL(wp) :: curv(NN), bb, v0, lt, x, kdot, f_damped(3), f_plain(3)
+    INTEGER :: es, k
+    CHARACTER(512) :: em
+    v0 = 0.3_wp
+    bb = 2.0e3_wp
+    CALL setup(model, 1.0e4_wp, 0.0_wp)
+    lt = model%q(6*(NN - 1) + 1)
+    CALL CD_HermiteCable_Dyn_Set_Bending_Damping(model, [(bb, k=1, NE)], es, em)
+    CALL require(es == CD_HCDYN_OK, 'B5: set damping: '//TRIM(em))
+    ! straight line, first-mode velocity z' = v0 sin(pi x/lt) and its slope rate, no acceleration
+    model%v = 0.0_wp
+    DO k = 1, NN
+      x = model%q(6*(k - 1) + 1)
+      model%v(6*(k - 1) + 3) = v0*SIN(PI*x/lt)
+      model%v(6*(k - 1) + 6) = v0*PI/lt*COS(PI*x/lt)
+    END DO
+    model%v([1, 2, 3, 6*NE + 1, 6*NE + 2, 6*NE + 3]) = 0.0_wp
+    model%a = 0.0_wp
+    CALL CD_HermiteCable_Dyn_Node_Recovery(model, es, em, curvature=curv)
+    CALL require(es == CD_HCDYN_OK, 'B5: node recovery: '//TRIM(em))
+    kdot = v0*(PI/lt)**2
+    WRITE (*, '(A,ES11.3,A,ES11.3)') 'B5: max recovered curvature ', MAXVAL(ABS(curv)), &
+      ' 1/m; the viscous moment over EI would read ', bb*kdot/EI
+    CALL require(MAXVAL(ABS(curv)) <= 1.0e-6_wp*bb*kdot/EI, 'B5: no viscous curvature in the node recovery')
+    CALL CD_HermiteCable_Dyn_End_Force(model, 1, f_damped, es, em)
+    model%has_bend_damping = .FALSE.
+    CALL CD_HermiteCable_Dyn_End_Force(model, 1, f_plain, es, em)
+    WRITE (*, '(A,ES11.3,A)') 'B5: the bending damping changes the end force by ', NORM2(f_damped - f_plain), ' N'
+    CALL require(NORM2(f_damped - f_plain) > 0.0_wp, 'B5: the end force carries the damping')
+  END SUBROUTINE check_recovery
 
 END PROGRAM test_hermite_bending_damping_dynamic
