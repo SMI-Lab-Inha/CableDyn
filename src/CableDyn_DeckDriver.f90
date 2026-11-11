@@ -122,7 +122,7 @@ MODULE CableDyn_DeckDriver
                              CD_Vessel_RAO_Motion, CD_Vessel_Ramp, CD_VESSEL_OK
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_Init, CD_HFMF_Set_Drag, &
                                           CD_HFMF_Set_Section_Reference, CD_HFMF_Section_Curvature, &
-                                          CD_HFMF_Set_Axial_Damping, &
+                                          CD_HFMF_Set_Axial_Damping, CD_HFMF_Set_Bending_Damping, &
                                           CD_HFMF_Set_AddedMass, CD_HFMF_Set_ModifiedNewton, &
                                           CD_HFMF_Set_Tensile_Monitor, CD_HFMF_Get_Tensile_Diagnostics, &
                                           CD_HFMF_Get_Recovery_Diagnostics, &
@@ -411,6 +411,10 @@ MODULE CableDyn_DeckDriver
     ! damping l0 sqrt(GJ Irn), resolved on the final mesh (and again at the lengths active line
     ! control sets)
     REAL(wp) :: bt = CD_ZERO
+    ! bending damping Bb [N m^2 s] of the EI column's second part (EI|Bb): the moment Bb times the
+    ! curvature rate (CD_HermiteCable_Bending_Damping), resolved from EI|-zeta|f (zeta at the
+    ! frequency f [Hz] of a bending mode, Bb = zeta EI/(pi f)) when the row gives a ratio
+    REAL(wp) :: bb = CD_ZERO
     REAL(wp) :: i_rt = CD_ZERO, i_rn = CD_ZERO
     REAL(wp) :: cdn = CD_ZERO, cdt = CD_ZERO, can = CD_ZERO, cat = CD_ZERO
     ! Viscoelastic stiffness (MoorDyn ElasticMod): the EA column's bar-separated
@@ -1874,7 +1878,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: q_sequence(:)
     REAL(wp), ALLOCATABLE :: curv(:), cdn(:), cdt(:), can(:), cat(:), catenary_pos(:)
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:)
-    REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:)
+    REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:), bb_el(:)
     REAL(wp) :: mode1_omega
     REAL(wp), ALLOCATABLE :: contact_kn(:), contact_cn(:)
     REAL(wp) :: anchor(3), fairlead(3), res, tvec(3), tnrm, contact_z, seed_z, seed_floor_a, seed_floor_b
@@ -2216,6 +2220,8 @@ CONTAINS
     IF (LEN_TRIM(fine_note) > 0 .AND. standalone_mode) WRITE (error_unit, '(A)') '   Note: '//TRIM(fine_note)//'.'
     ALLOCATE (ba_raw(SIZE(l0)))
     CALL finite_raw_ba_array(ln, sections, types, ba_raw)
+    ALLOCATE (bb_el(SIZE(l0)))
+    CALL finite_bb_array(ln, sections, types, bb_el)
     nnode = SIZE(l0) + 1
     ndof = 6*nnode
     ALLOCATE (w(SIZE(l0)), nodes_ref(3, nnode), q0(ndof))
@@ -3280,6 +3286,7 @@ CONTAINS
       CALL remap_elem_by_reference_arc(can, l0, l0_am)
       CALL remap_elem_by_reference_arc(cat, l0, l0_am)
       CALL remap_elem_by_reference_arc(ba_raw, l0, l0_am)
+      CALL remap_elem_by_reference_arc(bb_el, l0, l0_am)
       IF (ALLOCATED(ei_cable)) CALL remap_elem_by_reference_arc(ei_cable, l0, l0_am)
     END IF
     ! The node output channels read deck nodes: map each onto the final mesh (set on the cable
@@ -3452,6 +3459,12 @@ CONTAINS
       CALL CD_HFMF_Set_Axial_Damping(cable, ba, es, em)
       IF (es /= CD_HFMF_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'finite-EI cable axial-damping wiring failed: '//TRIM(em)); RETURN
+      END IF
+    END IF
+    IF (ANY(bb_el > CD_ZERO)) THEN
+      CALL CD_HFMF_Set_Bending_Damping(cable, bb_el, es, em)
+      IF (es /= CD_HFMF_OK) THEN
+        CALL fail(ErrStat, ErrMsg, 'finite-EI cable bending-damping wiring failed: '//TRIM(em)); RETURN
       END IF
     END IF
     IF (ANY(endconn_mode /= CD_ENDCONN_PINNED)) THEN
@@ -11473,6 +11486,24 @@ CONTAINS
     ba_raw = ba_raw(SIZE(ba_raw):1:-1)
   END SUBROUTINE finite_raw_ba_array
 
+  SUBROUTINE finite_bb_array(ln, sections, types, bb)
+    !! The line types' bending damping Bb [N m^2 s] on the deck elements (internal order).
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    REAL(wp), INTENT(OUT) :: bb(:)
+    INTEGER :: i, j, e
+    e = 0
+    DO i = 1, SIZE(sections)
+      IF (sections(i)%line_id /= ln%id) CYCLE
+      DO j = 1, sections(i)%nsegs
+        e = e + 1
+        bb(e) = types(sections(i)%ltype)%bb
+      END DO
+    END DO
+    bb = bb(SIZE(bb):1:-1)
+  END SUBROUTINE finite_bb_array
+
   SUBROUTINE finite_line_type_ei(ln, sections, types, ei)
     !! The line types' own bending stiffness on the deck elements (internal order), without
     !! any STIFFENERS sleeve.
@@ -15615,6 +15646,74 @@ CONTAINS
     END IF
   END SUBROUTINE sniff_types_header
 
+  SUBROUTINE parse_ei_column(ei_str, t, ErrStat, ErrMsg)
+    !! The LINE TYPES EI column: EI, EI|Bb with Bb >= 0 the bending damping [N m^2 s] (the moment
+    !! Bb times the curvature rate), or EI|-zeta|f with 0 < zeta < 1 the damping ratio of a bending
+    !! mode of frequency f [Hz] whose energy is all bending, Bb = zeta EI/(pi f). Bending damping
+    !! needs a finite-EI cable (EI > 0).
+    CHARACTER(*), INTENT(IN) :: ei_str
+    TYPE(DeckLineType), INTENT(INOUT) :: t
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: bar, bar2, ios
+    REAL(wp) :: second, freq
+    REAL(wp), PARAMETER :: PI_L = 3.14159265358979323846_wp
+    ErrStat = 0; ErrMsg = ''
+    t%bb = CD_ZERO
+    second = CD_ZERO
+    freq = CD_ZERO
+    bar = INDEX(ei_str, '|')
+    bar2 = 0
+    IF (bar == 0) THEN
+      READ (ei_str, *, IOSTAT=ios) t%ei
+    ELSE
+      bar2 = INDEX(ei_str(bar + 1:), '|')
+      IF (bar2 > 0) THEN
+        bar2 = bar + bar2
+        IF (INDEX(ei_str(bar2 + 1:), '|') > 0) THEN
+          CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'" takes EI, EI|Bb or EI|-zeta|f'); RETURN
+        END IF
+      END IF
+      READ (ei_str(1:bar - 1), *, IOSTAT=ios) t%ei
+      IF (bar2 > 0) THEN
+        IF (ios == 0) READ (ei_str(bar + 1:bar2 - 1), *, IOSTAT=ios) second
+        IF (ios == 0) READ (ei_str(bar2 + 1:), *, IOSTAT=ios) freq
+      ELSE
+        IF (ios == 0) READ (ei_str(bar + 1:), *, IOSTAT=ios) second
+      END IF
+    END IF
+    IF (ios /= 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'" is not EI, EI|Bb or EI|-zeta|f'); RETURN
+    END IF
+    IF (.NOT. (IEEE_IS_FINITE(t%ei) .AND. IEEE_IS_FINITE(second) .AND. IEEE_IS_FINITE(freq))) THEN
+      CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'" must be finite'); RETURN
+    END IF
+    IF (bar == 0) RETURN
+    IF (bar2 == 0) THEN
+      IF (second < CD_ZERO) THEN
+        CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'": a negative bending damping is '// &
+                  '-zeta and needs the frequency it holds at, EI|-zeta|f'); RETURN
+      END IF
+      t%bb = second
+    ELSE
+      IF (.NOT. (second < CD_ZERO .AND. second > -CD_ONE)) THEN
+        CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'": EI|-zeta|f takes a damping '// &
+                  'ratio 0 < zeta < 1, written negative'); RETURN
+      END IF
+      IF (.NOT. (freq > CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'": the frequency f of '// &
+                  'EI|-zeta|f must be positive [Hz]'); RETURN
+      END IF
+      t%bb = -second*t%ei/(PI_L*freq)
+    END IF
+    ! a damping asked for (a ratio form, or Bb > 0) needs a finite EI: on EI = 0 the ratio form would
+    ! resolve to Bb = 0 and the request would pass unnoticed
+    IF ((bar2 > 0 .OR. t%bb > CD_ZERO) .AND. .NOT. (t%ei > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'LINE TYPES '//TRIM(t%name)//': bending damping (EI|Bb) needs a '// &
+                'finite-EI cable (EI > 0)'); RETURN
+    END IF
+  END SUBROUTINE parse_ei_column
+
   SUBROUTINE parse_gj_column(gj_str, t, ErrStat, ErrMsg)
     !! The 14-column row's GJ column: GJ, GJ|K with K the torque-tension coupling [N m]
     !! (M = GJ tau + K eps, T = EA eps + K tau; K > 0 when stretching the cable twists it in the
@@ -15664,7 +15763,7 @@ CONTAINS
     TYPE(DeckLineType) :: t
     ! EA may hold SYROPE:<settings path>|alpha|beta, so it gets a path-length buffer
     CHARACTER(CD_DECK_PATHLEN) :: ea_str
-    CHARACTER(NAMELEN) :: ba_str, gj_str
+    CHARACTER(NAMELEN) :: ba_str, gj_str, ei_str
     INTEGER :: ios, ntok
     ErrStat = 0; ErrMsg = ''
     ntok = count_tokens(line)
@@ -15679,25 +15778,25 @@ CONTAINS
     IF (ntok == 10) THEN
       IF (stock_cols) THEN
         ! stock MoorDyn header order: Cd Ca CdAx CaAx = (Cd_n, Ca_n, Cd_t, Ca_t)
-        READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%cdn, t%can, t%cdt, t%cat
+        READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, ei_str, t%cdn, t%can, t%cdt, t%cat
       ELSE
-        READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%cdn, t%cdt, t%can, t%cat
+        READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, ei_str, t%cdn, t%cdt, t%can, t%cat
       END IF
     ELSE IF (ntok == 11 .OR. ntok == 13) THEN
       ! MoorDyn v2's optional cross-flow VIV columns after the ten standard ones: Cl, or
       ! Cl dF cF (MoorDyn.f90 line-type parse; dF and cF default to 0.08 and 0.18)
       IF (stock_cols) THEN
         IF (ntok == 11) THEN
-          READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%cdn, t%can, t%cdt, t%cat, t%cl
+          READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, ei_str, t%cdn, t%can, t%cdt, t%cat, t%cl
         ELSE
-          READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%cdn, t%can, t%cdt, t%cat, &
+          READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, ei_str, t%cdn, t%can, t%cdt, t%cat, &
             t%cl, t%viv_df, t%viv_cf
         END IF
       ELSE
         IF (ntok == 11) THEN
-          READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%cdn, t%cdt, t%can, t%cat, t%cl
+          READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, ei_str, t%cdn, t%cdt, t%can, t%cat, t%cl
         ELSE
-          READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%cdn, t%cdt, t%can, t%cat, &
+          READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, ei_str, t%cdn, t%cdt, t%can, t%cat, &
             t%cl, t%viv_df, t%viv_cf
         END IF
       END IF
@@ -15706,12 +15805,14 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'the 14-column LINE TYPES row is a CableDyn form (... Cd_n Cd_t '// &
                   'Ca_n Ca_t); it does not combine with a stock-order header (Cd Ca CdAx CaAx)'); RETURN
       END IF
-      READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, t%ei, t%gas, gj_str, t%i_rt, t%i_rn, &
+      READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, ei_str, t%gas, gj_str, t%i_rt, t%i_rn, &
         t%cdn, t%cdt, t%can, t%cat
     END IF
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'malformed LINE TYPES row'); RETURN
     END IF
+    CALL parse_ei_column(ei_str, t, ErrStat, ErrMsg)
+    IF (ErrStat /= 0) RETURN
     IF (ntok == 14) THEN
       CALL parse_gj_column(gj_str, t, ErrStat, ErrMsg)
       IF (ErrStat /= 0) RETURN

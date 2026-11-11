@@ -953,6 +953,36 @@ def test_stiffener_rows_are_native(row, message):
     _rejects(_example("lazy_wave_bend_stiffener.dat", (_STIFFENER_ROOT, row)), message)
 
 
+_BARE_ROW = "bare      0.160  36.70         4.69e8   0.0  1.99e4   1.2  0.1  1.0  0.0"
+
+
+@pytest.mark.parametrize(
+    "ei",
+    ["1.99e4|250.0", "1.99e4|0", "1.99e4|-0.02|1.5"],
+)
+def test_bending_damping_forms_are_accepted(ei):
+    DeckFile.from_text(
+        _example("lazy_wave_bend_stiffener.dat", (_BARE_ROW, _BARE_ROW.replace("1.99e4", ei, 1)))
+    )
+
+
+@pytest.mark.parametrize(
+    ("ei", "message"),
+    [
+        ("1.99e4|1|2|3", "takes EI, EI|Bb or EI|-zeta|f"),
+        ("1.99e4|-250.0", "a negative bending damping is -zeta and needs the frequency"),
+        ("1.99e4|0.02|1.5", "takes a damping ratio 0 < zeta < 1, written negative"),
+        ("1.99e4|-1.5|1.5", "takes a damping ratio 0 < zeta < 1, written negative"),
+        ("1.99e4|-0.02|0", "of EI|-zeta|f must be positive"),
+        ("0.0|250.0", "bending damping (EI|Bb) needs a finite-EI cable"),
+        ("0.0|-0.05|0.5", "bending damping (EI|Bb) needs a finite-EI cable"),
+    ],
+)
+def test_bending_damping_rows_are_native(ei, message):
+    text = _example("lazy_wave_bend_stiffener.dat", (_BARE_ROW, _BARE_ROW.replace("1.99e4", ei, 1)))
+    _rejects(text, re.escape(message))
+
+
 def test_stiffener_needs_a_finite_ei_line():
     text = _section(_HELD, "STIFFENERS", "1 A 1.0 0.5 0.5 0.3 5.0e7 1150")
     _rejects(text, "STIFFENERS name line 1, which is not a finite-EI line")

@@ -114,6 +114,11 @@ Line and constitutive capability
        ``Coupled``/``Vessel`` rods, bodies other than Rigid6 and ``False alpha_force_blend``.
        Modal analysis carries the twist angle of every node. Not modelled: seabed friction
        against twist, anisotropic sections, self-contact of a loop (see :ref:`theory-torsion`)
+   * - Bending damping of finite-EI cables (``EI|Bb``, ``EI|-zeta|f``)
+     - Supported
+     - a bending Kelvin–Voigt damping on the curvature rate (stiffness-proportional in ``EI``;
+       a mode is damped in its bending share), on every dynamic route that carries the cable,
+       beside the axial (``BA``) and torsional (``GJ|K|Bt``) damping (:doc:`theory`)
    * - Hockling loops, nonlinear cross-section laws
      - Not provided
      - the buckling onset and the post-buckled shape are computed, but a loop that closes on

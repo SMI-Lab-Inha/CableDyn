@@ -8,6 +8,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Bending damping of finite-EI cables: the LINE TYPES EI column takes `EI|Bb`, a Kelvin-Voigt
+  damping moment `Bb` [N m^2 s] times the curvature rate (in the frame carried with the tangent),
+  or `EI|-zeta|f`, the damping ratio of a pure bending mode of frequency `f` (Bb = zeta EI/(pi f)).
+  A mode is damped in its bending share, `omega Bb/(2 EI) * EI k^2/(EI k^2 + T)`; free decays of a
+  pinned cable match this to 0.05 %. It acts on every dynamic route beside the axial (`BA`) and
+  torsional (`GJ|K|Bt`) damping, with exact Jacobians; the Python deck reader and builder take the
+  same forms.
+
 ## [0.4.2] - 2026-11-09
 
 ### Added

@@ -44,6 +44,7 @@ MODULE CableDyn_HermiteCable
   PUBLIC :: CD_HermiteCable_Shapes
   PUBLIC :: CD_HermiteCable_Gauss_Rule
   PUBLIC :: CD_HermiteCable_Dry_Buoyancy
+  PUBLIC :: CD_HermiteCable_Bending_Damping
   INTEGER, PARAMETER, PUBLIC :: CD_HCABLE_OK = 0, CD_HCABLE_BADINPUT = 1
 
   INTEGER, PARAMETER :: NG = 4                       !! default Gauss points per element
@@ -379,6 +380,240 @@ CONTAINS
     END SUBROUTINE fail
 
   END SUBROUTINE hermite_element_integrated
+
+  SUBROUTINE CD_HermiteCable_Bending_Damping(qr, vr, L, Bb, fdamp, Kq, Kv, ErrStat, ErrMsg, quadrature_order, &
+                                             l0_dot)
+    !! Kelvin-Voigt bending damping of one cubic-Hermite element: the dissipation function
+    !!   psi = integral_0^L 1/2 Bb |kdot|^2 ds,   kdot = (I - t t^T) d kappa/dt,
+    !! with kappa = (a x b)/|a|^3 the curvature vector of the elastic energy (a = dr/ds,
+    !! b = d^2r/ds^2, s the unstretched arc length) and t = a/|a| the unit tangent. kdot is the
+    !! curvature rate convected with the tangent by the smallest rotation: since kappa is normal
+    !! to t, (I - t t^T) dkappa/dt = dkappa/dt - (t x dt/dt) x kappa. It is zero for every rigid
+    !! motion whose rotation is normal to the tangent and equals dkappa/dt in planar bending; a
+    !! rotation about the tangent itself (a curvature that turns about the centreline) cannot be
+    !! told from a whirl without a twist state and is damped as one. A bending mode of frequency
+    !! omega whose energy is all bending has the damping ratio omega Bb / (2 EI).
+    !!
+    !! fdamp = d psi / d v is an INTERNAL generalised force (v . fdamp >= 0); Kq = d fdamp/dq
+    !! and Kv = d fdamp/dv are the exact Jacobians (Kq is not symmetric in general). qr and vr
+    !! are the element DOFs [r1, m1, r2, m2] and their rates; L the unstretched length; Bb >= 0
+    !! [N m^2 s].
+    !!
+    !! l0_dot (optional): the unstretched-length rate of an element under active line control. The
+    !! shape functions depend on L: a = p/L + g and b = P/L^2 + G/L, with p, P the end-position parts
+    !! and g, G the tangent-handle parts, so at fixed DOFs a changes at -(L'/L) a_pos and b at
+    !! -(L'/L)(2 b_pos + b_tan). These join the rates of a and b, and their dependence on the end
+    !! positions and tangent handles joins Kq; Kv is unchanged.
+    REAL(wp), INTENT(IN) :: qr(12), vr(12), L, Bb
+    REAL(wp), INTENT(OUT) :: fdamp(12)
+    REAL(wp), INTENT(OUT), OPTIONAL :: Kq(12, 12), Kv(12, 12)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
+    REAL(wp), INTENT(IN), OPTIONAL :: l0_dot
+
+    REAL(wp) :: gp(MAX_NG), gw(MAX_NG), H(4), dH(4), ddH(4), b1(4), b2(4), rho, ca(4), cb(4)
+    REAL(wp) :: av(3), bv(3), ad(3), bd(3), xd(6), cr(3), tv(3), s2, sp, g, ga, gaa2
+    REAL(wp) :: Dcr(3, 6), Dg(6), J(3, 6), Pm(3, 3), Km(3, 6), kr(3), dK(3, 6, 6), T(3, 6, 6), dP(3, 3, 3)
+    REAL(wp) :: g6(6), Q6(6, 6), V6(6, 6), a6(6), wgL, w11, w12, w21, w22, acc, dik, dmk
+    INTEGER :: order, qg, i, jj, k, m, c, dd, ic, jc, kn, mn
+    INTEGER, PARAMETER :: sd(4) = [0, 3, 6, 9]
+    LOGICAL :: has_rate
+
+    ErrStat = CD_HCABLE_OK
+    ErrMsg = ''
+    fdamp = CD_ZERO
+    IF (PRESENT(Kq)) Kq = CD_ZERO
+    IF (PRESENT(Kv)) Kv = CD_ZERO
+    order = NG
+    IF (PRESENT(quadrature_order)) order = quadrature_order
+    IF (.NOT. CD_All_Finite(qr) .OR. .NOT. CD_All_Finite(vr) .OR. .NOT. CD_Is_Finite(L) .OR. &
+        .NOT. CD_Is_Finite(Bb)) THEN
+      CALL fail('inputs must be finite'); RETURN
+    END IF
+    IF (L <= GEOM_TOL) THEN
+      CALL fail('element length must be positive'); RETURN
+    END IF
+    IF (Bb < CD_ZERO) THEN
+      CALL fail('Bb must be non-negative'); RETURN
+    END IF
+    IF (order < 1 .OR. order > MAX_NG) THEN
+      CALL fail('quadrature_order must lie in [1,6]'); RETURN
+    END IF
+    rho = CD_ZERO
+    IF (PRESENT(l0_dot)) THEN
+      IF (.NOT. CD_Is_Finite(l0_dot)) THEN
+        CALL fail('l0_dot must be finite'); RETURN
+      END IF
+      rho = l0_dot/L
+    END IF
+    has_rate = ABS(rho) > CD_ZERO
+    IF (.NOT. (Bb > CD_ZERO)) RETURN
+
+    CALL CD_HermiteCable_Gauss_Rule(order, gp, gw)
+    V6 = CD_ZERO
+    Q6 = CD_ZERO
+    DO qg = 1, order
+      CALL hermite_shapes(gp(qg), L, H, dH, ddH)
+      b1 = dH/L
+      b2 = ddH/(L*L)
+      DO c = 1, 3
+        av(c) = SUM(b1*qr(sd + c)); bv(c) = SUM(b2*qr(sd + c))
+        ad(c) = SUM(b1*vr(sd + c)); bd(c) = SUM(b2*vr(sd + c))
+      END DO
+      ! the length-rate weights of the effective rates: d a/dt -= rho sum_k ca(k) q_k and
+      ! d b/dt -= rho sum_k cb(k) q_k (end positions k = 1, 3; tangent handles k = 2, 4)
+      ca = [b1(1), CD_ZERO, b1(3), CD_ZERO]
+      cb = [2.0_wp*b2(1), b2(2), 2.0_wp*b2(3), b2(4)]
+      IF (has_rate) THEN
+        DO c = 1, 3
+          ad(c) = ad(c) - rho*SUM(ca*qr(sd + c))
+          bd(c) = bd(c) - rho*SUM(cb*qr(sd + c))
+        END DO
+      END IF
+      xd(1:3) = ad; xd(4:6) = bd
+      s2 = SUM(av*av)
+      IF (s2 <= GEOM_TOL*GEOM_TOL) THEN
+        CALL fail('degenerate centreline: |dr/ds| ~ 0 at a Gauss point'); RETURN
+      END IF
+      sp = SQRT(s2)
+      tv = av/sp
+      g = CD_ONE/(sp*s2)                       ! |a|^-3
+      ga = -3.0_wp/(s2*s2*sp)                  ! d g/d a = ga a;  d2 g/da da = ga I + gaa2 a a^T
+      gaa2 = 15.0_wp/(s2*s2*s2*sp)
+      cr = [av(2)*bv(3) - av(3)*bv(2), av(3)*bv(1) - av(1)*bv(3), av(1)*bv(2) - av(2)*bv(1)]
+      ! first derivatives: d cr/d a = -[b]x, d cr/d b = [a]x
+      Dcr(:, 1:3) = -skew(bv)
+      Dcr(:, 4:6) = skew(av)
+      Dg = CD_ZERO
+      Dg(1:3) = ga*av
+      a6 = CD_ZERO
+      a6(1:3) = av
+      DO jj = 1, 6
+        J(:, jj) = Dcr(:, jj)*g + cr*Dg(jj)
+      END DO
+      ! second derivatives of kappa = cr g: T(i,j,k) = d2 kappa_i / dx_j dx_k, x = (a, b)
+      DO k = 1, 6
+        DO jj = 1, 6
+          DO i = 1, 3
+            acc = Dcr(i, jj)*Dg(k) + Dcr(i, k)*Dg(jj)
+            IF (jj <= 3 .AND. k >= 4) acc = acc + levi(i, jj, k - 3)*g
+            IF (jj >= 4 .AND. k <= 3) acc = acc + levi(i, k, jj - 3)*g
+            IF (jj <= 3 .AND. k <= 3) THEN
+              acc = acc + cr(i)*gaa2*a6(jj)*a6(k)
+              IF (jj == k) acc = acc + cr(i)*ga
+            END IF
+            T(i, jj, k) = acc
+          END DO
+        END DO
+      END DO
+      ! projector P = I - t t^T and dP(i,m,k) = d P_im / d a_k (zero for b)
+      DO m = 1, 3
+        DO i = 1, 3
+          Pm(i, m) = -tv(i)*tv(m)
+        END DO
+        Pm(m, m) = Pm(m, m) + CD_ONE
+      END DO
+      DO k = 1, 3
+        DO m = 1, 3
+          DO i = 1, 3
+            dik = CD_ZERO; IF (i == k) dik = CD_ONE
+            dmk = CD_ZERO; IF (m == k) dmk = CD_ONE
+            dP(i, m, k) = -(((dik - tv(i)*tv(k))/sp)*tv(m) + tv(i)*((dmk - tv(m)*tv(k))/sp))
+          END DO
+        END DO
+      END DO
+      Km = MATMUL(Pm, J)
+      kr = MATMUL(Km, xd)
+      ! dK(i,j,k) = d K_ij / d x_k = sum_m dP(i,m,k) J(m,j) + sum_m P(i,m) T(m,j,k)
+      DO k = 1, 6
+        DO jj = 1, 6
+          DO i = 1, 3
+            acc = SUM(Pm(i, :)*T(:, jj, k))
+            IF (k <= 3) acc = acc + SUM(dP(i, :, k)*J(:, jj))
+            dK(i, jj, k) = acc
+          END DO
+        END DO
+      END DO
+      g6 = Bb*MATMUL(TRANSPOSE(Km), kr)
+      IF (PRESENT(Kv) .OR. (PRESENT(Kq) .AND. has_rate)) V6 = Bb*MATMUL(TRANSPOSE(Km), Km)
+      IF (PRESENT(Kq)) THEN
+        ! d (K^T K xd)_j / d x_k = sum_i dK(i,j,k) kr_i + K_ij sum_l dK(i,l,k) xd_l
+        DO k = 1, 6
+          DO jj = 1, 6
+            acc = CD_ZERO
+            DO i = 1, 3
+              acc = acc + dK(i, jj, k)*kr(i) + Km(i, jj)*SUM(dK(i, :, k)*xd)
+            END DO
+            Q6(jj, k) = Bb*acc
+          END DO
+        END DO
+      END IF
+      wgL = gw(qg)*L
+      DO kn = 1, 4
+        DO c = 1, 3
+          ic = sd(kn) + c
+          fdamp(ic) = fdamp(ic) + wgL*(b1(kn)*g6(c) + b2(kn)*g6(3 + c))
+        END DO
+      END DO
+      IF (.NOT. (PRESENT(Kq) .OR. PRESENT(Kv))) CYCLE
+      DO mn = 1, 4
+        DO kn = 1, 4
+          w11 = wgL*b1(kn)*b1(mn); w12 = wgL*b1(kn)*b2(mn)
+          w21 = wgL*b2(kn)*b1(mn); w22 = wgL*b2(kn)*b2(mn)
+          DO dd = 1, 3
+            jc = sd(mn) + dd
+            DO c = 1, 3
+              ic = sd(kn) + c
+              IF (PRESENT(Kq)) THEN
+                Kq(ic, jc) = Kq(ic, jc) + w11*Q6(c, dd) + w12*Q6(c, 3 + dd) &
+                             + w21*Q6(3 + c, dd) + w22*Q6(3 + c, 3 + dd)
+                ! the effective rates' dependence on the DOFs under a length rate
+                IF (has_rate) Kq(ic, jc) = Kq(ic, jc) - rho*wgL* &
+                                           ((b1(kn)*V6(c, dd) + b2(kn)*V6(3 + c, dd))*ca(mn) + &
+                                            (b1(kn)*V6(c, 3 + dd) + b2(kn)*V6(3 + c, 3 + dd))*cb(mn))
+              END IF
+              IF (PRESENT(Kv)) Kv(ic, jc) = Kv(ic, jc) + w11*V6(c, dd) + w12*V6(c, 3 + dd) &
+                                            + w21*V6(3 + c, dd) + w22*V6(3 + c, 3 + dd)
+            END DO
+          END DO
+        END DO
+      END DO
+    END DO
+    IF (.NOT. CD_All_Finite(fdamp)) THEN
+      CALL fail('non-finite bending damping force'); RETURN
+    END IF
+    IF (PRESENT(Kq)) THEN
+      IF (.NOT. CD_All_Finite(Kq)) THEN
+        CALL fail('non-finite bending damping Jacobian'); RETURN
+      END IF
+    END IF
+
+  CONTAINS
+
+    PURE FUNCTION skew(v) RESULT(s)
+      !! [v]x, so that skew(v) u = v x u
+      REAL(wp), INTENT(IN) :: v(3)
+      REAL(wp) :: s(3, 3)
+      s = RESHAPE([CD_ZERO, v(3), -v(2), -v(3), CD_ZERO, v(1), v(2), -v(1), CD_ZERO], [3, 3])
+    END FUNCTION skew
+
+    PURE REAL(wp) FUNCTION levi(i, jj, k)
+      !! Levi-Civita symbol for indices in 1..3
+      INTEGER, INTENT(IN) :: i, jj, k
+      levi = REAL((i - jj)*(jj - k)*(k - i), wp)/2.0_wp
+    END FUNCTION levi
+
+    SUBROUTINE fail(msg)
+      CHARACTER(*), INTENT(IN) :: msg
+      ErrStat = CD_HCABLE_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Bending_Damping: '//msg
+      fdamp = CD_ZERO
+      IF (PRESENT(Kq)) Kq = CD_ZERO
+      IF (PRESENT(Kv)) Kv = CD_ZERO
+    END SUBROUTINE fail
+
+  END SUBROUTINE CD_HermiteCable_Bending_Damping
 
   SUBROUTINE CD_HermiteCable_Mass(rho_a, L, M, ErrStat, ErrMsg)
     !! Consistent (kinetic-energy) mass matrix of the cubic-Hermite bending-cable element.
