@@ -186,8 +186,17 @@ class VIVResponse:
         return _readonly(0.5 * (values.max(axis=0) - values.min(axis=0)) / self.diameter)
 
     def _power(self, direction: str) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
-        """Frequencies and the ``(n_freq, n_nodes)`` Hann-windowed periodogram of a direction."""
-        values = self.displacement(direction)
+        """Frequencies and the ``(n_freq, n_nodes)`` Hann-windowed periodogram of a direction.
+
+        A node whose displacement stays within round-off of its coordinates (a range below
+        1e-12 of its distance from the origin plus the diameter) is still: its round-off
+        offset from the mean, windowed, would otherwise read as power at every frequency.
+        """
+        values = np.array(self.displacement(direction), dtype=np.float64)
+        scale = np.linalg.norm(self.mean_position, axis=1) + self.diameter
+        with np.errstate(invalid="ignore"):
+            still = (values.max(axis=0) - values.min(axis=0)) <= 1.0e-12 * scale
+        values[:, still] = 0.0
         window = np.hanning(self.time.size)
         spectrum = np.fft.rfft(values * window[:, None], axis=0)
         frequency = np.fft.rfftfreq(self.time.size, self.sampling_interval)

@@ -22,13 +22,13 @@ T = 40.0  # 20 cross-flow periods
 FLOW = (0.0, 0.5, 0.0)
 
 
-def _history(displacement, *, time=None) -> LineNodeHistory:
-    """A straight line along +x at z = -50 with displacement(t, s) -> (dy, dz) added."""
+def _history(displacement, *, time=None, depth=-50.0) -> LineNodeHistory:
+    """A straight line along +x at z = depth with displacement(t, s) -> (dy, dz) added."""
     t = np.arange(0.0, T, DT) if time is None else time
     s = np.linspace(0.0, L, N_NODES)
     dy, dz = displacement(t[:, None], s[None, :])
     x = np.broadcast_to(s, dy.shape)
-    xyz = np.stack((x, dy, -50.0 + dz), axis=2).reshape(t.size, -1)
+    xyz = np.stack((x, dy, depth + dz), axis=2).reshape(t.size, -1)
     channels = ["Time(s)"] + [f"Node{n}{a}(m)" for n in range(1, N_NODES + 1) for a in "XYZ"]
     return LineNodeHistory(
         Path("synthetic.Line1.p.out"), "", tuple(channels), None, np.column_stack((t, xyz))
@@ -139,6 +139,21 @@ def test_travelling_wave_index_is_nan_without_motion():
     assert math.isnan(still.travelling_wave_index("in_line"))
     along = viv_response(_history(_standing), flow=(1.0, 0.0, 0.0), diameter=D)
     assert math.isnan(along.travelling_wave_index("cross_flow"))
+    # still nodes at coordinates with no exact binary form keep a round-off offset from their
+    # mean: they have no frequency, on a still line and at the pinned ends of a moving one
+    for depth in (-50.1, -0.3, -1234.567):
+        calm = viv_response(
+            _history(lambda t, s: (0.0 * t * s, 0.0 * t * s), depth=depth),
+            flow=FLOW,
+            diameter=D,
+        )
+        assert math.isnan(calm.frequency("cross_flow"))
+        assert np.all(np.isnan(calm.frequencies("cross_flow")))
+        assert math.isnan(calm.travelling_wave_index("cross_flow"))
+        moving = viv_response(_history(_standing, depth=depth), flow=FLOW, diameter=D)
+        ends = moving.frequencies("cross_flow")[[0, -1]]
+        assert np.all(np.isnan(ends))
+        assert moving.frequency("cross_flow") == pytest.approx(F, abs=1e-3)
 
 
 def test_main_output_nodes_keep_their_numbers(tmp_path):
