@@ -289,6 +289,24 @@ not follow the rotation of the bending plane.
    print(profile.critical_node, profile.maximum_damage)
    profile.plot()
 
+On a finite-EI line, ``quantity="section"`` follows the bending plane. It recovers the stress at
+``points`` points around the section (16 by default) with :func:`cabledyn.section_stress`, from
+``Ten<L>N<J>`` and the curvature vector on the section axes, ``CurvX<L>N<J>`` and
+``CurvY<L>N<J>`` (:doc:`outputs`): ``T/A - E r (kappa_x cos theta + kappa_y sin theta)`` at the
+angle ``theta`` from the section's x axis. It counts each point and keeps the largest damage, with
+its angle in ``critical_angle``. This is the recovery for biaxial bending, combined cross-flow and
+in-line VIV among them: a section whose curvature vector turns at a constant magnitude (a
+whirling orbit) has no cycles in ``Curv`` and so no damage under ``"stress"``, while each point
+around it passes through ``+/- E kappa r`` once a revolution.
+
+.. code-block:: python
+
+   profile = damage_along_arc(
+       history, 1, armour, quantity="section", points=16,
+       area=2.4e-3, modulus=2.07e11, radius=0.09, arc_length=result.read_static(),
+   )
+   print(profile.critical_node, profile.critical_angle[profile.node_ids.index(profile.critical_node)])
+
 Lifetime damage over sea states
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

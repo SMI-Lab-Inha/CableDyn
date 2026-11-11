@@ -7,6 +7,10 @@
 * :func:`channel_damage` does the same for one channel of a time history.
 * :func:`cable_stress` recovers the axial stress at the two extreme fibres of
   a cable, ``sigma = T/A +/- E kappa r``.
+* :func:`section_stress` recovers it at points around the section from the
+  curvature vector on the section axes (the ``CurvX``/``CurvY`` channels),
+  ``sigma = T/A - E r (kappa_x cos theta + kappa_y sin theta)``, for biaxial
+  bending such as combined cross-flow and in-line VIV.
 * :func:`damage_along_arc` evaluates the damage at every output node of a
   line, from tension or from recovered stress.
 * :func:`study_sea_state_damage` and :func:`lifetime_fatigue` weight the
@@ -50,6 +54,7 @@ __all__ = [
     "damage_along_arc",
     "lifetime_fatigue",
     "miner_damage",
+    "section_stress",
     "study_sea_state_damage",
 ]
 
@@ -288,6 +293,78 @@ def cable_stress(
     return _readonly(axial + bending), _readonly(axial - bending)
 
 
+def section_stress(
+    tension: npt.ArrayLike,
+    curvature_x: npt.ArrayLike,
+    curvature_y: npt.ArrayLike,
+    *,
+    area: float,
+    modulus: float,
+    radius: float,
+    points: int = 16,
+) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
+    """Return the axial stress at points around a section from its curvature vector.
+
+    The point at angle ``theta`` from the section's x axis towards its y
+    axis, at distance ``radius`` from the neutral axis, has the bending strain
+    ``-(kappa_x x + kappa_y y)`` of the ``CurvX``/``CurvY`` channels (the
+    curvature vector on the section axes, pointing to the centre of
+    curvature), so
+
+    ``sigma(theta) = T/A - E r (kappa_x cos theta + kappa_y sin theta)``.
+
+    Unlike :func:`cable_stress` it follows the bending plane as it turns, so a
+    point sees the stress cycles of biaxial bending (cross-flow and in-line
+    VIV, a whirling orbit) that the two extreme fibres of a curvature
+    magnitude miss.
+
+    Parameters
+    ----------
+    tension : array_like
+        Effective tension, in newtons.
+    curvature_x, curvature_y : array_like
+        Curvature components on the section axes, in 1/m, broadcastable
+        against ``tension``.
+    area : float
+        Positive area that carries the tension, in m^2.
+    modulus : float
+        Positive Young's modulus of the component, in Pa.
+    radius : float
+        Non-negative distance of the points from the neutral axis, in metres.
+    points : int
+        Number of points, at ``theta = 360 k / points`` degrees.
+
+    Returns
+    -------
+    tuple[numpy.ndarray, numpy.ndarray]
+        Read-only stress with a last axis of length ``points``, in Pa, and the
+        ``(points,)`` angles in degrees.
+
+    Raises
+    ------
+    ValueError
+        If a section property or ``points`` is invalid or a value is not finite.
+    """
+    section = _positive(area, "area")
+    elastic = _positive(modulus, "modulus")
+    if isinstance(radius, bool) or not math.isfinite(float(radius)) or float(radius) < 0.0:
+        raise ValueError("radius must be finite and non-negative")
+    if isinstance(points, bool) or int(points) != points or points < 1:
+        raise ValueError("points must be a positive integer")
+    axial, kx, ky = np.broadcast_arrays(
+        np.asarray(tension, dtype=np.float64) / section,
+        np.asarray(curvature_x, dtype=np.float64),
+        np.asarray(curvature_y, dtype=np.float64),
+    )
+    if not (np.all(np.isfinite(axial)) and np.all(np.isfinite(kx)) and np.all(np.isfinite(ky))):
+        raise ValueError("tension and curvature must be finite")
+    angles = 2.0 * np.pi * np.arange(int(points)) / int(points)
+    bending = (
+        elastic * float(radius) * (kx[..., None] * np.cos(angles) + ky[..., None] * np.sin(angles))
+    )
+    return _readonly(axial[..., None] - bending), _readonly(np.degrees(angles))
+
+
 @dataclass(frozen=True)
 class DamageProfile:
     """Palmgren-Miner damage at every output node of one line.
@@ -297,7 +374,7 @@ class DamageProfile:
     line_id : int
         Deck line identifier.
     quantity : str
-        ``"tension"`` or ``"stress"``.
+        ``"tension"``, ``"stress"`` or ``"section"``.
     curve : FatigueCurve
         Curve used.
     node_ids : tuple[int, ...]
@@ -308,11 +385,15 @@ class DamageProfile:
         ``(n,)`` arc length in metres, or node number.
     damage : numpy.ndarray
         ``(n,)`` damage over the record; for ``"stress"`` the larger of the
-        two fibres.
+        two fibres, for ``"section"`` the largest of the points around the
+        section.
     duration : float
         Length of the analysed record, in seconds.
     source : pathlib.Path
         Result file.
+    critical_angle : numpy.ndarray | None
+        ``(n,)`` angle of the most damaged point from the section's x axis, in
+        degrees, for ``"section"``; ``None`` otherwise.
     """
 
     line_id: int
@@ -324,10 +405,13 @@ class DamageProfile:
     damage: npt.NDArray[Any]
     duration: float
     source: Path
+    critical_angle: npt.NDArray[Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "location", _readonly(self.location))
         object.__setattr__(self, "damage", _readonly(self.damage))
+        if self.critical_angle is not None:
+            object.__setattr__(self, "critical_angle", _readonly(self.critical_angle))
 
     @property
     def critical_node(self) -> int:
@@ -376,6 +460,7 @@ def damage_along_arc(
     arc_length: ArcSource = None,
     start: float | None = None,
     stop: float | None = None,
+    points: int = 16,
 ) -> DamageProfile:
     """Return the Miner damage at every output node of a line.
 
@@ -389,6 +474,14 @@ def damage_along_arc(
     S-N); each fibre is counted separately and the larger damage is kept.
     Both channels must be written for the same nodes.
 
+    With ``quantity="section"`` the stress at ``points`` points around the
+    section is recovered from ``Ten<L>N<J>``, ``CurvX<L>N<J>`` and
+    ``CurvY<L>N<J>`` by :func:`section_stress` (finite-EI lines; the same
+    section properties as ``"stress"``); each point is counted separately and
+    the largest damage is kept, with its angle in
+    :attr:`DamageProfile.critical_angle`. All three channels must be written
+    for the same nodes.
+
     Parameters
     ----------
     history : TimeHistory
@@ -398,7 +491,7 @@ def damage_along_arc(
     curve : FatigueCurve
         S-N or T-N curve.
     quantity : str
-        ``"tension"`` or ``"stress"``.
+        ``"tension"``, ``"stress"`` or ``"section"``.
     area, breaking_strength, modulus, radius : float | None
         Section properties, in SI units, as described above.
     ultimate_strength : float | None
@@ -407,6 +500,8 @@ def damage_along_arc(
         Node positions along the line (see :func:`cabledyn.node_range_graph`).
     start, stop : float | None
         Optional analysis window, in seconds.
+    points : int
+        Number of points around the section for ``"section"``.
 
     Returns
     -------
@@ -421,6 +516,7 @@ def damage_along_arc(
         If ``quantity`` is unknown, a section property is missing or invalid,
         or the tension and curvature channels cover different nodes.
     """
+    angles: npt.NDArray[Any] | None = None
     view = _window(history, start, stop)
     tensions = node_channels(view, line_id, "Ten")
     data = node_matrix(view, tensions)
@@ -440,10 +536,31 @@ def damage_along_arc(
         )
         scale = 1.0e-6
         histories = [outer, inner]
+    elif quantity == "section":
+        if curve.kind != "S-N":
+            raise ValueError("section-stress damage needs an S-N curve")
+        if area is None or modulus is None or radius is None or breaking_strength is not None:
+            raise ValueError("section-stress damage needs area, modulus, and radius only")
+        curvatures_x = node_channels(view, line_id, "CurvX")
+        curvatures_y = node_channels(view, line_id, "CurvY")
+        if tuple(curvatures_x) != tuple(tensions) or tuple(curvatures_y) != tuple(tensions):
+            raise ValueError("Ten, CurvX and CurvY channels must be written for the same nodes")
+        stresses, angles = section_stress(
+            data,
+            node_matrix(view, curvatures_x),
+            node_matrix(view, curvatures_y),
+            area=area,
+            modulus=modulus,
+            radius=radius,
+            points=points,
+        )
+        scale = 1.0e-6
+        histories = [stresses[:, :, k] for k in range(stresses.shape[2])]
     else:
-        raise ValueError("quantity must be 'tension' or 'stress'")
+        raise ValueError("quantity must be 'tension', 'stress' or 'section'")
     damage = np.zeros(data.shape[1])
-    for series in histories:
+    worst = np.zeros(data.shape[1], dtype=np.int64)
+    for k, series in enumerate(histories):
         for index in range(data.shape[1]):
             value = miner_damage(
                 rainflow_cycles(series[:, index]),
@@ -451,7 +568,9 @@ def damage_along_arc(
                 scale=scale,
                 ultimate_strength=ultimate_strength,
             )
-            damage[index] = max(damage[index], value)
+            if value > damage[index]:
+                damage[index] = value
+                worst[index] = k
     node_ids = tuple(tensions)
     kind, location = node_locations(int(line_id), node_ids, arc_length)
     return DamageProfile(
@@ -464,6 +583,7 @@ def damage_along_arc(
         damage=damage,
         duration=float(view.time[-1] - view.time[0]),
         source=view.path,
+        critical_angle=None if angles is None else angles[worst],
     )
 
 

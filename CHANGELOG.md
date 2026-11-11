@@ -36,6 +36,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   frequencies and `f D/U_n`, modal weights (taut-line sines or given shapes), the complex shape
   and its travelling-wave index (Feeny 2008), orbits and the in-line/cross-flow phase
   difference, with a CSV export and plots.
+- `cabledyn.section_stress` and `damage_along_arc(..., quantity="section")`: the axial stress at
+  points around the section from the tension and the curvature vector on the section axes
+  (`CurvX`/`CurvY`), `T/A - E r (kappa_x cos theta + kappa_y sin theta)`, counted point by point
+  for the fatigue of biaxial bending; a whirling section, which the two-fibre recovery from the
+  curvature magnitude sees as constant, now accumulates its damage.
 
 ## [0.4.2] - 2026-11-09
 

@@ -54,6 +54,7 @@ from cabledyn.damage import (
     damage_along_arc,
     lifetime_fatigue,
     miner_damage,
+    section_stress,
     study_sea_state_damage,
 )
 from cabledyn.deck import DeckWriter
@@ -281,6 +282,7 @@ __all__ = [
     "resample",
     "run_study",
     "seabed_clearance",
+    "section_stress",
     "segment_distance",
     "static_range_graph",
     "study_sea_state_damage",

@@ -204,6 +204,8 @@ in each docstring and in :attr:`FatigueCurve.source`. :func:`channel_damage` and
 
 .. autofunction:: cabledyn.cable_stress
 
+.. autofunction:: cabledyn.section_stress
+
 .. autofunction:: cabledyn.damage_along_arc
 
 .. autoclass:: cabledyn.DamageProfile

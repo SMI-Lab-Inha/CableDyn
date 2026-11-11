@@ -25,6 +25,7 @@ from cabledyn import (
     lifetime_fatigue,
     miner_damage,
     read_output,
+    section_stress,
     study_sea_state_damage,
 )
 from cabledyn.damage import SECONDS_PER_YEAR
@@ -323,3 +324,82 @@ def test_study_sea_state_damage_needs_a_time_history(tmp_path):
     study = _study(tmp_path, [_case(tmp_path, "s", static)])
     with pytest.raises(StudyOutputError, match="not a time history"):
         study_sea_state_damage(study, {"s": 1.0}, lambda history: 0.0)
+
+
+def test_section_stress_follows_the_curvature_vector():
+    stress, angles = section_stress(
+        1.0e5, 0.01, 0.0, area=0.01, modulus=2.0e11, radius=0.05, points=4
+    )
+    np.testing.assert_allclose(angles, [0.0, 90.0, 180.0, 270.0])
+    # the strain at (x, y) is -(kx x + ky y): compression towards the centre of curvature (+x)
+    np.testing.assert_allclose(stress, [1.0e7 - 1.0e8, 1.0e7, 1.0e7 + 1.0e8, 1.0e7], atol=1.0)
+    assert not stress.flags.writeable
+    # in a fixed bending plane the extreme points are the two fibres of cable_stress
+    kx, ky = 0.006, -0.008
+    many, _ = section_stress(
+        [2.0e5], [kx], [ky], area=0.01, modulus=2.0e11, radius=0.05, points=360
+    )
+    outer, inner = cable_stress(2.0e5, math.hypot(kx, ky), area=0.01, modulus=2.0e11, radius=0.05)
+    assert many.max() == pytest.approx(float(outer), rel=1.0e-4)
+    assert many.min() == pytest.approx(float(inner), rel=1.0e-4)
+    with pytest.raises(ValueError, match="points"):
+        section_stress(1.0, 0.0, 0.0, area=1.0, modulus=1.0, radius=1.0, points=0)
+    with pytest.raises(ValueError, match="points"):
+        section_stress(1.0, 0.0, 0.0, area=1.0, modulus=1.0, radius=1.0, points=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="finite"):
+        section_stress(1.0, math.nan, 0.0, area=1.0, modulus=1.0, radius=1.0)
+
+
+def _whirl_columns(kappa: float = 0.01) -> dict[str, np.ndarray]:
+    """A section whose curvature vector turns at a constant magnitude (0.5 Hz)."""
+    omega = 2.0 * math.pi * 0.5
+    columns: dict[str, np.ndarray] = {}
+    for node in (1, 3, 5):
+        columns[f"Ten1N{node}"] = np.full(TIME.shape, 1.0e6)
+        columns[f"Curv1N{node}"] = np.full(TIME.shape, kappa)
+        columns[f"CurvX1N{node}"] = kappa * np.cos(omega * TIME + 0.3 * node)
+        columns[f"CurvY1N{node}"] = kappa * np.sin(omega * TIME + 0.3 * node)
+    return columns
+
+
+def test_section_damage_sees_a_whirl_the_two_fibres_miss(tmp_path):
+    history = read_output(write_main(tmp_path / "whirl.out", _whirl_columns()))
+    curve = dnv_rp_c203_curve("D")
+    section = {"area": 0.01, "modulus": 2.0e11, "radius": 0.05}
+    fibres = damage_along_arc(history, 1, curve, quantity="stress", **section)
+    assert np.all(fibres.damage == 0.0) and fibres.critical_angle is None
+    profile = damage_along_arc(history, 1, curve, quantity="section", points=8, **section)
+    assert profile.quantity == "section"
+    assert np.all(profile.damage > 0.0)
+    columns = _whirl_columns()
+    stress, angles = section_stress(
+        columns["Ten1N3"], columns["CurvX1N3"], columns["CurvY1N3"], points=8, **section
+    )
+    damages = [
+        channel_damage(_table(tmp_path, stress[:, k]), "S", curve, scale=1.0e-6).damage
+        for k in range(8)
+    ]
+    assert profile.damage[1] == _close(max(damages))
+    assert profile.critical_angle is not None
+    # the critical angle is a point of the largest damage (opposite points of a whirl tie)
+    chosen = int(np.flatnonzero(angles == profile.critical_angle[1])[0])
+    assert damages[chosen] == _close(max(damages))
+
+
+def test_section_damage_errors(tmp_path):
+    history = read_output(write_main(tmp_path / "whirl.out", _whirl_columns()))
+    curve = dnv_rp_c203_curve("D")
+    tn = FatigueCurve("tn", "T-N", 3.0, 3.0)
+    section = {"area": 0.01, "modulus": 2.0e11, "radius": 0.05}
+    with pytest.raises(ValueError, match="S-N curve"):
+        damage_along_arc(history, 1, tn, quantity="section", **section)
+    with pytest.raises(ValueError, match="area, modulus, and radius"):
+        damage_along_arc(history, 1, curve, quantity="section", area=1.0)
+    columns = _whirl_columns()
+    del columns["CurvY1N5"]
+    sparse = read_output(write_main(tmp_path / "sparse.out", columns))
+    with pytest.raises(ValueError, match="same nodes"):
+        damage_along_arc(sparse, 1, curve, quantity="section", **section)
+    plain = read_output(write_main(tmp_path / "plain.out"))
+    with pytest.raises(KeyError, match="CurvX1N"):
+        damage_along_arc(plain, 1, curve, quantity="section", **section)
