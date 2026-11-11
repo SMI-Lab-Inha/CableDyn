@@ -1,0 +1,164 @@
+# SPDX-License-Identifier: Apache-2.0
+"""VIV response diagnostics (cabledyn.viv) on synthetic line motions with known answers."""
+
+from __future__ import annotations
+
+import csv
+import math
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from cabledyn import LineNodeHistory, VIVResponse, viv_response
+
+L = 100.0
+D = 0.1
+N_NODES = 41
+F = 0.5  # cross-flow frequency [Hz]
+DT = 0.01
+T = 40.0  # 20 cross-flow periods
+FLOW = (0.0, 0.5, 0.0)
+
+
+def _history(displacement, *, time=None) -> LineNodeHistory:
+    """A straight line along +x at z = -50 with displacement(t, s) -> (dy, dz) added."""
+    t = np.arange(0.0, T, DT) if time is None else time
+    s = np.linspace(0.0, L, N_NODES)
+    dy, dz = displacement(t[:, None], s[None, :])
+    x = np.broadcast_to(s, dy.shape)
+    xyz = np.stack((x, dy, -50.0 + dz), axis=2).reshape(t.size, -1)
+    channels = ["Time(s)"] + [f"Node{n}{a}(m)" for n in range(1, N_NODES + 1) for a in "XYZ"]
+    return LineNodeHistory(
+        Path("synthetic.Line1.p.out"), "", tuple(channels), None, np.column_stack((t, xyz))
+    )
+
+
+def _standing(t, s, a_cf=0.08, a_il=0.02, phase_cf=0.3, phase_il=1.0):
+    """Cross-flow (z) mode 1 at F, in-line (y) mode 2 at 2 F."""
+    dz = a_cf * np.sin(np.pi * s / L) * np.cos(2.0 * np.pi * F * t + phase_cf)
+    dy = a_il * np.sin(2.0 * np.pi * s / L) * np.cos(4.0 * np.pi * F * t + phase_il)
+    return dy, dz
+
+
+def test_local_frame_follows_the_tangent_and_the_flow():
+    response = viv_response(_history(_standing), flow=FLOW, diameter=D)
+    assert isinstance(response, VIVResponse)
+    assert np.allclose(response.tangent, [1.0, 0.0, 0.0])
+    assert np.allclose(response.in_line_axis, [0.0, 1.0, 0.0])
+    # (e_x, e_y, t) right-handed: cross-flow = t x in-line = +z
+    assert np.allclose(response.cross_flow_axis, [0.0, 0.0, 1.0])
+    assert np.allclose(response.normal_speed, 0.5)
+    assert response.arc_length[-1] == pytest.approx(L)
+
+
+def test_amplitudes_frequencies_and_the_nondimensional_frequency():
+    response = viv_response(_history(_standing), flow=FLOW, diameter=D)
+    mid, quarter = N_NODES // 2, N_NODES // 4
+    assert response.rms_over_diameter("cross_flow")[mid] == pytest.approx(0.08 / math.sqrt(2) / D)
+    assert response.amplitude_over_diameter("cross_flow")[mid] == pytest.approx(0.8, rel=1e-3)
+    assert response.amplitude_over_diameter("in_line")[quarter] == pytest.approx(0.2, rel=1e-3)
+    assert response.frequency("cross_flow") == pytest.approx(F, abs=1e-3)
+    assert response.frequency("in_line") == pytest.approx(2.0 * F, abs=1e-3)
+    assert response.frequencies("cross_flow")[mid] == pytest.approx(F, abs=1e-3)
+    # the pinned end nodes do not move
+    assert math.isnan(response.frequencies("cross_flow")[0])
+    assert np.allclose(response.nondimensional_frequency(), F * D / 0.5, rtol=1e-3)
+
+
+def test_modal_amplitudes_find_the_modes():
+    response = viv_response(_history(_standing), flow=FLOW, diameter=D)
+    cross = response.modal_amplitudes("cross_flow", n_modes=6)
+    assert cross.dominant_mode == 1
+    assert cross.rms_over_diameter[0] == pytest.approx(0.08 / math.sqrt(2) / D, rel=1e-9)
+    assert np.all(cross.rms_over_diameter[1:] < 1e-9)
+    assert cross.residual < 1e-9
+    assert cross.coefficients.shape == (response.time.size, 6)
+    inline = response.modal_amplitudes("in_line")
+    assert inline.dominant_mode == 2
+    s = response.arc_length
+    custom = response.modal_amplitudes("cross_flow", shapes=[np.sin(2 * np.pi * s / L)])
+    assert custom.mode_numbers == (1,) and custom.residual == pytest.approx(1.0, rel=1e-6)
+
+
+def test_travelling_wave_index_separates_standing_and_travelling_waves():
+    standing = viv_response(_history(_standing), flow=FLOW, diameter=D)
+    assert standing.travelling_wave_index("cross_flow") < 1e-6
+
+    def travelling(t, s):
+        dz = 0.05 * np.cos(2.0 * np.pi * F * t - 2.0 * np.pi * 4.0 * s / L)
+        return np.zeros_like(dz), dz
+
+    wave = viv_response(_history(travelling), flow=FLOW, diameter=D)
+    assert wave.travelling_wave_index("cross_flow") > 0.95
+
+
+def test_complex_shape_and_phase_difference():
+    response = viv_response(_history(_standing), flow=FLOW, diameter=D)
+    mid, quarter = N_NODES // 2, N_NODES // 4
+    shape = response.complex_shape("cross_flow")
+    assert abs(shape[mid]) == pytest.approx(0.08, rel=1e-3)
+    assert np.angle(shape[mid]) == pytest.approx(0.3, abs=1e-3)
+    # theta = phi_x - 2 phi_y = 1.0 - 0.6 rad
+    assert response.phase_difference(quarter + 1) == pytest.approx(math.degrees(0.4), abs=0.1)
+    x, y = response.orbit(quarter + 1)
+    assert x.shape == y.shape == response.time.shape
+    assert math.isnan(response.phase_difference(1))
+
+
+def test_flow_along_the_line_leaves_no_frame():
+    response = viv_response(_history(_standing), flow=(0.4, 0.0, 0.0), diameter=D)
+    assert np.all(np.isnan(response.in_line_axis)) and np.all(response.normal_speed == 0.0)
+    assert np.all(np.isnan(response.frequencies("cross_flow")))
+    assert math.isnan(response.frequency("cross_flow"))
+    assert np.all(np.isnan(response.nondimensional_frequency()))
+    with pytest.raises(ValueError, match="fewer nodes with a flow frame"):
+        response.modal_amplitudes()
+
+
+def test_window_and_export(tmp_path):
+    response = viv_response(_history(_standing), flow=FLOW, diameter=D, start=10.0, stop=30.0)
+    assert response.time[0] == pytest.approx(10.0) and response.time[-1] <= 30.0
+    target = response.export(tmp_path / "viv.csv")
+    with target.open(encoding="utf-8") as stream:
+        rows = list(csv.reader(stream))
+    assert rows[0][:3] == ["Node", "ArcLength_[m]", "NormalSpeed_[m/s]"]
+    assert len(rows) == N_NODES + 1
+    assert rows[1][7] == ""  # the pinned End A node has no frequency
+    with pytest.raises(FileExistsError):
+        response.export(target)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"flow": (0.0, 0.0)}, "finite, non-zero 3-vector"),
+        ({"flow": (0.0, 0.0, 0.0)}, "finite, non-zero 3-vector"),
+        ({"diameter": 0.0}, "diameter must be finite and positive"),
+        ({"start": 39.97}, "at least eight samples"),
+        ({"line_id": 1}, "line_id does not apply"),
+    ],
+)
+def test_arguments_are_validated(kwargs, message):
+    arguments = {"flow": FLOW, "diameter": D, **kwargs}
+    with pytest.raises(ValueError, match=message):
+        viv_response(_history(_standing), **arguments)
+
+
+def test_non_uniform_sampling_is_refused():
+    time = np.cumsum(np.full(100, DT))
+    time[50:] += 0.003
+    with pytest.raises(ValueError, match="uniform sampling"):
+        viv_response(_history(_standing, time=time), flow=FLOW, diameter=D)
+
+
+def test_methods_validate_direction_and_node():
+    response = viv_response(_history(_standing), flow=FLOW, diameter=D)
+    with pytest.raises(ValueError, match="direction must be one of"):
+        response.rms_over_diameter("axial")
+    with pytest.raises(ValueError, match="node must be an integer from 1 to 41"):
+        response.orbit(0)
+    with pytest.raises(ValueError, match="n_modes must be a positive integer"):
+        response.modal_amplitudes(n_modes=0)
+    with pytest.raises(ValueError, match="shapes must have shape"):
+        response.modal_amplitudes(shapes=np.ones((2, 3)))

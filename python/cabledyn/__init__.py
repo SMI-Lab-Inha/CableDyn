@@ -149,6 +149,7 @@ from cabledyn.summary import (
 )
 from cabledyn.sweep import parameter_grid
 from cabledyn.touchdown import TouchdownHistory, touchdown_history
+from cabledyn.viv import ModalAmplitudes, VIVResponse, viv_response
 
 if TYPE_CHECKING:
     from cabledyn._lib import abi_minor as abi_minor
@@ -198,6 +199,7 @@ __all__ = [
     "LinePositions",
     "LineSegmentHistory",
     "LineSummary",
+    "ModalAmplitudes",
     "ModeShapes",
     "MoorDynLineHistory",
     "NaturalModes",
@@ -226,6 +228,7 @@ __all__ = [
     "TimeHistory",
     "Touchdown",
     "TouchdownHistory",
+    "VIVResponse",
     "WaterSurface",
     "WeibullFit",
     "animate",
@@ -284,6 +287,7 @@ __all__ = [
     "tension_check",
     "touchdown_history",
     "upcrossing_maxima",
+    "viv_response",
 ]
 
 __version__ = "0.4.2"

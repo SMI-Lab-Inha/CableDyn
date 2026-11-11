@@ -29,6 +29,7 @@ from cabledyn import (
     parameter_grid,
     resample,
     run_study,
+    viv_response,
 )
 from cabledyn import cli as run_cli
 from cabledyn.post_cli import main as post_main
@@ -279,3 +280,28 @@ def test_deck_validator_agrees_with_the_native_reader(
         assert exc.returncode == 1, exc.stderr  # a deck error, not a solve failure
         native_accepts = False
     assert python_accepts == native_accepts == accepted
+
+
+def test_viv_response_of_the_inline_example(driver, tmp_path):
+    # the line positions of examples/viv_taut_cable_inline.dat (Outputs p for its V flag)
+    text = (EXAMPLES / "viv_taut_cable_inline.dat").read_text(encoding="utf-8")
+    deck = tmp_path / "viv_inline.dat"
+    deck.write_text(
+        text.replace("1     1       2       V", "1     1       2       p"), encoding="utf-8"
+    )
+    result = driver.run(deck, "out/viv", timeout=600)
+    history = result.read_line_positions(1)
+    response = viv_response(history, flow=(0.0, 0.15, 0.0), diameter=0.1, start=60.0)
+    mid, quarter = 25, 12
+    # the deck's own statement: mid-span cross-flow A/D 0.82 at 0.29 Hz, quarter-span in-line
+    # A/D 0.19 at twice the frequency
+    assert response.amplitude_over_diameter("cross_flow")[mid] == pytest.approx(0.82, abs=0.02)
+    assert response.amplitude_over_diameter("in_line")[quarter] == pytest.approx(0.19, abs=0.02)
+    f_cf = response.frequency("cross_flow")
+    assert f_cf == pytest.approx(0.29, abs=0.01)
+    assert response.frequency("in_line") / f_cf == pytest.approx(2.0, abs=0.15)
+    # inside the synchronisation band cF +/- dF = 0.18 +/- 0.08
+    assert 0.10 < response.nondimensional_frequency()[mid] < 0.26
+    assert response.modal_amplitudes("cross_flow").dominant_mode == 1
+    assert response.modal_amplitudes("in_line").dominant_mode == 2
+    assert response.travelling_wave_index("cross_flow") < 0.2
