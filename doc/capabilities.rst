@@ -201,6 +201,11 @@ Loads and environment
      - Standalone only
      - a 6-DOF vessel record, or the RAO response to the deck waves, moves every
        ``Coupled``/``Vessel`` point of a line deck; see :doc:`options`
+   * - Load power channels (``VIVPow``, ``DragPow``, ``DampPow``)
+     - Standalone and coupled
+     - the power of the VIV loads, the drag and the structural damping on a line, in total and per
+       unit length about a node, at every output time: the energy ledger of a VIV response; see
+       :doc:`outputs`
    * - Range graphs (``r`` line output flag, ``RangeStart``)
      - Standalone and OpenFAST
      - minimum, maximum, and mean along each line over the run, from the committed steps; a run

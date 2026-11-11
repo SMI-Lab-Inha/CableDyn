@@ -18,7 +18,7 @@ MODULE CableDyn_System
                             CD_Model_Has_Viscoelastic, CD_Get_Model_VE_Dl1, CD_Set_Model_VE_Dl1, &
                             CD_Model_Has_Syrope, CD_Get_Model_Syrope_State, CD_Set_Model_Syrope_State, &
                             CD_Model_Has_VIV, CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, CD_Get_Model_VIV_Lift, &
-                            CD_Model_Has_VIV_Inline, &
+                            CD_Model_Has_VIV_Inline, CD_Get_Model_Load_Power, &
                             CD_Model_Has_Friction, CD_Get_Model_Friction_Anchors, CD_Set_Model_Friction_Anchors, &
                             CD_Latch_Model_VIV_Window, &
                             CD_Get_Model_EndNodeMassDiag, CD_Get_Model_EndNodeAddedMass, &
@@ -80,7 +80,7 @@ MODULE CableDyn_System
   PUBLIC :: CD_Set_System_Line_Friction_Anchors
   PUBLIC :: CD_Get_System_Line_Syrope_State
   PUBLIC :: CD_System_Line_VIV_MirrorSize, CD_Get_System_Line_VIV_State, CD_Set_System_Line_VIV_State, &
-            CD_Get_System_Line_VIV_Lift
+            CD_Get_System_Line_VIV_Lift, CD_Get_System_Line_Load_Power
   PUBLIC :: CD_Set_System_Line_Syrope_State
   PUBLIC :: CD_Get_System_PointBlocks
   PUBLIC :: CD_Get_System_Point_State
@@ -1042,6 +1042,32 @@ CONTAINS
     ErrStat = CD_SYSTEM_OK
     ErrMsg = ''
   END SUBROUTINE CD_Set_System_Line_VIV_State
+
+  SUBROUTINE CD_Get_System_Line_Load_Power(system, line_index, p_viv, p_drag, p_damp, ErrStat, ErrMsg)
+    !! The VIV, drag and structural damping power [W] on every node of one contained line at the
+    !! committed state (n_nodes each; CD_Get_Model_Load_Power).
+    TYPE(CD_SystemType), INTENT(IN) :: system
+    INTEGER, INTENT(IN) :: line_index
+    REAL(wp), INTENT(OUT) :: p_viv(:), p_drag(:), p_damp(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(160) :: em
+
+    p_viv = CD_ZERO
+    p_drag = CD_ZERO
+    p_damp = CD_ZERO
+    CALL validate_line_index(system, line_index, ErrStat, ErrMsg)
+    IF (ErrStat /= CD_SYSTEM_OK) RETURN
+    CALL CD_Get_Model_Load_Power(system%lines(line_index), p_viv, p_drag, p_damp, es, em)
+    IF (es /= CD_MODEL_OK) THEN
+      ErrStat = CD_SYSTEM_SOLVEFAIL
+      ErrMsg = 'CableDyn_System: line load power query failed: '//TRIM(em)
+      RETURN
+    END IF
+    ErrStat = CD_SYSTEM_OK
+    ErrMsg = ''
+  END SUBROUTINE CD_Get_System_Line_Load_Power
 
   SUBROUTINE CD_Get_System_Line_VIV_Lift(system, line_index, lift, ErrStat, ErrMsg)
     !! VIV lift force on every node of one contained line at the committed state (3, n_nodes).

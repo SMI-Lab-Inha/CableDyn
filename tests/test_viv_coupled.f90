@@ -12,6 +12,9 @@ PROGRAM test_viv_coupled
   !! * lock-in: over 60-120 s the mid-span cross-flow amplitude of both lines is MoorDyn-F's
   !!   A/D 0.662 within 0.03 and the response frequency its 0.293 Hz within 0.01 Hz; with Cl = 0
   !!   the lines stay still (A/D below 0.01);
+  !! * load power (the VIVPow, DragPow and DampPow channels of each line): over the lock-in window
+  !!   the VIV loads put power in, the drag takes it out, the damping power is never positive, and
+  !!   their means balance within 1 % of the VIV power;
   !! * checkpoint restart (the shell's rebuild recipe: a fresh instance takes the coupled
   !!   kinematics, each EI = 0 line's interior [v; q; a] and VIV block and each cable's mirror,
   !!   then the host field): the restarted run continues bit for bit, and a rebuild that skips the
@@ -34,7 +37,7 @@ PROGRAM test_viv_coupled
                                          CD_AGG_SetFluidFields, CD_AGG_Snapshot, CD_AGG_Restore
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_MirrorSize, CD_HFMF_VIVMirrorSize, CD_HFMF_PackMirror, &
                                           CD_HFMF_UnpackMirror, CD_HFMF_OK
-  USE CableDyn_DeckDriver, ONLY: CD_Deck_VIV_Phase_Seed
+  USE CableDyn_DeckDriver, ONLY: CD_Deck_VIV_Phase_Seed, CD_Eval_Aggregate_Channel, CD_DECKDRV_OK
   USE CableDyn_System, ONLY: CD_System_NLines, CD_System_Line_NDOF, CD_Get_System_Line_State, &
                              CD_Update_System_Line_Interior_State, CD_System_Line_VIV_MirrorSize, &
                              CD_Get_System_Line_VIV_State, CD_Set_System_Line_VIV_State, CD_SYSTEM_OK
@@ -73,20 +76,44 @@ CONTAINS
     !! 120 s in the host current; the response statistics over 60-120 s.
     INTEGER, PARAMETER :: NSTEP = 12000, NSKIP = 6000
     TYPE(CD_AGG_ModuleType) :: agg
-    REAL(wp) :: zs(NSTEP - NSKIP, 2), ad(2), f(2)
+    REAL(wp) :: zs(NSTEP - NSKIP, 2), ad(2), f(2), pw(3, 2), pmax(2)
     INTEGER :: pass, s, k
+    CHARACTER(8) :: pname(3) = ['VIVPow  ', 'DragPow ', 'DampPow ']
     CHARACTER(16) :: what(2) = ['EI = 0 riser    ', 'finite-EI cable ']
     DO pass = 1, 2
       IF (.NOT. start(agg, MERGE('viv_coupled.dat       ', 'viv_coupled_nolift.dat', pass == 1))) RETURN
       DO s = 1, NSKIP
         IF (.NOT. advance(agg)) RETURN
       END DO
+      pw = 0.0_wp
+      pmax = -HUGE(1.0_wp)
       DO s = 1, NSTEP - NSKIP
         IF (.NOT. advance(agg)) RETURN
         zs(s, 1) = agg%sys%fast%system%lines(1)%q(3*MID)
         zs(s, 2) = agg%cables(1)%line%q(6*(MID - 1) + 3)
+        IF (pass == 2) CYCLE
+        DO k = 1, 2
+          BLOCK
+            REAL(wp) :: val
+            INTEGER :: j
+            DO j = 1, 3
+              IF (.NOT. channel(agg, TRIM(pname(j))//MERGE('1', '2', k == 1), val)) RETURN
+              pw(j, k) = pw(j, k) + val/REAL(NSTEP - NSKIP, wp)
+              IF (j == 3) pmax(k) = MAX(pmax(k), val)
+            END DO
+          END BLOCK
+        END DO
       END DO
       CALL finish(agg)
+      IF (pass == 1) THEN
+        DO k = 1, 2
+          WRITE (*, '(2A,3F9.4,A,ES10.2)') '  ', what(k), pw(:, k), ' W mean VIV/drag/damping power, balance/VIV ', &
+            SUM(pw(:, k))/pw(1, k)
+          CALL check(pw(1, k) > 0.0_wp .AND. pw(2, k) < 0.0_wp, TRIM(what(k))//': VIV power in, drag power out')
+          CALL check(pmax(k) <= 0.0_wp, TRIM(what(k))//': the damping power is never positive')
+          CALL check(ABS(SUM(pw(:, k))) <= 0.01_wp*pw(1, k), TRIM(what(k))//': the load powers balance within 1 %')
+        END DO
+      END IF
       DO k = 1, 2
         CALL response(zs(:, k), ad(k), f(k))
         IF (pass == 1) THEN
@@ -100,6 +127,19 @@ CONTAINS
       END DO
     END DO
   END SUBROUTINE case_lockin
+
+  LOGICAL FUNCTION channel(agg, name, val) RESULT(ok)
+    !! One deck channel of the aggregate at its committed state (the shells' evaluator).
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: agg
+    CHARACTER(*), INTENT(IN) :: name
+    REAL(wp), INTENT(OUT) :: val
+    INTEGER :: es
+    CHARACTER(512) :: em
+    CALL CD_Eval_Aggregate_Channel(name, agg%has_sys, agg%sys%fast%system, agg%cables, agg%line_is_cable, &
+                                   agg%line_obj_index, val, es, em, cable_points=agg%cable_points)
+    ok = es == CD_DECKDRV_OK
+    CALL check(ok, name//': '//TRIM(em))
+  END FUNCTION channel
 
   SUBROUTINE case_restart()
     !! Checkpoint after 10 s, while the lock-in builds up; 50 steps on.

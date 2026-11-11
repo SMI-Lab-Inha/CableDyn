@@ -25,6 +25,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   finite-EI cables alike (within 1 % of each other). Exact Jacobians; the phase is in the
   step-recovery, snapshot and checkpoint state; the Python deck reader and builder take the
   section.
+- Load power channels `VIVPow<L>`, `DragPow<L>` and `DampPow<L>` [W], and `<name><L>N<J>` per
+  unit length about a node [W/m]: the power the VIV loads, the drag and the structural damping
+  (`BA`, `Bb`) deliver to a line at the committed state, on `EI = 0` lines and finite-EI cables,
+  standalone and coupled. Their work closes a cable's energy balance to 0.04 % in free decays
+  and VIV runs, and on the locked-in line of `examples/viv_taut_cable_inline.dat` their means
+  balance within 0.5 % of the VIV power.
 
 ## [0.4.2] - 2026-11-09
 

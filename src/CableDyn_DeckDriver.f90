@@ -59,11 +59,12 @@ MODULE CableDyn_DeckDriver
                             CD_Get_Model_EndForces, &
                             CD_Update_Model_CoupledMotion, CD_Update_Model_Hydro_Fields, &
                             CD_Recompute_Model_Acceleration, CD_Step_Model, CD_Step_Model_Recovering, CD_MODEL_OK, &
-                            CD_Audit_Model_Step, CD_Set_Model_VIV, CD_Get_Model_VIV_Lift
+                            CD_Audit_Model_Step, CD_Set_Model_VIV, CD_Get_Model_VIV_Lift, CD_Get_Model_Load_Power
   USE CableDyn_System, ONLY: CD_SystemType, CD_SystemPointType, CD_LineEndpointBinding, &
                              CD_Init_System_From_Points, CD_End_System, CD_System_Line_NDOF, &
                              CD_System_Line_NElem, CD_Get_System_Point_State, CD_Get_System_Line_State, &
                              CD_Get_System_Line_Tension, CD_Get_System_Line_VIV_Lift, &
+                             CD_Get_System_Line_Load_Power, &
                              CD_Update_System_Point_Fluid_Fields, &
                              CD_Get_System_CoupledMotion, CD_Update_System_Point_States, &
                              CD_Calc_System_CoupledLoads, CD_Step_System, CD_Step_System_DynamicPoints, &
@@ -95,7 +96,7 @@ MODULE CableDyn_DeckDriver
                                          CD_HCSTAT_NOCONVERGE, CD_HC_COMPRESSION_OSCILLATION, &
                                          CD_HC_COMPRESSION_STRICT
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HCDYN_OK, CD_HCDYN_TENSILE_OFF, CD_HCDYN_TENSILE_WARN, &
-                                          CD_HCDYN_TENSILE_ERROR, &
+                                          CD_HCDYN_TENSILE_ERROR, CD_HermiteCable_Dyn_Load_Power, &
                                           CD_HermiteCable_Axial_Damping_Resultant, &
                                           CD_HermiteCable_Axial_Damping_Element, CD_HermiteCable_Dyn_End_Force, &
                                           CD_HermiteCable_Dyn_Node_Values, CD_HermiteCable_Dyn_Node_Recovery, &
@@ -18574,7 +18575,7 @@ CONTAINS
       IF (a > 0 .AND. b > 0) key = 'point:'//TRIM(int_to_str(a))//':'//TRIM(int_to_str(b))
     ELSE IF (starts_with(lo, 'ten') .OR. starts_with(lo, 'curv') .OR. starts_with(lo, 'bendmom') .OR. &
              starts_with(lo, 'stfmom') .OR. starts_with(lo, 'l') .OR. starts_with(lo, 'torq') .OR. &
-             starts_with(lo, 'twist')) THEN
+             starts_with(lo, 'twist') .OR. is_load_power_channel(lo)) THEN
       CALL parse_line_node_channel(ch, a, b, c, d)
       IF (a > 0 .AND. b > 0 .AND. c > 0) key = 'node:'//TRIM(int_to_str(a))//':'//TRIM(int_to_str(b))// &
                                                ':'//TRIM(int_to_str(c))//':'//TRIM(int_to_str(d))
@@ -35033,6 +35034,7 @@ CONTAINS
           END IF
         ELSE
           CALL parse_line_node_channel(channels(j), il, node, kind, comp)
+          IF (is_load_power_kind(kind)) CYCLE   ! from the line model, channel-at-a-time (CH_LEGACY)
           il = find_line(lines, il)
           IF (il < 1) CYCLE
           CALL line_sizes(il, sized, tension_sized)
@@ -35286,6 +35288,19 @@ CONTAINS
         RETURN
       END IF
       inode = deck_to_internal_node(node, nnode - 1)
+      IF (is_load_power_kind(kind)) THEN
+        BLOCK
+          REAL(wp) :: pv(nnode), pd(nnode), pm(nnode)
+          CALL CD_Get_System_Line_Load_Power(system, li, pv, pd, pm, es, em)
+          IF (es /= CD_SYSTEM_OK) THEN
+            ErrStat = CD_DECKDRV_SOLVEFAIL
+            ErrMsg = 'CableDyn_DeckDriver: system line load power recovery failed: '//TRIM(em)
+            RETURN
+          END IF
+          val = load_power_value(kind, inode, pv, pd, pm, system%lines(li)%l0)
+        END BLOCK
+        RETURN
+      END IF
       IF (kind == 3) THEN
         CALL ensure_model_output_workspace(work, 0, nnode - 1)
         CALL CD_Get_System_Line_Tension(system, li, work%tension(1:nnode - 1), es, em)
@@ -35428,6 +35443,19 @@ CONTAINS
         RETURN
       END IF
       inode = deck_to_internal_node(node, nnode - 1)
+      IF (is_load_power_kind(kind)) THEN
+        BLOCK
+          REAL(wp) :: pv(nnode), pd(nnode), pm(nnode)
+          CALL CD_Get_Model_Load_Power(models(li), pv, pd, pm, es, em)
+          IF (es /= CD_MODEL_OK) THEN
+            ErrStat = CD_DECKDRV_SOLVEFAIL
+            ErrMsg = 'CableDyn_DeckDriver: dynamic line load power recovery failed: '//TRIM(em)
+            RETURN
+          END IF
+          val = load_power_value(kind, inode, pv, pd, pm, models(li)%l0)
+        END BLOCK
+        RETURN
+      END IF
       IF (kind == 3) THEN
         CALL ensure_model_output_workspace(work, 0, nnode - 1)
         CALL CD_Get_Model_Tension(models(li), work%tension(1:nnode - 1), es, em)
@@ -36870,6 +36898,21 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": line '//TRIM(int_to_str(line_id))//' is not '// &
                   'torsionally restrained (END CONNECTIONS TorsStiffness), so it carries no torque'); RETURN
       END IF
+    ELSE IF (is_load_power_channel(lo)) THEN
+      CALL parse_line_node_channel(ch, line_id, node, kind, comp)
+      li = find_line(lines, line_id)
+      IF (li /= 0 .AND. node == 0 .AND. names_node_zero(lo)) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": node numbers start at 1 = End A (MoorDyn '// &
+                  'numbers from N0)'); RETURN
+      END IF
+      IF (li == 0 .OR. kind == 0 .OR. node < 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": bad load power channel (use VIVPow<L>, '// &
+                  'DragPow<L>, DampPow<L>, or <name><L>N<J> per unit length, with a known line id)'); RETURN
+      END IF
+      nelem = line_nelem_from_sections(lines(li)%id, sections)
+      IF (node > nelem + 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": node index exceeds line node count'); RETURN
+      END IF
     ELSE IF (starts_with(lo, 'ten') .OR. starts_with(lo, 'curv') .OR. &
              starts_with(lo, 'bendmom') .OR. starts_with(lo, 'stfmom') .OR. starts_with(lo, 'l')) THEN
       CALL parse_line_node_channel(ch, line_id, node, kind, comp)
@@ -36903,6 +36946,7 @@ CONTAINS
                 'Point<P>p{x,y,z} (alias Con<P>p{x,y,z}), Point<P>F{x,y,z,H}, '// &
                 'Ten<L>N<J>, Curv<L>N<J>, CurvX<L>N<J>, CurvY<L>N<J>, BendMom<L>N<J>, StfMom<L>N<J>, '// &
                 'Torq<L>N<J>, Twist<L>N<J>, Twist<L>, '// &
+                'VIVPow<L>, DragPow<L>, DampPow<L> (and <name><L>N<J>), '// &
                 'L<L>N<J>p{x,y,z}, L<L>N<J>v{x,y,z}, L<L>N<J>a{x,y,z}, L<L>N<J>Dec, L<L>N<J>Azi, '// &
                 'TDP<L>{s,x,y,z,Lay,Exc,Grd}, or the Body<N>/Rod<N> channels)'); RETURN
     END IF
@@ -36911,11 +36955,12 @@ CONTAINS
   LOGICAL FUNCTION CD_Is_Line_Node_Channel(ch) RESULT(yes)
     !! True for an OUTPUTS channel that names a node of a line (Ten<L>N<J>, Curv, BendMom, StfMom,
     !! Torq, Twist<L>N<J>, L<L>N<J>...), whose node numbering differs from MoorDyn's
-    !! (CD_LINE_NODE_NUMBERING_NOTE); the line total Twist<L> names no node.
+    !! (CD_LINE_NODE_NUMBERING_NOTE); the line totals Twist<L>, VIVPow<L>, DragPow<L> and
+    !! DampPow<L> name no node.
     CHARACTER(*), INTENT(IN) :: ch
     INTEGER :: line_id, node_id, kind, comp
     CALL parse_line_node_channel(ch, line_id, node_id, kind, comp)
-    yes = kind /= 0 .AND. kind /= 11
+    yes = kind /= 0 .AND. kind /= 11 .AND. kind /= 15 .AND. kind /= 17 .AND. kind /= 19
   END FUNCTION CD_Is_Line_Node_Channel
 
   PURE LOGICAL FUNCTION names_node_zero(lo) RESULT(yes)
@@ -37158,11 +37203,17 @@ CONTAINS
     !!   Torq<L>N<J>       -> kind=9, comp=0    line torque         [N.m]
     !!   Twist<L>N<J>      -> kind=10, comp=0   twist from End A    [deg]
     !!   Twist<L>          -> kind=11, comp=0   total twist (node 1) [deg]
+    !!   VIVPow<L>         -> kind=15, comp=0   power of the VIV loads on the line (node 1) [W]
+    !!   VIVPow<L>N<J>     -> kind=16, comp=0   the same per unit length about node J [W/m]
+    !!   DragPow<L>        -> kind=17, comp=0   power of the hydrodynamic drag (node 1) [W]
+    !!   DragPow<L>N<J>    -> kind=18, comp=0   the same per unit length about node J [W/m]
+    !!   DampPow<L>        -> kind=19, comp=0   power of the structural damping (node 1) [W]
+    !!   DampPow<L>N<J>    -> kind=20, comp=0   the same per unit length about node J [W/m]
     CHARACTER(*), INTENT(IN) :: ch
     INTEGER, INTENT(OUT) :: line_id, node_id, kind, comp
 
     CHARACTER(NAMELEN) :: lo
-    INTEGER :: npos, field_pos, last, sfx
+    INTEGER :: npos, field_pos, last, sfx, plen, pkind
 
     lo = to_lower(ch)
     line_id = 0
@@ -37209,6 +37260,24 @@ CONTAINS
     ELSE IF (starts_with(lo, 'stfmom')) THEN
       CALL parse_keyword_line_node(lo, 6, last, line_id, node_id)
       IF (line_id > 0 .AND. node_id > 0) kind = 12
+      RETURN
+    ELSE IF (is_load_power_channel(lo)) THEN
+      ! the load power channels: the line total <name><L> (node 1, as Twist<L>), or the power per
+      ! unit length about a node <name><L>N<J> (the next kind)
+      plen = MERGE(6, 7, starts_with(lo, 'vivpow'))
+      pkind = MERGE(15, MERGE(17, 19, starts_with(lo, 'dragpow')), starts_with(lo, 'vivpow'))
+      IF (last > plen) THEN
+        IF (INDEX(lo(plen + 1:last), 'n') == 0) THEN
+          line_id = parse_positive_int(lo, plen + 1, last)
+          IF (line_id > 0) THEN
+            node_id = 1
+            kind = pkind
+          END IF
+          RETURN
+        END IF
+      END IF
+      CALL parse_keyword_line_node(lo, plen, last, line_id, node_id)
+      IF (line_id > 0 .AND. node_id > 0) kind = pkind + 1
       RETURN
     END IF
     ! L<L>N<J>... channels: p/v/a{x,y,z} (component) or Dec/Azi (scalar).
@@ -37271,6 +37340,45 @@ CONTAINS
     line_id = parse_positive_int(lo, prefix_len + 1, npos - 1)
     node_id = parse_positive_int(lo, npos + 1, last)
   END SUBROUTINE parse_keyword_line_node
+
+  LOGICAL FUNCTION is_load_power_channel(lo) RESULT(yes)
+    !! The load power channels VIVPow, DragPow and DampPow (lower case), of a line or a node.
+    CHARACTER(*), INTENT(IN) :: lo
+    yes = starts_with(lo, 'vivpow') .OR. starts_with(lo, 'dragpow') .OR. starts_with(lo, 'damppow')
+  END FUNCTION is_load_power_channel
+
+  PURE LOGICAL FUNCTION is_load_power_kind(kind) RESULT(yes)
+    !! The parse_line_node_channel kinds of the load power channels (15-20).
+    INTEGER, INTENT(IN) :: kind
+    yes = kind >= 15 .AND. kind <= 20
+  END FUNCTION is_load_power_kind
+
+  PURE REAL(wp) FUNCTION load_power_value(kind, inode, p_viv, p_drag, p_damp, l0) RESULT(val)
+    !! A load power channel from the node powers of its line (internal order, element e joining
+    !! nodes e and e+1 of unstretched length l0(e)): the line total [W] for the odd kinds (15, 17,
+    !! 19), and for the even ones the power per unit unstretched length about internal node inode
+    !! [W/m], the node's power over half the unstretched length of its elements.
+    INTEGER, INTENT(IN) :: kind, inode
+    REAL(wp), INTENT(IN) :: p_viv(:), p_drag(:), p_damp(:), l0(:)
+    REAL(wp) :: trib
+    val = CD_ZERO
+    SELECT CASE (kind)
+    CASE (15)
+      val = SUM(p_viv)
+    CASE (17)
+      val = SUM(p_drag)
+    CASE (19)
+      val = SUM(p_damp)
+    CASE (16, 18, 20)
+      trib = CD_ZERO
+      IF (inode > 1) trib = trib + 0.5_wp*l0(inode - 1)
+      IF (inode <= SIZE(l0)) trib = trib + 0.5_wp*l0(inode)
+      IF (.NOT. (trib > CD_ZERO)) RETURN
+      IF (kind == 16) val = p_viv(inode)/trib
+      IF (kind == 18) val = p_drag(inode)/trib
+      IF (kind == 20) val = p_damp(inode)/trib
+    END SELECT
+  END FUNCTION load_power_value
 
   INTEGER FUNCTION parse_positive_int(s, first, last) RESULT(n)
     CHARACTER(*), INTENT(IN) :: s
@@ -39061,6 +39169,17 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": node index out of range'); RETURN
     END IF
     inode = deck_to_internal_node(node, nnode - 1)
+    IF (is_load_power_kind(kind)) THEN
+      BLOCK
+        REAL(wp) :: pv(nnode), pd(nnode), pm(nnode)
+        CALL CD_Get_System_Line_Load_Power(system, li, pv, pd, pm, es, em)
+        IF (es /= CD_SYSTEM_OK) THEN
+          CALL sys_solvefail(ch, em, ErrStat, ErrMsg); RETURN
+        END IF
+        val = load_power_value(kind, inode, pv, pd, pm, system%lines(li)%l0)
+      END BLOCK
+      RETURN
+    END IF
     IF (kind == 3) THEN
       BLOCK
         REAL(wp) :: tension(nnode - 1)
@@ -39205,6 +39324,16 @@ CONTAINS
     END IF
     inode = deck_to_internal_node(node, nelem)
     SELECT CASE (kind)
+    CASE (15:20)   ! load power: the line total, or per unit length about the node
+      BLOCK
+        REAL(wp) :: pv(nnode), pd(nnode), pm(nnode)
+        CALL CD_HermiteCable_Dyn_Load_Power(cable%line, pv, pd, pm, es, em)
+        IF (es /= CD_HCDYN_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": finite-EI load power recovery failed: '// &
+                          TRIM(em)); RETURN
+        END IF
+        val = load_power_value(kind, inode, pv, pd, pm, cable%line%l0)
+      END BLOCK
     CASE (3, 5, 6)   ! nodal tension, curvature, bend moment
       CALL cable_recovered_value(cable, kind, inode, ch, val, ErrStat, ErrMsg)
     CASE (1)   ! position (cable-local state rotated to the deck's global frame)
@@ -39677,6 +39806,7 @@ CONTAINS
     !! OrcaFlex-vocabulary output unit for a channel token, by kind: tension (FairTen/AnchTen/Ten)
     !! and anchor force (AnchFz/AnchFH) -> (N); curvature (Curv) -> (1/m); bend moment (BendMom)
     !! -> (N.m); endpoint orientation/Dec/Azi -> (deg); torque (Torq) -> (N.m); twist (Twist) -> (deg); position (Point/...p) -> (m);
+    !! load power (VIVPow/DragPow/DampPow) -> (W), per unit length about a node -> (W/m);
     !! velocity (...v) -> (m/s);
     !! acceleration (...a) -> (m/s2).
     CHARACTER(*), INTENT(IN) :: ch
@@ -39715,6 +39845,8 @@ CONTAINS
       CASE (7, 8); unit = '(deg)'
       CASE (9); unit = '(N.m)'
       CASE (10, 11); unit = '(deg)'
+      CASE (15, 17, 19); unit = '(W)'
+      CASE (16, 18, 20); unit = '(W/m)'
       CASE (1); unit = '(m)'
       CASE (2); unit = '(m/s)'
       CASE (4); unit = '(m/s2)'

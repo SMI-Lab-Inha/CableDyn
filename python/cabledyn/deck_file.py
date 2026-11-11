@@ -740,6 +740,20 @@ def _parse_line_node_channel(lowered: str) -> tuple[int, int, int, int]:
         # Twist<L>: the line's total twist (node 1)
         line_id = _native_positive_int(lowered, 6, last)
         return (line_id, 1, 11, 0) if line_id > 0 else (line_id, 0, 0, 0)
+    for keyword, code in (("vivpow", 15), ("dragpow", 17), ("damppow", 19)):
+        if not lowered.startswith(keyword):
+            continue
+        # the load power channels: <name><L> the line total (node 1), <name><L>N<J> per length
+        prefix = len(keyword)
+        if last > prefix and "n" not in lowered[prefix:]:
+            line_id = _native_positive_int(lowered, prefix + 1, last)
+            return (line_id, 1, code, 0) if line_id > 0 else (line_id, 0, 0, 0)
+        separator = lowered.find("n", prefix)
+        if last <= prefix or separator < 0:
+            return 0, 0, 0, 0
+        line_id = _native_positive_int(lowered, prefix + 1, separator)
+        node_id = _native_positive_int(lowered, separator + 2, last)
+        return line_id, node_id, code + 1 if line_id > 0 and node_id > 0 else 0, 0
     for keyword, code in (
         ("torq", 9),
         ("twist", 10),
@@ -822,7 +836,9 @@ def _channel_identity_key(channel: str) -> str:
     if touchdown is not None and int(touchdown.group(1)) > 0:
         component = ("s", "x", "y", "z", "lay", "exc", "grd").index(touchdown.group(2)) + 1
         return f"tdp:{int(touchdown.group(1))}:{component}"
-    if lowered.startswith(("ten", "curv", "bendmom", "stfmom", "l", "torq", "twist")):
+    if lowered.startswith(
+        ("ten", "curv", "bendmom", "stfmom", "l", "torq", "twist", "vivpow", "dragpow", "damppow")
+    ):
         line_id, node_id, kind, component = _parse_line_node_channel(lowered)
         if line_id > 0 and node_id > 0 and kind > 0:
             return f"node:{line_id}:{node_id}:{kind}:{component}"
@@ -5405,6 +5421,30 @@ class DeckFile:
                     raise DeckFormatError(
                         f"{self._label}: OUTPUT {channel!r}: line {line_id} is not torsionally "
                         "restrained (END CONNECTIONS TorsStiffness), so it carries no torque"
+                    )
+                continue
+            if lowered.startswith(("vivpow", "dragpow", "damppow")):
+                # native: VIVPow/DragPow/DampPow<L> and <L>N<J>, the load power channels
+                line_number, node_id, kind, _ = _parse_line_node_channel(lowered)
+                line_id = str(line_number)
+                if (
+                    node_id == 0
+                    and line_id in line_ids
+                    and re.search(r"[0-9]n0(?![0-9])", lowered) is not None
+                ):
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r}: node numbers start at 1 = End A "
+                        "(MoorDyn numbers from N0)"
+                    )
+                if line_id not in line_ids or kind == 0 or node_id < 1:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r}: bad load power channel (use "
+                        "VIVPow<L>, DragPow<L>, DampPow<L>, or <name><L>N<J> per unit length, "
+                        "with a known line id)"
+                    )
+                if node_id > line_nelems[line_id] + 1:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r} node exceeds the line node count"
                     )
                 continue
             if lowered.startswith(("ten", "curv", "bendmom", "stfmom", "l")):

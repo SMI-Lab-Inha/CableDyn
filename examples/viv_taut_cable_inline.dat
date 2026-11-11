@@ -9,7 +9,9 @@ CableDyn driver deck -- cross-flow and in-line VIV of a taut cable in a uniform 
 -- about twice the cross-flow one. Over 60-90 s the quarter span (L1N13py) moves in line at A/D
 -- 0.19, at twice the 0.29 Hz cross-flow frequency of the mid span (L1N26pz, A/D 0.82); with the
 -- cross-flow lift alone (drop the VIV section) they are 0.03 and 0.66. The Outputs flag V writes
--- the VIV force, lift and in-line, at every node to <root>.Line1.V.out.
+-- the VIV force, lift and in-line, at every node to <root>.Line1.V.out. VIVPow1, DragPow1 and
+-- DampPow1 are the power the VIV loads, the drag and the axial damping deliver to the line: over
+-- 60-90 s the VIV loads put in 8.52 W and the drag and damping take out 8.56 W.
 --------------------- LINE TYPES ---------------------------------------
 TypeName   Diam    MassDenInAir   EA        BA/-zeta   EI       Cd_n  Cd_t  Ca_n  Ca_t  Cl    dF     cF
 (-)        (m)     (kg/m)         (N)       (N-s/-)    (N-m^2)  (-)   (-)   (-)   (-)   (-)   (-)    (-)
@@ -57,4 +59,7 @@ none      frictionMu       - Seabed friction coefficient {none; value>=0} [defau
 "FairTen1"
 "L1N26pz"
 "L1N13py"
+"VIVPow1"
+"DragPow1"
+"DampPow1"
 --------------------- need this line -----------------------------------

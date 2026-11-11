@@ -1651,6 +1651,10 @@ bending moment. None of these channels is mandatory.
 | `Torq<L>N<J>` | line L torque at node J (uniform along the line in statics); positive for a right-handed twist of End B relative to End A about the End A → End B tangent. Only on a line solved in torsion (restrained at both ends, or at one end with the other free) | N·m |
 | `Twist<L>N<J>` | line L material twist accumulated from End A to node J, `M × Σ L/GJ` (less `(K/GJ)(l − L)` under coupling) over the elements in between; 0 at End A, without the end-spring windup. Only on a line solved in torsion | deg |
 | `Twist<L>` | line L total twist `Phi − Theta = M C`, end-spring windup included; on a line free at one end the twist of its elements, the free end's turn. Only on a line solved in torsion | deg |
+| `VIVPow<L>` | line L power of the VIV loads (cross-flow lift, and the in-line force of a `VIV` section row) at the committed state, positive into the line ([Outputs](outputs.rst)); 0 in static runs | W |
+| `DragPow<L>` | line L power of the Morison drag (and, on a finite-EI line, its ATTACHMENTS' drag) | W |
+| `DampPow<L>` | line L power of the structural damping (`BA`, and `EI|Bb` on a finite-EI line); never positive | W |
+| `VIVPow<L>N<J>`, `DragPow<L>N<J>`, `DampPow<L>N<J>` | the same per unit unstretched length about node J (node J's share: half of each of its elements' power and its own node loads', over half their unstretched length) | W/m |
 
 - `<L>`/`<P>` are deck LINE/POINT **ids**, not array positions. A channel that matches no
   supported form, names an unknown id, or carries trailing text (for example `Point2px_raw`) is a
