@@ -36,6 +36,7 @@ import numpy.typing as npt
 from cabledyn._csv import number, write_csv
 from cabledyn._optional import pyplot
 from cabledyn.formats import MoorDynLineHistory
+from cabledyn.ranges import node_position_channels
 from cabledyn.results import LineNodeHistory, TimeHistory
 from cabledyn.spectra import _sampling
 from cabledyn.touchdown import _positions
@@ -136,6 +137,11 @@ class VIVResponse:
         Whether the nodes are the whole line, End A to End B (a per-line
         file), so that ``arc_length`` spans it; a main output may hold only
         some of its nodes.
+    node_numbers : tuple of int
+        The CableDyn number of each node (1 = End A): ``1 .. n_nodes`` for a
+        per-line file (MoorDyn's node ``J`` is ``J + 1``), the ``J`` of the
+        ``L<L>N<J>p`` channels for a main output. The methods that take a
+        node take this number. Empty means ``1 .. n_nodes``.
     """
 
     time: npt.NDArray[Any]
@@ -150,6 +156,7 @@ class VIVResponse:
     diameter: float
     flow: npt.NDArray[Any]
     whole_line: bool = True
+    node_numbers: tuple[int, ...] = ()
 
     @property
     def node_count(self) -> int:
@@ -342,7 +349,10 @@ class VIVResponse:
         return float(singular[1] / singular[0]) if singular[0] > 0.0 else math.nan
 
     def orbit(self, node: int) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
-        """Return the in-line and cross-flow displacement of a one-based node over the window."""
+        """Return the in-line and cross-flow displacement of a node over the window.
+
+        ``node`` is the node's number (:attr:`node_numbers`).
+        """
         index = self._node_index(node)
         return self.in_line[:, index], self.cross_flow[:, index]
 
@@ -366,15 +376,23 @@ class VIVResponse:
             return math.nan
         return float(np.degrees(np.angle(cx) - 2.0 * np.angle(cy)) % 360.0)
 
+    def _numbers(self) -> tuple[int, ...]:
+        """The node numbers, ``1 .. n_nodes`` when none were recorded."""
+        return self.node_numbers or tuple(range(1, self.node_count + 1))
+
     def _node_index(self, node: int) -> int:
-        if isinstance(node, bool) or int(node) != node or not 1 <= node <= self.node_count:
-            raise ValueError(f"node must be an integer from 1 to {self.node_count}")
-        return int(node) - 1
+        numbers = self._numbers()
+        if isinstance(node, bool) or int(node) != node or int(node) not in numbers:
+            if numbers == tuple(range(1, self.node_count + 1)):
+                raise ValueError(f"node must be an integer from 1 to {self.node_count}")
+            raise ValueError(f"node must be one of the nodes held, {list(numbers)}")
+        return numbers.index(int(node))
 
     def export(self, path: str | os.PathLike[str], *, overwrite: bool = False) -> Path:
         """Atomically write the node values as a unit-labelled CSV, one row per node.
 
-        Columns: node, arc length, normal flow speed, cross-flow and in-line RMS
+        Columns: node number (:attr:`node_numbers`), arc length, normal flow speed,
+        cross-flow and in-line RMS
         and half peak-to-peak displacement over the diameter, the nodes'
         dominant frequencies and the non-dimensional cross-flow frequency.
         Fields of a node without a frame are empty.
@@ -396,12 +414,14 @@ class VIVResponse:
             self.nondimensional_frequency("cross_flow"),
         )
 
+        numbers = self._numbers()
+
         def row(index: int) -> tuple[str, ...]:
             fields = tuple(
                 number(column[index]) if math.isfinite(float(column[index])) else ""
                 for column in columns
             )
-            return (str(index + 1), *fields)
+            return (str(numbers[index]), *fields)
 
         return write_csv(
             path,
@@ -496,6 +516,12 @@ def viv_response(
     if not (math.isfinite(float(diameter)) and float(diameter) > 0.0):
         raise ValueError("diameter must be finite and positive")
     time, positions = _positions(history, line_id)
+    whole_line = isinstance(history, (LineNodeHistory, MoorDynLineHistory))
+    if whole_line or line_id is None:
+        numbers = tuple(range(1, positions.shape[1] + 1))
+    else:
+        # the L<L>N<J>p nodes _positions took, in the same (ascending) order
+        numbers = tuple(node_position_channels(history, line_id))
     keep = np.ones(time.size, dtype=bool)
     if start is not None:
         keep &= time >= float(start)
@@ -539,5 +565,6 @@ def viv_response(
         cross_flow=_readonly(cross_flow),
         diameter=float(diameter),
         flow=_readonly(velocity),
-        whole_line=isinstance(history, (LineNodeHistory, MoorDynLineHistory)),
+        whole_line=whole_line,
+        node_numbers=numbers,
     )

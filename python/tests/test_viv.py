@@ -117,6 +117,25 @@ def test_travelling_wave_index_is_nan_without_motion():
     assert math.isnan(along.travelling_wave_index("cross_flow"))
 
 
+def test_main_output_nodes_keep_their_numbers(tmp_path):
+    whole = viv_response(_history(_standing), flow=FLOW, diameter=D)
+    held = (5, 10, 21, 37)
+    some = viv_response(_main_output(_standing, held), flow=FLOW, diameter=D, line_id=1)
+    assert some.node_numbers == held
+    assert whole.node_numbers == tuple(range(1, N_NODES + 1))
+    # a node is taken by its number: node 21 is the mid-span node of the whole line
+    for a, b in zip(some.orbit(21), whole.orbit(21), strict=True):
+        assert np.array_equal(a, b)
+    assert some.phase_difference(10) == pytest.approx(whole.phase_difference(10), abs=1e-9)
+    with pytest.raises(ValueError, match=r"one of the nodes held, \[5, 10, 21, 37\]"):
+        some.orbit(1)
+    with pytest.raises(ValueError, match="from 1 to 41"):
+        whole.orbit(42)
+    with (some.export(tmp_path / "some.csv")).open(encoding="utf-8") as stream:
+        rows = list(csv.reader(stream))
+    assert [row[0] for row in rows[1:]] == [str(node) for node in held]
+
+
 def test_travelling_wave_index_separates_standing_and_travelling_waves():
     standing = viv_response(_history(_standing), flow=FLOW, diameter=D)
     assert standing.travelling_wave_index("cross_flow") < 1e-6

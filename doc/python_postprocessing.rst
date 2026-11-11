@@ -454,6 +454,10 @@ in-line and cross-flow displacement of every node at every sample and gives:
   phase at twice the cross-flow frequency less twice the cross-flow phase, which sets the shape
   and direction of a figure-of-eight orbit.
 
+A node is named by its CableDyn number (1 = End A; ``node_numbers``): the ``J`` of the
+``L<L>N<J>p`` channels of a main output, which may hold only some nodes, and ``1 .. N`` for a
+per-line file. The CSV export writes the same numbers.
+
 The frequency measures need uniform sampling. On the in-line VIV example
 ``viv_taut_cable_inline.dat``, run with the line output flag ``p``, over 60-90 s the mid-span cross-flow amplitude is A/D 0.82 at
 0.295 Hz (``f D/U_n`` 0.20), the quarter-span in-line amplitude 0.19 at 0.57 Hz, the cross-flow
