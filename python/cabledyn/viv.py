@@ -185,18 +185,27 @@ class VIVResponse:
         values = self.displacement(direction)
         return _readonly(0.5 * (values.max(axis=0) - values.min(axis=0)) / self.diameter)
 
-    def _power(self, direction: str) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
-        """Frequencies and the ``(n_freq, n_nodes)`` Hann-windowed periodogram of a direction.
+    def _moving_displacement(self, direction: str) -> npt.NDArray[Any]:
+        """The displacement of a direction with still nodes set to exactly zero.
 
         A node whose displacement stays within round-off of its coordinates (a range below
         1e-12 of its distance from the origin plus the diameter) is still: its round-off
-        offset from the mean, windowed, would otherwise read as power at every frequency.
+        offset from the mean, windowed or transformed, would otherwise read as motion at
+        every frequency, with an arbitrary phase.
         """
         values = np.array(self.displacement(direction), dtype=np.float64)
         scale = np.linalg.norm(self.mean_position, axis=1) + self.diameter
         with np.errstate(invalid="ignore"):
             still = (values.max(axis=0) - values.min(axis=0)) <= 1.0e-12 * scale
         values[:, still] = 0.0
+        return values
+
+    def _power(self, direction: str) -> tuple[npt.NDArray[Any], npt.NDArray[Any]]:
+        """Frequencies and the ``(n_freq, n_nodes)`` Hann-windowed periodogram of a direction.
+
+        Still nodes (:meth:`_moving_displacement`) have no power.
+        """
+        values = self._moving_displacement(direction)
         window = np.hanning(self.time.size)
         spectrum = np.fft.rfft(values * window[:, None], axis=0)
         frequency = np.fft.rfftfreq(self.time.size, self.sampling_interval)
@@ -332,7 +341,7 @@ class VIVResponse:
         ``c_j = (2/W) sum_k w_k u_j(t_k) exp(-2 pi i f t_k)`` with the Hann
         window ``w`` of sum ``W``, so that a node moving as ``a cos(2 pi f t +
         phase)`` has ``c_j = a exp(i phase)``; ``frequency`` defaults to the
-        line's dominant frequency of the direction.
+        line's dominant frequency of the direction. A still node has ``c_j = 0``.
         """
         f = self.frequency(direction) if frequency is None else float(frequency)
         if not (math.isfinite(f) and f >= 0.0):
@@ -340,7 +349,8 @@ class VIVResponse:
         window = np.hanning(self.time.size)
         phasor = window * np.exp(-2j * np.pi * f * self.time)
         shape: npt.NDArray[Any] = np.asarray(
-            2.0 * (phasor @ self.displacement(direction)) / window.sum(), dtype=np.complex128
+            2.0 * (phasor @ self._moving_displacement(direction)) / window.sum(),
+            dtype=np.complex128,
         )
         shape.setflags(write=False)
         return shape
