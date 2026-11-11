@@ -30,6 +30,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   and in-line phases, on `EI = 0` lines and finite-EI cables. On the in-line example `Chh` 1.0
   raises the quarter-span in-line response at four times the cross-flow frequency fourfold. The
   Python deck reader and builder take the column.
+- The cross-flow VIV columns `Cl [dF cF]` may follow the 14-column finite-EI `LINE TYPES` row
+  (15 or 17 columns), so a line restrained in torsion can carry VIV; such a row free in torsion
+  runs as the 13-column one. The Python deck reader and builder take it.
 - Load power channels `VIVPow<L>`, `DragPow<L>` and `DampPow<L>` [W], and `<name><L>N<J>` per
   unit length about a node [W/m]: the power the VIV loads, the drag and the structural damping
   (`BA`, `Bb`) deliver to a line at the committed state, on `EI = 0` lines and finite-EI cables,

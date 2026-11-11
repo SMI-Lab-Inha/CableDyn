@@ -3780,7 +3780,11 @@ class DeckFile:
             raise DeckFormatError(
                 f"{self._label}: standalone OPTION frictionMu requires dtM and TMax"
             )
-        allowed_widths = {"LINE TYPES": {10, 11, 13, 14}, "POINTS": {5, 9}, "LINES": {3, 4, 7}}
+        allowed_widths = {
+            "LINE TYPES": {10, 11, 13, 14, 15, 17},
+            "POINTS": {5, 9},
+            "LINES": {3, 4, 7},
+        }
         # Every row present is checked, also in a line-free deck of bodies and rods: the
         # native reader parses each table row whether or not a line uses it.
         for name in sorted(allowed_widths):
@@ -3808,7 +3812,7 @@ class DeckFile:
         viv_type_names: set[str] = set()
         for row in self.line_types:
             for index in (1, 2, *range(5, len(row.tokens))):
-                if len(row.tokens) == 14 and index == 7:
+                if len(row.tokens) >= 14 and index == 7:
                     continue  # the GJ column, GJ, GJ|K or GJ|K|Bt, is read below
                 if index == 5:
                     continue  # the EI column, EI, EI|Bb or EI|-zeta|f, is read below
@@ -3861,9 +3865,9 @@ class DeckFile:
                     f"{self._at(row)}: Syrope BA_s and BA_d must be non-negative "
                     "with a positive sum"
                 )
-            # Native append_type: drag and added-mass coefficients (columns 7-10, the last
-            # four of a 14-column row, in either column order) must be non-negative.
-            hydro_start = len(row.tokens) - 4 if len(row.tokens) == 14 else 6
+            # Native append_type: drag and added-mass coefficients (columns 7-10, or 11-14 of
+            # a 14-column row, in either column order) must be non-negative.
+            hydro_start = 10 if len(row.tokens) >= 14 else 6
             hydro = [
                 numeric(row.tokens[index], row, f"LINE TYPES column {index + 1}")
                 for index in range(hydro_start, hydro_start + 4)
@@ -3910,12 +3914,14 @@ class DeckFile:
                     f"{self._at(row)}: LINE TYPES {row.tokens[0]}: bending damping (EI|Bb) needs "
                     "a finite-EI cable (EI > 0)"
                 )
-            if len(row.tokens) in (11, 13):
-                # Native check_viv_columns: MoorDyn's cross-flow VIV columns Cl [dF cF]
-                cl = numeric(row.tokens[10], row, "Cl")
+            if len(row.tokens) in (11, 13, 15, 17):
+                # Native check_viv_columns: MoorDyn's cross-flow VIV columns Cl [dF cF], after
+                # the ten standard columns or the fourteen of a finite-EI row
+                at = 10 if len(row.tokens) in (11, 13) else 14
+                cl = numeric(row.tokens[at], row, "Cl")
                 d_f, c_f = (
-                    (numeric(row.tokens[11], row, "dF"), numeric(row.tokens[12], row, "cF"))
-                    if len(row.tokens) == 13
+                    (numeric(row.tokens[at + 1], row, "dF"), numeric(row.tokens[at + 2], row, "cF"))
+                    if len(row.tokens) in (13, 17)
                     else (0.08, 0.18)
                 )
                 if cl < 0.0:
@@ -3934,7 +3940,7 @@ class DeckFile:
                 model = "Syrope" if is_syrope else "viscoelastic stiffness"
                 raise DeckFormatError(f"{self._at(row)}: {model} is not supported with EI > 0")
             gj_value = 0.0
-            if len(row.tokens) == 14:
+            if len(row.tokens) >= 14:
                 # the GJ column is GJ, GJ|K or GJ|K|Bt (K the torque-tension coupling, N m;
                 # Bt the torsional damping, N m^2 s, negative: -zeta)
                 gj_parts = row.tokens[7].split("|")
@@ -4091,7 +4097,7 @@ class DeckFile:
 
         type_names = unique(self.line_types, "line type", False)
         if any(
-            len(row.tokens) == 14 and self._stock_line_type_columns(row) for row in self.line_types
+            len(row.tokens) >= 14 and self._stock_line_type_columns(row) for row in self.line_types
         ):
             raise DeckFormatError(
                 f"{self._label}: 14-column LINE TYPES rows require CableDyn hydro-column order"
@@ -6185,10 +6191,13 @@ class DeckFile:
 
     def _line_type_fields(self, record: DeckRecord) -> tuple[str, ...]:
         fields = _FIELDS["line_type"]
-        if len(record.tokens) == 14:
-            return (*fields[:6], "gas", "gj", "irt", "irn", "cdn", "cdt", "can", "cat")
-        # MoorDyn's optional cross-flow VIV columns follow the ten standard ones
-        viv = {11: ("cl",), 13: ("cl", "df", "cf")}.get(len(record.tokens), ())
+        # MoorDyn's optional cross-flow VIV columns follow the ten standard ones, or the
+        # fourteen of a finite-EI row
+        viv = {11: ("cl",), 13: ("cl", "df", "cf"), 15: ("cl",), 17: ("cl", "df", "cf")}.get(
+            len(record.tokens), ()
+        )
+        if len(record.tokens) >= 14:
+            return (*fields[:6], "gas", "gj", "irt", "irn", "cdn", "cdt", "can", "cat", *viv)
         if self._stock_line_type_columns(record):
             return (*fields[:6], "cd", "ca", "cdax", "caax", *viv)
         return (*fields, *viv)

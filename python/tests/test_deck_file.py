@@ -4614,7 +4614,7 @@ def test_line_free_object_deck_checks_line_type_rows_without_crashing():
         ("1 2 1 -\n", ""),
         ("1 chain 410.0 41\n", ""),
     )
-    with pytest.raises(DeckFormatError, match="LINE TYPES row needs 10, 11, 13, 14 fields"):
+    with pytest.raises(DeckFormatError, match="LINE TYPES row needs 10, 11, 13, 14, 15, 17 fields"):
         DeckFile.from_text(_with_section(no_lines, "BODIES", *body_rows))
     # a header-only LINES section does not make the deck a line deck (the rule counts rows)
     with pytest.raises(DeckFormatError) as caught:
@@ -4791,7 +4791,7 @@ def test_line_type_viv_columns_are_read_and_kept(tmp_path, columns, expected):
         (" -0.1", "Cl must be non-negative"),
         (" 0.8 0.2 0.18", "needs cF > 0 and 0 <= dF < cF"),
         (" 0.8 0.05 0.0", "needs cF > 0 and 0 <= dF < cF"),
-        (" 0.8 0.08", "LINE TYPES row needs 10, 11, 13, 14 fields"),
+        (" 0.8 0.08", "LINE TYPES row needs 10, 11, 13, 14, 15, 17 fields"),
     ],
 )
 def test_line_type_viv_columns_follow_the_native_checks(columns, message):
@@ -4809,6 +4809,48 @@ def test_line_type_viv_is_accepted_on_a_finite_ei_line_type(tmp_path):
     path.write_text(text, encoding="utf-8")
     line_type = DeckModel.load(path).line_types["chain"]
     assert (line_type.ei, line_type.cl) == (1.0e4, 0.8)
+
+
+# the 14-column finite-EI row (GAs GJ Irt Irn) takes the same VIV columns after its last
+_WIDE_VIV_ROW = (
+    "chain 0.252 390.0 1.674e9 -1.0 1.0e4 1.0e8 1.0e3|0|-0.01 0.1 0.05 1.37 0.64 1.0 0.0"
+)
+
+
+@pytest.mark.parametrize(
+    "columns, expected",
+    [
+        (" 0.8", (0.8, None, None)),
+        (" 0.8 0.05 0.2", (0.8, 0.05, 0.2)),
+    ],
+)
+def test_line_type_viv_columns_follow_the_finite_ei_row(tmp_path, columns, expected):
+    from cabledyn import DeckModel
+
+    row = "chain 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0"
+    text = _edit(_DYNAMIC, (row, _WIDE_VIV_ROW + columns))
+    record = DeckFile.from_text(text).line_types[0]
+    assert len(record.tokens) == 14 + len(columns.split())
+    path = tmp_path / "viv_wide.dat"
+    path.write_text(text, encoding="utf-8")
+    line_type = DeckModel.load(path).line_types["chain"]
+    assert (line_type.gj, line_type.irn) == ((1.0e3, 0.0, -0.01), 0.05)
+    assert (line_type.cl, line_type.df, line_type.cf) == expected
+    assert (line_type.cdn, line_type.cdt, line_type.can, line_type.cat) == (1.37, 0.64, 1.0, 0.0)
+
+
+@pytest.mark.parametrize(
+    "columns, message",
+    [
+        (" -0.1", "Cl must be non-negative"),
+        (" 0.8 0.2 0.18", "needs cF > 0 and 0 <= dF < cF"),
+        (" 0.8 0.08", "LINE TYPES row needs 10, 11, 13, 14, 15, 17 fields"),
+    ],
+)
+def test_finite_ei_row_viv_columns_follow_the_native_checks(columns, message):
+    row = "chain 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0"
+    with pytest.raises(DeckFormatError, match=re.escape(message)):
+        DeckFile.from_text(_edit(_DYNAMIC, (row, _WIDE_VIV_ROW + columns)))
 
 
 def test_viv_is_accepted_on_the_coupled_route():
