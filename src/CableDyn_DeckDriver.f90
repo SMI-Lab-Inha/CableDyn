@@ -136,7 +136,8 @@ MODULE CableDyn_DeckDriver
                                           CD_HFMF_SetCoupledKinematics, CD_HFMF_GetCoupledKinematics, &
                                           CD_HFMF_Set_Moving_End_B, CD_HFMF_GetEndBKinematics, &
                                           CD_HFMF_End, CD_HFMF_OK
-  USE CableDyn_VIV, ONLY: CD_VIV_DEFAULT_DF, CD_VIV_DEFAULT_CF, CD_VIV_NM, CD_VIV_DEFAULT_IL_ALPHA
+  USE CableDyn_VIV, ONLY: CD_VIV_DEFAULT_DF, CD_VIV_DEFAULT_CF, CD_VIV_NM, CD_VIV_DEFAULT_IL_ALPHA, &
+                          CD_VIV_WAKE_DEFAULT_ST, CD_VIV_WAKE_DEFAULT_EPS, CD_VIV_WAKE_DEFAULT_A
   USE CableDyn_Hydro, ONLY: CD_Airy_Wave_Kinematics_Precomputed, CD_Component_Wave_Kinematics, &
                             CD_Current_Profile_Velocity, CD_CurrentGridType, CD_Current_Grid_Resample, &
                             CD_Current_Grid_Velocity, &
@@ -452,6 +453,13 @@ MODULE CableDyn_DeckDriver
     ! the section names.
     REAL(wp) :: clx = CD_ZERO, il_alpha = CD_VIV_DEFAULT_IL_ALPHA, chh = CD_ZERO
     LOGICAL :: has_viv_row = .FALSE.
+    ! Wake-oscillator VIV (the optional WAKE OSCILLATOR section, a row per type: TypeName CL0
+    ! [St [eps [A]]]; Facchinetti et al., J. Fluids Struct. 19, 2004): the reference lift
+    ! coefficient C_L0 (0 = off), Strouhal number, van der Pol eps and acceleration coupling A;
+    ! has_wake_row marks a type the section names.
+    REAL(wp) :: wo_cl0 = CD_ZERO, wo_st = CD_VIV_WAKE_DEFAULT_ST, wo_eps = CD_VIV_WAKE_DEFAULT_EPS
+    REAL(wp) :: wo_a = CD_VIV_WAKE_DEFAULT_A
+    LOGICAL :: has_wake_row = .FALSE.
     ! Deck file line of the row (0 when not read from a file), for error messages.
     INTEGER :: deck_line = 0
   END TYPE
@@ -1885,6 +1893,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: q_sequence(:)
     REAL(wp), ALLOCATABLE :: curv(:), cdn(:), cdt(:), can(:), cat(:), catenary_pos(:)
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:), viv_hh(:)
+    REAL(wp), ALLOCATABLE :: wo_cl0(:), wo_st(:), wo_eps(:), wo_a(:)
     REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:), bb_el(:)
     REAL(wp) :: mode1_omega
     REAL(wp), ALLOCATABLE :: contact_kn(:), contact_cn(:)
@@ -3283,7 +3292,13 @@ CONTAINS
     ALLOCATE (viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), viv_df(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)), &
               viv_hh(SIZE(l0)))
     CALL finite_viv_arrays(ln, sections, types, viv_cl, viv_cf, viv_df, viv_clx, viv_al, viv_hh)
+    ALLOCATE (wo_cl0(SIZE(l0)), wo_st(SIZE(l0)), wo_eps(SIZE(l0)), wo_a(SIZE(l0)))
+    CALL finite_wake_arrays(ln, sections, types, wo_cl0, wo_st, wo_eps, wo_a)
     IF (SIZE(l0_am) /= SIZE(l0)) THEN
+      CALL remap_elem_by_reference_arc(wo_cl0, l0, l0_am)
+      CALL remap_elem_by_reference_arc(wo_st, l0, l0_am)
+      CALL remap_elem_by_reference_arc(wo_eps, l0, l0_am)
+      CALL remap_elem_by_reference_arc(wo_a, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_cl, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_cf, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_df, l0, l0_am)
@@ -3590,7 +3605,12 @@ CONTAINS
     ! lines do (init_one_model), and of the coupling step dt where the deck gives none: a
     ! coupled host may step the cable at a dt adjusted from the deck dtM.
     IF (PRESENT(install_viv)) THEN
-      IF (install_viv .AND. ANY(viv_cl > CD_ZERO)) THEN
+      IF (install_viv .AND. ANY(wo_cl0 > CD_ZERO) .AND. ANY(viv_cl > CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(ln%id))//': a line takes one VIV model, but its '// &
+                  'types mix the synchronisation lift (LINE TYPES Cl > 0) and the wake oscillator (WAKE '// &
+                  'OSCILLATOR section)'); RETURN
+      END IF
+      IF (install_viv .AND. (ANY(viv_cl > CD_ZERO) .OR. ANY(wo_cl0 > CD_ZERO))) THEN
         ! MoorDyn's phase seed counts the deck nodes from the deck's End A, with its node tangent
         ! towards the deck's End B; CD_Deck_VIV_Phase_Seed takes it node by node to the model's
         ! nodes and tangent (a line the reader turned around, a mesh the static solve refined)
@@ -3603,7 +3623,15 @@ CONTAINS
             CALL CD_Deck_VIV_Phase_Seed(cable%line%l0, ln%ends_swapped, seed, zero=opts%viv_phase_zero)
           END IF
           ! with the in-line VIV of the VIV section where a type has ClX > 0
-          IF (ANY(viv_clx > CD_ZERO)) THEN
+          IF (ANY(wo_cl0 > CD_ZERO)) THEN
+            ! the wake oscillator: cl is C_L0, the band unused
+            CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, wo_cl0, viv_cf, viv_df, &
+                                             MERGE(opts%viv_rms_window, &
+                                                   REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
+                                                   opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
+                                             tangent_reversed=.NOT. ln%ends_swapped, &
+                                             wake=RESHAPE([wo_st, wo_eps, wo_a], [3, SIZE(wo_st)], ORDER=[2, 1]))
+          ELSE IF (ANY(viv_clx > CD_ZERO)) THEN
             CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
                                              MERGE(opts%viv_rms_window, &
                                                    REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
@@ -7928,7 +7956,8 @@ CONTAINS
                 'use the aggregate facade with its external SeaState field'); RETURN
     END IF
     IF (line_has_viv(lines(1), types, sections)) THEN
-      CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_HermiteCable: VIV (LINE TYPES Cl > 0) acts with an ambient '// &
+      CALL fail(ErrStat, ErrMsg, 'CD_Init_Deck_HermiteCable: VIV (LINE TYPES Cl > 0, or a wake oscillator) acts '// &
+                'with an ambient '// &
                 'fluid field, which this single-cable entry does not apply; use the aggregate facade'); RETURN
     END IF
     IF (opts%has_bathymetry_file) THEN
@@ -10473,6 +10502,10 @@ CONTAINS
         hydro_can(e) = types(line_section_type(sections, ln%id, i))%can
         hydro_cat(e) = types(line_section_type(sections, ln%id, i))%cat
         viv_cl(e) = types(line_section_type(sections, ln%id, i))%cl
+        IF (types(line_section_type(sections, ln%id, i))%wo_cl0 > CD_ZERO) THEN
+          CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(ln%id))//': the wake oscillator (WAKE '// &
+                    'OSCILLATOR section) acts on finite-EI cables (EI > 0) only'); RETURN
+        END IF
         viv_cf(e) = types(line_section_type(sections, ln%id, i))%viv_cf
         viv_df(e) = types(line_section_type(sections, ln%id, i))%viv_df
         viv_clx(e) = types(line_section_type(sections, ln%id, i))%clx
@@ -11624,6 +11657,33 @@ CONTAINS
     chh = chh(SIZE(chh):1:-1)
   END SUBROUTINE finite_viv_arrays
 
+  SUBROUTINE finite_wake_arrays(ln, sections, types, cl0, st, eps, a)
+    !! Expand the WAKE OSCILLATOR rows (CL0, St, eps, A) to finite-EI element arrays, in the
+    !! element order of finite_hydro_arrays.
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    REAL(wp), INTENT(OUT) :: cl0(:), st(:), eps(:), a(:)
+    INTEGER :: i, j, e, tidx
+
+    e = 0
+    DO i = 1, SIZE(sections)
+      IF (sections(i)%line_id /= ln%id) CYCLE
+      tidx = sections(i)%ltype
+      DO j = 1, sections(i)%nsegs
+        e = e + 1
+        cl0(e) = types(tidx)%wo_cl0
+        st(e) = types(tidx)%wo_st
+        eps(e) = types(tidx)%wo_eps
+        a(e) = types(tidx)%wo_a
+      END DO
+    END DO
+    cl0 = cl0(SIZE(cl0):1:-1)
+    st = st(SIZE(st):1:-1)
+    eps = eps(SIZE(eps):1:-1)
+    a = a(SIZE(a):1:-1)
+  END SUBROUTINE finite_wake_arrays
+
   LOGICAL FUNCTION line_has_viv(ln, types, sections) RESULT(has)
     !! Whether a section of the line uses a line type with a VIV lift coefficient Cl > 0.
     TYPE(DeckLine), INTENT(IN) :: ln
@@ -11635,6 +11695,7 @@ CONTAINS
       IF (sections(j)%line_id /= ln%id) CYCLE
       IF (sections(j)%ltype < 1 .OR. sections(j)%ltype > SIZE(types)) CYCLE
       IF (types(sections(j)%ltype)%cl > CD_ZERO) has = .TRUE.
+      IF (types(sections(j)%ltype)%wo_cl0 > CD_ZERO) has = .TRUE.
     END DO
   END FUNCTION line_has_viv
 
@@ -13738,6 +13799,9 @@ CONTAINS
     CHARACTER(DECK_RECLEN), ALLOCATABLE :: viv_rows(:)
     INTEGER, ALLOCATABLE :: viv_lines(:)
     INTEGER :: n_viv
+    CHARACTER(DECK_RECLEN), ALLOCATABLE :: wake_rows(:)
+    INTEGER, ALLOCATABLE :: wake_lines(:)
+    INTEGER :: n_wake
     CHARACTER(2*NAMELEN), ALLOCATABLE :: channel_keys(:)
     LOGICAL :: ext_march, types_stock_cols, rodtypes_legacy_cols, turb_ok, static_finite_ok, tors_marched
     INTEGER :: unit, ios, section, nt, nb, nrt, nr, np, nlin, nsec, neq, nch, nfl, nct, nec, lineno
@@ -13755,7 +13819,7 @@ CONTAINS
                           SEC_SECTIONS = 5, SEC_OPTIONS = 6, SEC_OUTPUTS = 7, SEC_RODTYPES = 8, SEC_RODS = 9, &
                           SEC_EQUIV = 10, SEC_FAILURE = 11, SEC_CONTROL = 12, SEC_SYROPE_IC = 13, &
                           SEC_ENDCONN = 14, SEC_TURBINES = 15, SEC_EXTLOADS = 16, SEC_ATTACH = 17, &
-                          SEC_STIFF = 18, SEC_VIV = 19
+                          SEC_STIFF = 18, SEC_VIV = 19, SEC_WAKE = 20
 
     ErrStat = 0; ErrMsg = ''
     ext_march = .FALSE.
@@ -13779,6 +13843,8 @@ CONTAINS
     n_stf = 0
     ALLOCATE (viv_rows(0), viv_lines(0))
     n_viv = 0
+    ALLOCATE (wake_rows(0), wake_lines(0))
+    n_wake = 0
     nt = 0; nb = 0; nrt = 0; nr = 0; np = 0; nlin = 0; nsec = 0; neq = 0; nch = 0; nfl = 0; nct = 0; nec = 0
     section = SEC_NONE
     ALLOCATE (channel_lines(0))
@@ -13913,6 +13979,15 @@ CONTAINS
         END IF
         viv_rows(n_viv) = line(1:MIN(LEN(line), DECK_RECLEN))
         viv_lines(n_viv) = lineno
+      CASE (SEC_WAKE)
+        IF (.NOT. has_numeric_token(line)) CYCLE
+        n_wake = n_wake + 1
+        IF (n_wake > SIZE(wake_rows)) THEN
+          wake_rows = [wake_rows, [(REPEAT(' ', DECK_RECLEN), i_ch=1, 8)]]
+          wake_lines = [wake_lines, [(0, i_ch=1, 8)]]
+        END IF
+        wake_rows(n_wake) = line(1:MIN(LEN(line), DECK_RECLEN))
+        wake_lines(n_wake) = lineno
       CASE (SEC_OPTIONS)
         CALL apply_option(line, opts, ErrStat, ErrMsg)
       CASE (SEC_OUTPUTS)
@@ -14014,6 +14089,13 @@ CONTAINS
       CALL apply_type_viv(viv_rows(i_ch), types, ErrStat, ErrMsg)
       IF (ErrStat /= 0) THEN
         CALL add_row_context('deck', viv_lines(i_ch), viv_rows(i_ch), ErrMsg)
+        RETURN
+      END IF
+    END DO
+    DO i_ch = 1, n_wake
+      CALL apply_type_wake(wake_rows(i_ch), types, ErrStat, ErrMsg)
+      IF (ErrStat /= 0) THEN
+        CALL add_row_context('deck', wake_lines(i_ch), wake_rows(i_ch), ErrMsg)
         RETURN
       END IF
     END DO
@@ -15685,6 +15767,8 @@ CONTAINS
       section = 18
     CASE ('VIV', 'VORTEX-INDUCED VIBRATION', 'VORTEX INDUCED VIBRATION')
       section = 19
+    CASE ('WAKE OSCILLATOR', 'WAKE OSCILLATORS', 'WAKE')
+      section = 20
     CASE DEFAULT
       IF (LEN_TRIM(secname) > NAMELEN) THEN
         CALL fail(ErrStat, ErrMsg, 'unknown deck section "'//secname(1:NAMELEN)//'..."')
@@ -17283,6 +17367,68 @@ CONTAINS
     types(it)%chh = chh
     types(it)%has_viv_row = .TRUE.
   END SUBROUTINE apply_type_viv
+
+  SUBROUTINE apply_type_wake(row, types, ErrStat, ErrMsg)
+    !! One WAKE OSCILLATOR row: TypeName CL0 [St [eps [A]]] -- the wake-oscillator VIV of a line
+    !! type (Facchinetti et al. 2004; the defaults St 0.2, eps 0.3, A 12 are theirs): the reference
+    !! lift coefficient C_L0 >= 0 (0 = off; the lift of a fixed cylinder is C_L0 U^2 rho D/2), the
+    !! Strouhal number St > 0 of the wake frequency 2 pi St U/D, the van der Pol eps > 0 and the
+    !! acceleration coupling A >= 0. The wake oscillator replaces the synchronisation model, so the
+    !! type takes no LINE TYPES lift Cl (and so no in-line VIV, which needs it). A type takes one
+    !! row.
+    CHARACTER(*), INTENT(IN) :: row
+    TYPE(DeckLineType), INTENT(INOUT) :: types(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(DECK_RECLEN) :: tok
+    INTEGER :: it, ntok, i
+    REAL(wp) :: v(4)
+    LOGICAL :: found, ok
+
+    ErrStat = 0; ErrMsg = ''
+    ntok = count_tokens(row)
+    IF (ntok < 2 .OR. ntok > 5) THEN
+      CALL fail(ErrStat, ErrMsg, 'WAKE OSCILLATOR rows must be: TypeName CL0 [St [eps [A]]]'); RETURN
+    END IF
+    CALL get_token(row, 1, tok, found)
+    it = find_type(types, TRIM(tok))
+    IF (it == 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'WAKE OSCILLATOR row names undefined LINE TYPE "'//TRIM(tok)//'"'); RETURN
+    END IF
+    IF (types(it)%has_wake_row) THEN
+      CALL fail(ErrStat, ErrMsg, 'WAKE OSCILLATOR names LINE TYPE "'//TRIM(types(it)%name)//'" twice'); RETURN
+    END IF
+    v = [CD_ZERO, CD_VIV_WAKE_DEFAULT_ST, CD_VIV_WAKE_DEFAULT_EPS, CD_VIV_WAKE_DEFAULT_A]
+    ok = .TRUE.
+    DO i = 2, ntok
+      IF (.NOT. ok) EXIT
+      CALL get_token(row, i, tok, found)
+      CALL parse_real_token(tok, v(i - 1), ok)
+    END DO
+    IF (.NOT. ok) THEN
+      CALL fail(ErrStat, ErrMsg, 'WAKE OSCILLATOR CL0, St, eps and A must be plain numbers'); RETURN
+    END IF
+    IF (.NOT. ALL(IEEE_IS_FINITE(v))) THEN
+      CALL fail(ErrStat, ErrMsg, 'WAKE OSCILLATOR CL0, St, eps and A must be finite'); RETURN
+    END IF
+    IF (v(1) < CD_ZERO .OR. v(1) > MAX_COEFFICIENT) THEN
+      CALL fail(ErrStat, ErrMsg, 'WAKE OSCILLATOR lift coefficient CL0 must be non-negative (0 = off) and at '// &
+                'most 1e15'); RETURN
+    END IF
+    IF (.NOT. (v(2) > CD_ZERO .AND. v(2) <= MAX_COEFFICIENT .AND. v(3) > CD_ZERO .AND. &
+               v(3) <= MAX_COEFFICIENT .AND. v(4) >= CD_ZERO .AND. v(4) <= MAX_COEFFICIENT)) THEN
+      CALL fail(ErrStat, ErrMsg, 'WAKE OSCILLATOR needs St > 0, eps > 0 and A >= 0, each at most 1e15'); RETURN
+    END IF
+    IF (v(1) > CD_ZERO .AND. types(it)%cl > CD_ZERO) THEN
+      CALL fail(ErrStat, ErrMsg, 'WAKE OSCILLATOR of LINE TYPE "'//TRIM(types(it)%name)//'" replaces its '// &
+                'synchronisation lift: give the type LINE TYPES Cl 0'); RETURN
+    END IF
+    types(it)%wo_cl0 = v(1)
+    types(it)%wo_st = v(2)
+    types(it)%wo_eps = v(3)
+    types(it)%wo_a = v(4)
+    types(it)%has_wake_row = .TRUE.
+  END SUBROUTINE apply_type_wake
 
   SUBROUTINE append_line_stiffener(row, lines, ErrStat, ErrMsg)
     !! One STIFFENERS row: LineID End Length RootOD TipOD InnerD E Density -- a conical segment of

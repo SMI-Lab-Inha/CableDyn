@@ -79,6 +79,9 @@ _SECTION_ALIASES = {
     "VIV": "VIV",
     "VORTEX-INDUCED VIBRATION": "VIV",
     "VORTEX INDUCED VIBRATION": "VIV",
+    "WAKE OSCILLATOR": "WAKE OSCILLATOR",
+    "WAKE OSCILLATORS": "WAKE OSCILLATOR",
+    "WAKE": "WAKE OSCILLATOR",
 }
 # Table sections whose rows the native reader takes through a Fortran
 # list-directed READ. Their descriptive and units rows are recognized by the
@@ -101,7 +104,7 @@ _LIST_DIRECTED_SECTIONS = frozenset(
 # Table sections the native reader splits on whitespace and parses column by
 # column (their comma-separated line lists are valid there).
 _WHITESPACE_TABLE_SECTIONS = frozenset(
-    {"FAILURE", "CONTROL", "SYROPE IC", "ATTACHMENTS", "STIFFENERS", "VIV"}
+    {"FAILURE", "CONTROL", "SYROPE IC", "ATTACHMENTS", "STIFFENERS", "VIV", "WAKE OSCILLATOR"}
 )
 _TABLE_SECTIONS = _LIST_DIRECTED_SECTIONS | _WHITESPACE_TABLE_SECTIONS
 _NATIVE_RECORD_LENGTH = 512
@@ -3256,6 +3259,67 @@ class DeckFile:
                     "cross-flow one"
                 )
 
+    def _check_wake_section(self, lift_type_names: set[str]) -> set[str]:
+        """Native ``apply_type_wake`` for the WAKE OSCILLATOR section; the types it switches on.
+
+        A row ``TypeName CL0 [St [eps [A]]]`` gives a line type the wake oscillator of
+        Facchinetti et al. (2004): the reference lift coefficient ``CL0 >= 0`` (0 = off), the
+        Strouhal number ``St > 0`` (default 0.2), the van der Pol ``eps > 0`` (0.3) and the
+        acceleration coupling ``A >= 0`` (12), each at most 1e15. It replaces the synchronisation
+        model, so a type with ``CL0 > 0`` takes no LINE TYPES lift ``Cl``. A type takes one row.
+        """
+        types = {row.tokens[0].lower() for row in self.line_types}
+        named: set[str] = set()
+        wake: set[str] = set()
+        for row in self._rows("WAKE OSCILLATOR"):
+            where = self._at(row)
+            if not 2 <= len(row.tokens) <= 5:
+                raise DeckFormatError(
+                    f"{where}: WAKE OSCILLATOR rows must be: TypeName CL0 [St [eps [A]]]"
+                )
+            name = row.tokens[0].lower()
+            if name not in types:
+                raise DeckFormatError(
+                    f'{where}: WAKE OSCILLATOR row names undefined LINE TYPE "{row.tokens[0]}"'
+                )
+            if name in named:
+                raise DeckFormatError(
+                    f'{where}: WAKE OSCILLATOR names LINE TYPE "{row.tokens[0]}" twice'
+                )
+            named.add(name)
+            values = [0.0, 0.2, 0.3, 12.0]
+            try:
+                for index, token in enumerate(row.tokens[1:]):
+                    values[index] = _native_float(token)
+            except ValueError as exc:
+                raise DeckFormatError(
+                    f"{where}: WAKE OSCILLATOR CL0, St, eps and A must be plain numbers"
+                ) from exc
+            if not all(math.isfinite(value) for value in values):
+                raise DeckFormatError(f"{where}: WAKE OSCILLATOR CL0, St, eps and A must be finite")
+            cl0, st, eps, a = values
+            if cl0 < 0.0 or cl0 > _NATIVE_MAX_COEFFICIENT:
+                raise DeckFormatError(
+                    f"{where}: WAKE OSCILLATOR lift coefficient CL0 must be non-negative (0 = off) "
+                    "and at most 1e15"
+                )
+            if not (
+                0.0 < st <= _NATIVE_MAX_COEFFICIENT
+                and 0.0 < eps <= _NATIVE_MAX_COEFFICIENT
+                and 0.0 <= a <= _NATIVE_MAX_COEFFICIENT
+            ):
+                raise DeckFormatError(
+                    f"{where}: WAKE OSCILLATOR needs St > 0, eps > 0 and A >= 0, each at most 1e15"
+                )
+            if cl0 > 0.0 and name in lift_type_names:
+                raise DeckFormatError(
+                    f'{where}: WAKE OSCILLATOR of LINE TYPE "{row.tokens[0]}" replaces its '
+                    "synchronisation lift: give the type LINE TYPES Cl 0"
+                )
+            if cl0 > 0.0:
+                wake.add(name)
+        return wake
+
     def _legacy_rod_type_columns(self, record: DeckRecord) -> bool:
         """Return whether ``record`` sits under a legacy CableDyn ROD TYPES header.
 
@@ -4433,6 +4497,24 @@ class DeckFile:
 
         self._check_stiffeners(line_ids, section_types_by_line, line_type_meta, line_lengths)
         self._check_viv_section(line_type_meta, viv_type_names)
+        wake_type_names = self._check_wake_section(viv_type_names)
+        # native build_one_hermite_cable and the EI = 0 line wiring: the wake oscillator acts
+        # on finite-EI cables only, and a cable takes one VIV model
+        for line_id, section_types in section_types_by_line.items():
+            types_used = {line_type.lower() for line_type in section_types}
+            if not types_used & wake_type_names:
+                continue
+            if line_id not in finite_line_ids:
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id}: the wake oscillator (WAKE OSCILLATOR "
+                    "section) acts on finite-EI cables (EI > 0) only"
+                )
+            if types_used & viv_type_names:
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id}: a line takes one VIV model, but its types mix "
+                    "the synchronisation lift (LINE TYPES Cl > 0) and the wake oscillator (WAKE "
+                    "OSCILLATOR section)"
+                )
         self._check_attachments(line_ids, section_types_by_line, line_type_meta, line_lengths)
 
         assigned_end_connections: set[tuple[str, str]] = set()

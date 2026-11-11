@@ -61,6 +61,7 @@ MODULE CableDyn_VIV
   PUBLIC :: CD_VIV_Node_Inline
   PUBLIC :: CD_VIV_Inline_Per_Length
   PUBLIC :: CD_VIV_Inline_Phase_Rate
+  PUBLIC :: CD_VIV_Wake_Advance
 
   !> MoorDyn's running-RMS window in time steps (Line%n_m): each step updates the stored
   !> mean square as ((n_m - 1) old + new) / n_m.
@@ -72,6 +73,13 @@ MODULE CableDyn_VIV
   REAL(wp), PARAMETER, PUBLIC :: CD_VIV_TWO_PI = 6.283185307179586476925286766559005768394_wp
   !> The in-line frequency band alpha of Ulveseter et al. (2018, Table 3) and Thorsen et al.
   REAL(wp), PARAMETER, PUBLIC :: CD_VIV_DEFAULT_IL_ALPHA = 0.15_wp
+  !> The wake oscillator of Facchinetti, de Langre and Biolley (J. Fluids Struct. 19, 2004,
+  !> 123-140, Sec. 3): Strouhal number, reference lift coefficient C_L0, van der Pol parameter
+  !> epsilon and acceleration coupling A, fixed there from forced-wake data.
+  REAL(wp), PARAMETER, PUBLIC :: CD_VIV_WAKE_DEFAULT_ST = 0.2_wp
+  REAL(wp), PARAMETER, PUBLIC :: CD_VIV_WAKE_DEFAULT_CL0 = 0.3_wp
+  REAL(wp), PARAMETER, PUBLIC :: CD_VIV_WAKE_DEFAULT_EPS = 0.3_wp
+  REAL(wp), PARAMETER, PUBLIC :: CD_VIV_WAKE_DEFAULT_A = 12.0_wp
 
   !> Chord below which a node tangent is undefined (a collapsed pair of neighbours).
   REAL(wp), PARAMETER :: TINY_CHORD = 1.0e-12_wp
@@ -437,6 +445,42 @@ CONTAINS
       dfdt(j, j) = dfdt(j, j) - s*un*alpha
     END DO
   END SUBROUTINE inline_jacobians
+
+  PURE SUBROUTINE CD_VIV_Wake_Advance(s, om, eps, ad, f0, f1, h)
+    !! Advance the wake oscillator of Facchinetti et al. (2004, Eq. 5 with the acceleration
+    !! coupling F = A Y''/D; Violette et al., J. Fluids Struct. 26, 2010, Eq. 3) over a time h:
+    !!
+    !!   q'' + eps om (q^2 - 1) q' + om^2 q = ad y''(t)
+    !!
+    !! s = (q, q'), om the wake frequency 2 pi St U/D, ad = A/D and the cross-flow acceleration
+    !! y'' of the line, taken linear from f0 at the start of the interval to f1 at its end.
+    !! Classical Runge-Kutta in equal sub-steps of om dt <= 0.1 (at least one), so the error is
+    !! that of a resolved oscillation however long h is against the wake period. q = 2 C_L/C_L0:
+    !! the free oscillator settles on its limit cycle q = 2 cos(om t), the lift of a fixed
+    !! cylinder.
+    REAL(wp), INTENT(INOUT) :: s(2)
+    REAL(wp), INTENT(IN) :: om, eps, ad, f0, f1, h
+    INTEGER :: n, i
+    REAL(wp) :: dt, t, k1(2), k2(2), k3(2), k4(2)
+    IF (.NOT. (h > CD_ZERO)) RETURN
+    n = MAX(1, CEILING(MIN(ABS(om)*h/0.1_wp, 1.0e6_wp)))
+    dt = h/REAL(n, wp)
+    DO i = 0, n - 1
+      t = REAL(i, wp)*dt
+      k1 = rhs(s, t)
+      k2 = rhs(s + 0.5_wp*dt*k1, t + 0.5_wp*dt)
+      k3 = rhs(s + 0.5_wp*dt*k2, t + 0.5_wp*dt)
+      k4 = rhs(s + dt*k3, t + dt)
+      s = s + (dt/6.0_wp)*(k1 + 2.0_wp*k2 + 2.0_wp*k3 + k4)
+    END DO
+  CONTAINS
+    PURE FUNCTION rhs(x, tau) RESULT(d)
+      REAL(wp), INTENT(IN) :: x(2), tau
+      REAL(wp) :: d(2)
+      d(1) = x(2)
+      d(2) = ad*(f0 + (f1 - f0)*tau/h) - eps*om*(x(1)*x(1) - CD_ONE)*x(2) - om*om*x(1)
+    END FUNCTION rhs
+  END SUBROUTINE CD_VIV_Wake_Advance
 
   ELEMENTAL REAL(wp) FUNCTION CD_VIV_Wrap_Phase(phi) RESULT(wrapped)
     !! The phase mapped to [0, 2 pi); the model only uses cos(phi) and sin(. - phi).

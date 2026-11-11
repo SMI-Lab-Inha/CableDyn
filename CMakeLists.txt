@@ -1316,6 +1316,20 @@ target_link_libraries(test_viv_kernels PRIVATE cabledyn_core)
 add_test(NAME viv_kernels COMMAND test_viv_kernels)
 set_tests_properties(viv_kernels PROPERTIES LABELS "fortran;unit;dynamic;viv")
 
+# Wake-oscillator kernel (Facchinetti et al. 2004): the free limit cycle, the forced lift
+# magnification of their Eq. 17, and the sub-stepped Runge-Kutta advance.
+add_executable(test_viv_wake_kernel tests/test_viv_wake_kernel.f90)
+target_link_libraries(test_viv_wake_kernel PRIVATE cabledyn_core)
+add_test(NAME viv_wake_kernel COMMAND test_viv_wake_kernel)
+set_tests_properties(viv_wake_kernel PROPERTIES LABELS "fortran;unit;dynamic;viv")
+
+# Wake-oscillator VIV on a deck: lock-in against the uncoupled wake, the power balance, CL0 0 as no
+# section, and the refusals of the WAKE OSCILLATOR section.
+add_executable(test_viv_wake_deck tests/test_viv_wake_deck.f90)
+target_link_libraries(test_viv_wake_deck PRIVATE cabledyn_core)
+add_test(NAME viv_wake_deck COMMAND test_viv_wake_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(viv_wake_deck PROPERTIES LABELS "fortran;integration;dynamic;viv" TIMEOUT 1200)
+
 add_executable(test_hermite_viv tests/test_hermite_viv.f90)
 target_link_libraries(test_hermite_viv PRIVATE cabledyn_core)
 add_test(NAME hermite_viv COMMAND test_hermite_viv)

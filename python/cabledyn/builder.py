@@ -219,6 +219,14 @@ class LineType:
         Optional higher-harmonic coefficient of the ``VIV`` row (``Name ClX alpha
         Chh``, Ulveseter et al. 2019; it needs ``clx``); ``None`` leaves it out
         (0). With ``chh`` set and ``il_alpha`` ``None`` the row writes alpha 0.15.
+    wake_cl0, wake_st, wake_eps, wake_a : float | None
+        Optional wake-oscillator VIV of a type (Facchinetti et al. 2004), a
+        ``WAKE OSCILLATOR`` section row ``Name CL0 [St [eps [A]]]``: the
+        reference lift coefficient, the Strouhal number, the van der Pol
+        parameter and the acceleration coupling. It replaces the
+        synchronisation lift, so ``cl`` stays ``None`` or 0, and acts on
+        finite-EI cables. ``None`` leaves a trailing value out of the row (the
+        solver takes 0.2, 0.3 and 12); a value given writes the ones before it.
     """
 
     name: str
@@ -241,6 +249,10 @@ class LineType:
     clx: float | None = None
     il_alpha: float | None = None
     chh: float | None = None
+    wake_cl0: float | None = None
+    wake_st: float | None = None
+    wake_eps: float | None = None
+    wake_a: float | None = None
 
 
 @dataclass(eq=False)
@@ -1660,6 +1672,10 @@ class DeckModel:
         clx: float | None = None,
         il_alpha: float | None = None,
         chh: float | None = None,
+        wake_cl0: float | None = None,
+        wake_st: float | None = None,
+        wake_eps: float | None = None,
+        wake_a: float | None = None,
     ) -> LineType:
         """Add a ``LINE TYPES`` row; see :class:`LineType` for the fields.
 
@@ -1696,6 +1712,10 @@ class DeckModel:
             clx,
             il_alpha,
             chh,
+            wake_cl0,
+            wake_st,
+            wake_eps,
+            wake_a,
         )
         self._line_types.append(item)
         return item
@@ -2587,6 +2607,7 @@ class DeckModel:
         _emit(out, "ATTACHMENTS", *self._attachment_table())
         _emit(out, "STIFFENERS", *self._stiffener_table())
         _emit(out, "VIV", *self._viv_table())
+        _emit(out, "WAKE OSCILLATOR", *self._wake_table())
         _emit(out, "FAILURE", *self._failure_table())
         _emit(out, "CONTROL", *self._control_table())
         _emit(out, "EXTERNAL LOADS", *self._external_load_table())
@@ -2968,6 +2989,25 @@ class DeckModel:
             rows.append(row)
         return "Name ClX alpha Chh", "(-) (-) (-) (-)", rows
 
+    def _wake_table(self) -> tuple[str, str, list[list[str]]]:
+        rows: list[list[str]] = []
+        defaults = (0.2, 0.3, 12.0)
+        for item in self._line_types:
+            what = f"line type {item.name!r}"
+            rest = (item.wake_st, item.wake_eps, item.wake_a)
+            if item.wake_cl0 is None:
+                if any(value is not None for value in rest):
+                    raise ValueError(f"{what}: wake_st, wake_eps and wake_a need wake_cl0")
+                continue
+            row = [_text(item.name, what), _num(item.wake_cl0, what)]
+            # the values up to the last one given, the solver's defaults filling the gaps
+            last = max((index for index, value in enumerate(rest) if value is not None), default=-1)
+            for index in range(last + 1):
+                value = rest[index]
+                row.append(_num(defaults[index] if value is None else value, what))
+            rows.append(row)
+        return "Name CL0 St eps A", "(-) (-) (-) (-) (-)", rows
+
     def _syrope_table(self) -> tuple[str, str, list[list[str]]]:
         rows = [
             [_line_list(row.lines), _num(row.tmax0, "SYROPE IC"), _num(row.tmean0, "SYROPE IC")]
@@ -3172,6 +3212,13 @@ class _Loader:
             item.clx = _f(t[1])
             item.il_alpha = _f(t[2]) if len(t) >= 3 else None
             item.chh = _f(t[3]) if len(t) == 4 else None
+        for row in self.rows("WAKE OSCILLATOR"):
+            t = row.tokens
+            item = model.line_types[t[0]]
+            item.wake_cl0 = _f(t[1])
+            item.wake_st = _f(t[2]) if len(t) >= 3 else None
+            item.wake_eps = _f(t[3]) if len(t) >= 4 else None
+            item.wake_a = _f(t[4]) if len(t) == 5 else None
         for row in self.rows("ATTACHMENTS"):
             t = row.tokens
             arc: float | tuple[float, float, float]

@@ -213,6 +213,32 @@ def test_viv_columns_follow_the_wide_finite_ei_row(tmp_path: Path) -> None:
     assert loaded.to_text() == text
 
 
+def test_wake_oscillator_rows_are_written_with_the_values_given(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type(
+        "cable", diam=0.1, mass=10.0, ea=5.0e7, ei=1.0, cdn=1.2, can=1.0, wake_cl0=0.3
+    )
+    model.add_line_type(
+        "riser",
+        diam=0.1,
+        mass=10.0,
+        ea=5.0e7,
+        ei=1.0,
+        cdn=1.2,
+        can=1.0,
+        wake_cl0=0.25,
+        wake_eps=0.2,
+    )
+    deck = DeckFile.from_text(model.to_text(validate=False), path=tmp_path / "deck.dat")
+    rows = {row.tokens[0].lower(): row.tokens for row in deck._rows("WAKE OSCILLATOR")}
+    assert rows["cable"] == ("cable", "0.3")
+    # St is written at the solver's default to keep eps in its column
+    assert [float(value) for value in rows["riser"][1:]] == [0.25, 0.2, 0.2]
+    model.add_line_type("bad", diam=0.1, mass=10.0, ea=5.0e7, wake_st=0.2)
+    with pytest.raises(ValueError, match="need wake_cl0"):
+        model.to_text(validate=False)
+
+
 def test_build_spread_mooring_with_multi_section_lines() -> None:
     import math
 

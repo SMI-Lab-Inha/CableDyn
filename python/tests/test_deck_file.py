@@ -4853,6 +4853,61 @@ def test_finite_ei_row_viv_columns_follow_the_native_checks(columns, message):
         DeckFile.from_text(_edit(_DYNAMIC, (row, _WIDE_VIV_ROW + columns)))
 
 
+@pytest.mark.parametrize(
+    "rows, expected",
+    [
+        (("chain 0.3",), (0.3, None, None, None)),
+        (("chain 0.3 0.17",), (0.3, 0.17, None, None)),
+        (("TypeName CL0 St eps A", "chain 0.3 0.2 0.25 10"), (0.3, 0.2, 0.25, 10.0)),
+    ],
+)
+def test_wake_oscillator_rows_are_read_and_kept(tmp_path, rows, expected):
+    from cabledyn import DeckModel
+
+    text = _with_section(_DYNAMIC, "WAKE OSCILLATOR", *rows)
+    DeckFile.from_text(text)
+    path = tmp_path / "wake.dat"
+    path.write_text(text, encoding="utf-8")
+    item = DeckModel.load(path).line_types["chain"]
+    assert (item.wake_cl0, item.wake_st, item.wake_eps, item.wake_a) == expected
+    saved = tmp_path / "saved.dat"
+    DeckModel.load(path).save(saved)
+    again = DeckModel.load(saved).line_types["chain"]
+    assert (again.wake_cl0, again.wake_st, again.wake_eps, again.wake_a) == expected
+
+
+@pytest.mark.parametrize(
+    "base, rows, message",
+    [
+        (None, ("chain 0.3 0.2 0.3 12 1",), "rows must be: TypeName CL0 [St [eps [A]]]"),
+        (None, ("chain 0.3 x",), "must be plain numbers"),
+        (None, ("cable 0.3",), 'undefined LINE TYPE "cable"'),
+        (None, ("chain 0.3", "chain 0.2"), 'names LINE TYPE "chain" twice'),
+        (None, ("chain -0.1",), "CL0 must be non-negative"),
+        (None, ("chain 0.3 0.0",), "St > 0, eps > 0 and A >= 0"),
+        (None, ("chain 0.3 0.2 0.0",), "St > 0, eps > 0 and A >= 0"),
+        (None, ("chain 0.3 0.2 0.3 -1",), "St > 0, eps > 0 and A >= 0"),
+        ("lift", ("chain 0.3",), "give the type LINE TYPES Cl 0"),
+        ("ei0", ("chain 0.3",), "acts on finite-EI cables (EI > 0) only"),
+    ],
+)
+def test_wake_oscillator_rows_follow_the_native_checks(base, rows, message):
+    text = _DYNAMIC
+    if base == "lift":
+        row = "chain 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0"
+        text = _edit(text, (row, row + " 0.8"))
+    elif base == "ei0":
+        text = _edit(text, ("1.674e9 -1.0 1.0e4 1.37", "1.674e9 -1.0 0.0 1.37"))
+    with pytest.raises(DeckFormatError, match=re.escape(message)):
+        DeckFile.from_text(_with_section(text, "WAKE OSCILLATOR", *rows))
+
+
+def test_wake_oscillator_cl0_zero_is_off_and_needs_no_finite_line():
+    # CL0 0 switches nothing on, so it is accepted on an EI = 0 line and next to a lift type
+    text = _edit(_DYNAMIC, ("1.674e9 -1.0 1.0e4 1.37", "1.674e9 -1.0 0.0 1.37"))
+    DeckFile.from_text(_with_section(text, "WAKE OSCILLATOR", "chain 0.0"))
+
+
 def test_viv_is_accepted_on_the_coupled_route():
     text = _edit(_STATIC, (_VIV_ROW, _VIV_ROW + " 0.8"))
     DeckFile.from_text(text)

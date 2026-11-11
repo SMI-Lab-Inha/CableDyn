@@ -33,6 +33,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - The cross-flow VIV columns `Cl [dF cF]` may follow the 14-column finite-EI `LINE TYPES` row
   (15 or 17 columns), so a line restrained in torsion can carry VIV; such a row free in torsion
   runs as the 13-column one. The Python deck reader and builder take it.
+- Wake-oscillator VIV: an optional `WAKE OSCILLATOR` section row `TypeName CL0 [St [eps [A]]]`
+  replaces the synchronisation lift of a type (which keeps `Cl` 0) by the van der Pol wake
+  oscillator of Facchinetti et al. (2004) with acceleration coupling (defaults St 0.2, eps 0.3,
+  A 12), distributed along finite-EI cables, standalone and coupled. The kernel follows the
+  published forced-wake lift magnification within 2 %; on the taut example cable the wake locks
+  the cable in at its first mode (A/D 0.58 against 0.10 uncoupled) and the drag and damping take
+  out the wake lift's power within 0.3 %. Its state is in the step-recovery, snapshot and
+  checkpoint state; the Python deck reader and builder take the section.
 - Load power channels `VIVPow<L>`, `DragPow<L>` and `DampPow<L>` [W], and `<name><L>N<J>` per
   unit length about a node [W/m]: the power the VIV loads, the drag and the structural damping
   (`BA`, `Bb`) deliver to a line at the committed state, on `EI = 0` lines and finite-EI cables,

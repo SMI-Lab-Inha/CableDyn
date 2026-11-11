@@ -297,7 +297,8 @@ the half-range and centre of its band in non-dimensional frequency (MoorDyn's `d
 `cF = 0.18` when only `Cl` is given). `Cl = 0` is no VIV; `Cl > 0` needs `cF > 0` and
 `0 <= dF < cF`, and the line's drag in water. It acts in the dynamics on `EI = 0` lines and
 finite-EI cables (see [Cross-flow VIV](theory.rst)). The in-line force of a type is a
-[VIV](#viv-optional) section row.
+[VIV](#viv-optional) section row; a [WAKE OSCILLATOR](#wake-oscillator-optional) row replaces the
+lift by a wake oscillator.
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:
@@ -1199,6 +1200,44 @@ Behaviour:
 
 Each was fitted to its experiments by the authors and is a starting point, not a universal set;
 MoorDyn's band defaults (`dF` 0.08, `cF` 0.18) are those of the first.
+
+### WAKE OSCILLATOR (optional)
+
+Wake-oscillator vortex-induced vibration of a line type, the model of Facchinetti et al. (2004):
+a van der Pol oscillator per node stands for the near wake and drives the cross-flow lift, coupled
+to the cable's cross-flow acceleration (see [Wake oscillator](theory.rst)). It replaces the
+synchronisation model of the LINE TYPES `Cl` column for that type, so the type keeps `Cl = 0`, and
+it acts on finite-EI cables.
+
+```text
+--------------------- WAKE OSCILLATOR ----------------------------------
+TypeName   CL0    St     eps    A
+(-)        (-)    (-)    (-)    (-)
+cable      0.3    0.2    0.3    12
+```
+
+| Column | Meaning |
+|--------|---------|
+| `TypeName` | an existing LINE TYPES name (case-insensitive), at most one row each |
+| `CL0` | reference lift coefficient `C_L0` >= 0 of a fixed cylinder, at most 1e15; `0` is off |
+| `St` | optional Strouhal number > 0 of the wake frequency `2 pi St U/D` (default 0.2) |
+| `eps` | optional van der Pol parameter > 0 (default 0.3) |
+| `A` | optional acceleration coupling >= 0 (default 12; `0` uncouples the wake from the cable) |
+
+Behaviour:
+
+- Per unit length the lift is `1/4 rho D CL0 q U^2` across the relative flow, the direction of the
+  `Cl` lift (`U` the relative normal flow speed), with `q'' + eps om (q^2 - 1) q' + om^2 q = (A/D) y''`
+  at each node, `om = 2 pi St U_a/D` with `U_a` the ambient flow speed normal to the line and `y''`
+  the node's cross-flow acceleration. The defaults are the values Facchinetti et al. fix
+  from forced-wake data. The cross-flow damping of the fluid is the Morison drag of the type's
+  `Cd`, which the paper's `gamma = Cd/(4 pi St)` linearises.
+- `q` starts on its limit cycle at the node's VIV phase seed, `q = 2 cos(phi_0)` (`VIVphaseSeed`),
+  and is part of the step-recovery, snapshot and checkpoint state. The Outputs flag `V` file and
+  `VIVPow` carry the wake lift. A row with `CL0 = 0` leaves the run exactly as without it.
+- A row fails if it is not `TypeName CL0 [St [eps [A]]]`, names an undefined or already named
+  type, or holds a value out of range; `CL0 > 0` fails on a type with `Cl > 0`. A line whose types
+  mix the two models fails, and so does an `EI = 0` line with the wake oscillator.
 
 ### FAILURE (optional, EI = 0 decks)
 
