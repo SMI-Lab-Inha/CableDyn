@@ -262,7 +262,9 @@ class VIVResponse:
         ------
         ValueError
             If the shapes are not finite, have the wrong number of nodes, or
-            fewer nodes with a frame than shapes remain; or if the default
+            fewer nodes with a frame than shapes remain; if the shapes are not
+            independent at those nodes (a sine that vanishes at every node, or
+            two that alias each other on a coarse output); or if the default
             shapes are asked of a response that does not hold the whole line.
         """
         values = self.displacement(direction)
@@ -293,7 +295,14 @@ class VIVResponse:
             raise ValueError("fewer nodes with a flow frame than shapes to fit")
         design = basis[:, framed].T
         target = values[:, framed].T
-        coefficients, *_ = np.linalg.lstsq(design, target, rcond=None)
+        coefficients, _, rank, _ = np.linalg.lstsq(design, target, rcond=None)
+        if int(rank) < basis.shape[0]:
+            # dependent shapes at the nodes held (a mode that vanishes at every node, or two
+            # that alias each other): their weights are not determined by the motion
+            raise ValueError(
+                f"the {basis.shape[0]} shapes are not independent at the nodes with a flow frame "
+                f"(rank {int(rank)}): fit fewer modes, or use a finer output"
+            )
         left = target - design @ coefficients
         total = float(np.sqrt(np.mean(target * target)))
         residual = float(np.sqrt(np.mean(left * left))) / total if total > 0.0 else 0.0

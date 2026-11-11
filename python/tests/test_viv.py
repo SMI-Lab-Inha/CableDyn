@@ -108,6 +108,30 @@ def test_default_shapes_need_the_whole_line():
     assert viv_response(_history(_standing), flow=FLOW, diameter=D).whole_line
 
 
+def test_dependent_shapes_are_refused():
+    # ten uniform nodes: sin(9 pi s/S) vanishes at every node, sin(10 pi s/S) = -sin(8 pi s/S)
+    n = 10
+    t = np.arange(0.0, T, DT)
+    s = np.linspace(0.0, L, n)
+    dz = 0.05 * np.sin(8.0 * np.pi * s / L)[None, :] * np.cos(2.0 * np.pi * F * t)[:, None]
+    xyz = np.stack((np.broadcast_to(s, dz.shape), 0.0 * dz, -50.0 + dz), axis=2)
+    channels = ["Time(s)"] + [f"Node{k}{a}(m)" for k in range(1, n + 1) for a in "XYZ"]
+    history = LineNodeHistory(
+        Path("coarse.Line1.p.out"),
+        "",
+        tuple(channels),
+        None,
+        np.column_stack((t, xyz.reshape(t.size, -1))),
+    )
+    response = viv_response(history, flow=FLOW, diameter=D)
+    with pytest.raises(ValueError, match=r"10 shapes are not independent .*\(rank 8\)"):
+        response.modal_amplitudes("cross_flow", n_modes=10)
+    eight = response.modal_amplitudes("cross_flow", n_modes=8)
+    assert eight.dominant_mode == 8
+    assert eight.rms_over_diameter[7] == pytest.approx(0.05 / math.sqrt(2) / D, rel=1e-9)
+    assert eight.residual < 1e-9
+
+
 def test_travelling_wave_index_is_nan_without_motion():
     still = viv_response(_history(lambda t, s: (0.0 * t * s, 0.0 * t * s)), flow=FLOW, diameter=D)
     assert math.isnan(still.frequency("cross_flow"))
