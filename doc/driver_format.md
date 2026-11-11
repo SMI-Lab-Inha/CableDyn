@@ -1187,6 +1187,18 @@ Behaviour:
   on a type without the cross-flow lift, and `Chh > 0` with `ClX = 0`.
 - See `examples/viv_taut_cable_inline.dat`.
 
+**Published coefficient sets.** The synchronisation band of the LINE TYPES columns is the
+`f0 +/- df` of the papers (`cF` = `f0`, `dF` = `df`), and their Morison inertia coefficient
+`C_M` is `1 + Ca`. Two published sets, as LINE TYPES and VIV columns:
+
+| Source | `Cd` | `Ca` | `Cl` | `dF` | `cF` | `ClX` | `alpha` | `Chh` |
+|--------|------|------|------|------|------|-------|---------|-------|
+| Ulveseter et al. (2018), Table 3: a 10 m riser model in current and in current and waves | 1.2 | 1.0 | 0.65 | 0.08 | 0.18 | 0.85 | 0.15 | 0 |
+| Ulveseter et al. (2019), Table 1 and Section 4: the NDP high-mode riser in uniform current | 1.2 | 1.0 | 0.85 | 0.064 | 0.144 | 0.75 | 0.15 | 1.5 |
+
+Each was fitted to its experiments by the authors and is a starting point, not a universal set;
+MoorDyn's band defaults (`dF` 0.08, `cF` 0.18) are those of the first.
+
 ### FAILURE (optional, EI = 0 decks)
 
 A FAILURE row detaches line ends from a point during a dynamic run, with MoorDyn's trigger rules.
