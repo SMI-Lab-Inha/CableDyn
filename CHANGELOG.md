@@ -31,6 +31,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   standalone and coupled. Their work closes a cable's energy balance to 0.04 % in free decays
   and VIV runs, and on the locked-in line of `examples/viv_taut_cable_inline.dat` their means
   balance within 0.5 % of the VIV power.
+- `cabledyn.viv_response`: the VIV response of a line from its node positions, in the local flow
+  frame of every node: cross-flow and in-line amplitude along the span, the response
+  frequencies and `f D/U_n`, modal weights (taut-line sines or given shapes), the complex shape
+  and its travelling-wave index (Feeny 2008), orbits and the in-line/cross-flow phase
+  difference, with a CSV export and plots.
 
 ## [0.4.2] - 2026-11-09
 

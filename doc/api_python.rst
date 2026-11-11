@@ -336,6 +336,14 @@ the solver's own curvature, tension, and angle channels, where written, are auth
 .. autoclass:: cabledyn.TouchdownHistory
    :members:
 
+.. autofunction:: cabledyn.viv_response
+
+.. autoclass:: cabledyn.VIVResponse
+   :members:
+
+.. autoclass:: cabledyn.ModalAmplitudes
+   :members:
+
 Deck editing and case generation
 --------------------------------
 

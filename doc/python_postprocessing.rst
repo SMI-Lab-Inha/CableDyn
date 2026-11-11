@@ -7,7 +7,7 @@ The ``cabledyn`` package reads the output of the tools a CableDyn study is usual
 against, and applies the same typed tables, statistics, fatigue, spectra, plots, and exports to
 them (:doc:`python`). This page covers the readers, run-to-run comparison, resampling and
 filtering, extreme-value statistics, line geometry, fatigue damage, range graphs, design checks,
-touchdown histories, and parameter grids. All of them need NumPy only; plots need matplotlib.
+touchdown histories, VIV responses, and parameter grids. All of them need NumPy only; plots need matplotlib.
 
 Reading OpenFAST, MoorDyn, and coupled runs
 -------------------------------------------
@@ -420,6 +420,62 @@ that node, for the anchor uplift check.
    print(tdp.statistics("excursion"))          # minimum, maximum, mean, metres
    tdp.plot("arc_length")
    tdp.export("results/line1_tdp.csv")
+
+VIV response
+------------
+
+:func:`cabledyn.viv_response` resolves the motion of a line's nodes about their mean positions
+over a window into the local flow frame of each node, from a CableDyn ``.Line<L>.p.out`` file, a
+MoorDyn-F line file with node positions, or the ``L<L>N<J>px``/``py``/``pz`` channels of a main
+output. The frame follows the mean shape: the tangent ``t`` from End A towards End B, the in-line
+axis along the part of the given flow velocity normal to the tangent, and the cross-flow axis
+``t x`` in-line, so that (in-line, cross-flow, ``t``) is right-handed. A node whose tangent lies
+along the flow has no frame and reports ``nan``. The :class:`~cabledyn.VIVResponse` holds the
+in-line and cross-flow displacement of every node at every sample and gives:
+
+* ``rms_over_diameter`` and ``amplitude_over_diameter`` (half the peak-to-peak displacement) along
+  the line, for either direction;
+* ``frequencies`` (each node's) and ``frequency`` (the line's), the peak of the Hann-windowed
+  periodogram refined by a parabola through its neighbours, and ``nondimensional_frequency``
+  ``f D/U_n`` with ``U_n`` the flow speed normal to the tangent, the quantity the synchronisation
+  band ``cF +/- dF`` of :ref:`theory-viv` bounds (its reciprocal is the reduced velocity);
+* ``modal_amplitudes``, the least-squares weights at every sample of the shapes
+  ``sin(n pi s/S)`` of a taut line with fixed ends (``s`` the mean chord length from End A, ``S``
+  the line's), or of shapes you give (for example a component of the run's mode shapes,
+  :doc:`outputs`), with their RMS, the dominant mode and the share of the motion they leave
+  unexplained. The sines need the whole line, so they take a per-line file; on the nodes a main
+  output holds, give the shapes;
+* ``complex_shape``, the node Fourier coefficients at one frequency, and from it
+  ``travelling_wave_index``, the ratio of the smaller to the larger singular value of its real and
+  imaginary parts (the travelling index of the complex orthogonal decomposition of
+  :ref:`Feeny 2008 <ref-feeny2008>`): 0 for a standing wave, 1 for a wave of constant amplitude
+  travelling over whole wavelengths;
+* ``orbit`` (a node's in-line and cross-flow displacement) and ``phase_difference``, the in-line
+  phase at twice the cross-flow frequency less twice the cross-flow phase, which sets the shape
+  and direction of a figure-of-eight orbit.
+
+A node is named by its CableDyn number (1 = End A; ``node_numbers``): the ``J`` of the
+``L<L>N<J>p`` channels of a main output, which may hold only some nodes, and ``1 .. N`` for a
+per-line file. The CSV export writes the same numbers.
+
+The frequency measures need uniform sampling. On the in-line VIV example
+``viv_taut_cable_inline.dat``, run with the line output flag ``p``, over 60-90 s the mid-span cross-flow amplitude is A/D 0.82 at
+0.295 Hz (``f D/U_n`` 0.20), the quarter-span in-line amplitude 0.19 at 0.57 Hz, the cross-flow
+response is mode 1 and the in-line mode 2, and the travelling-wave index of the cross-flow motion
+is 0.05, a standing wave between the pinned ends.
+
+.. code-block:: python
+
+   from cabledyn import viv_response
+
+   viv = viv_response(result.read_line_positions(1), flow=(0.0, 0.15, 0.0), diameter=0.1,
+                      start=60.0)
+   print(viv.frequency("cross_flow"), viv.nondimensional_frequency()[25])
+   print(viv.modal_amplitudes("cross_flow").dominant_mode)
+   print(viv.travelling_wave_index("cross_flow"))
+   viv.plot_envelope()
+   viv.plot_orbit(13)
+   viv.export("results/line1_viv.csv")
 
 Parameter grids
 ---------------

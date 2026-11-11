@@ -95,6 +95,11 @@ Hydrodynamics and ocean environment
   simulation of riser VIV in current and irregular waves. *Marine Structures* **60**, 241–260.
   https://doi.org/10.1016/j.marstruc.2018.04.001
 
+.. _ref-feeny2008:
+
+- **Feeny, B. F. (2008).** A complex orthogonal decomposition for wave motion analysis.
+  *Journal of Sound and Vibration* **310**, 77–90. https://doi.org/10.1016/j.jsv.2007.07.047
+
 .. _ref-morison1950:
 
 - **Morison, J. R., O'Brien, M. P., Johnson, J. W. & Schaaf, S. A. (1950).** The force
