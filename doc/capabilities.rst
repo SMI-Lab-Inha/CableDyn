@@ -146,7 +146,8 @@ Line and constitutive capability
        host's fluid field on the coupled routes and its state in the checkpoint
    * - In-line VIV (``VIV`` section ``ClX``, ``alpha``)
      - Standalone and coupled
-     - the in-line shedding force of Ulveseter et al. (2018) at twice the cross-flow frequency, on
+     - the in-line shedding force of Ulveseter et al. (2018) at twice the cross-flow frequency, and
+       the optional higher-harmonic force of Ulveseter et al. (2019) (``Chh``), on
        ``EI = 0`` lines and finite-EI cables wherever the cross-flow lift runs
        (:ref:`theory-viv-inline`), its state in the checkpoint
 

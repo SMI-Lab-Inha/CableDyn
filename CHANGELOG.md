@@ -25,6 +25,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   finite-EI cables alike (within 1 % of each other). Exact Jacobians; the phase is in the
   step-recovery, snapshot and checkpoint state; the Python deck reader and builder take the
   section.
+- The higher-harmonic VIV force of Ulveseter et al. (2019): a fourth `VIV` section column `Chh`
+  adds `1/2 rho D Chh cos(phi + phi_x) U (t x v_n)`, the lift's form at the sum of the cross-flow
+  and in-line phases, on `EI = 0` lines and finite-EI cables. On the in-line example `Chh` 1.0
+  raises the quarter-span in-line response at four times the cross-flow frequency fourfold. The
+  Python deck reader and builder take the column.
 - Load power channels `VIVPow<L>`, `DragPow<L>` and `DampPow<L>` [W], and `<name><L>N<J>` per
   unit length about a node [W/m]: the power the VIV loads, the drag and the structural damping
   (`BA`, `Bb`) deliver to a line at the committed state, on `EI = 0` lines and finite-EI cables,

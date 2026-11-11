@@ -336,6 +336,9 @@ MODULE CableDyn_HermiteCableDynamic
     ! the cross-flow state's eval, rate, next, recovery and snapshot twins. Its phase rate is
     ! twice the cross-flow one, so it lives on cross-flow (viv_node) nodes only.
     LOGICAL :: has_viv_il = .FALSE.
+    ! the higher-harmonic force of Ulveseter et al. (2019): per element its coefficient vhh_cx
+    ! (0 = none) and scale vhh_k = 1/2 rho D C_hh, allocated with the in-line VIV
+    REAL(wp), ALLOCATABLE :: vhh_cx(:), vhh_k(:)
     REAL(wp), ALLOCATABLE :: vil_cx(:), vil_k(:), vil_alpha(:), vil_phi(:), vil_phi_eval(:), vil_rate(:)
     REAL(wp), ALLOCATABLE :: vil_ms(:, :), vil_ms_next(:, :), ws_recovery_vil_phi(:), ws_recovery_vil_ms(:, :)
     REAL(wp), ALLOCATABLE :: snap_vil_phi(:), snap_vil_ms(:, :)
@@ -1098,7 +1101,7 @@ CONTAINS
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Friction_Axial
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, t_window, ErrStat, ErrMsg, phase_seed, tangent_reversed, &
-                                         clx, il_alpha)
+                                         clx, il_alpha, chh)
     !! Install the cross-flow VIV synchronisation model (CableDyn_VIV) on a cable with drag:
     !! per element the lift coefficient cl (0: no lift) and the band df/cf, and the running-RMS
     !! averaging time t_window (s; 0 takes 500 steps of the first step). The lift acts on the
@@ -1117,7 +1120,9 @@ CONTAINS
     !! In-line VIV (Ulveseter et al. 2018; both or neither): clx, per element, the in-line shedding
     !! coefficient C_vx (0: none; > 0 only where cl > 0, the in-line phase rate being twice the
     !! cross-flow one) and il_alpha its frequency band (0 <= alpha < 1). The in-line phase of a
-    !! node starts at twice its cross-flow phase.
+    !! node starts at twice its cross-flow phase. chh (optional, with clx), per element, the
+    !! coefficient C_hh >= 0 of the higher-harmonic force of Ulveseter et al. (2019), the lift's
+    !! form at the phase sum phi_y + phi_x (0: none; > 0 only where clx > 0).
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: cl(:), cf(:), df(:), t_window
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1127,7 +1132,7 @@ CONTAINS
     !! MoorDyn's node tangent, so a node at rest takes the cross-flow phase pi
     !! (CD_VIV_Phase_Rate phi_rest); .FALSE. on a line the reader turned around
     LOGICAL, INTENT(IN), OPTIONAL :: tangent_reversed
-    REAL(wp), INTENT(IN), OPTIONAL :: clx(:), il_alpha(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: clx(:), il_alpha(:), chh(:)
     INTEGER :: e, k, ne, nn, es
     REAL(wp) :: wsum, tw_old, rest_old
     LOGICAL :: had_viv, had_il, want_il
@@ -1136,7 +1141,8 @@ CONTAINS
                              o_rate(:), o_ms(:, :), o_ms_next(:, :), o_rec_phi(:), o_rec_ms(:, :), &
                              o_snap_phi(:), o_snap_ms(:, :)
     REAL(wp), ALLOCATABLE :: x_cx(:), x_k(:), x_al(:), x_phi(:), x_phi_eval(:), x_rate(:), x_ms(:, :), &
-                             x_ms_next(:, :), x_rec_phi(:), x_rec_ms(:, :), x_snap_phi(:), x_snap_ms(:, :)
+                             x_ms_next(:, :), x_rec_phi(:), x_rec_ms(:, :), x_snap_phi(:), x_snap_ms(:, :), &
+                             x_hcx(:), x_hk(:)
     LOGICAL, ALLOCATABLE :: o_node(:), x_node(:)
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
@@ -1198,6 +1204,24 @@ CONTAINS
       END IF
       want_il = ANY(clx > CD_ZERO)
     END IF
+    IF (PRESENT(chh)) THEN
+      IF (.NOT. PRESENT(clx)) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: the higher-harmonic chh needs the in-line clx'; RETURN
+      END IF
+      IF (SIZE(chh) /= ne) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: chh must have one value per element'; RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(chh)) THEN
+        ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: chh must be finite'; RETURN
+      END IF
+      IF (ANY(chh < CD_ZERO) .OR. ANY(chh > CD_ZERO .AND. .NOT. (clx > CD_ZERO))) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: need chh >= 0, and chh > 0 only where clx > 0 (the '// &
+                 'higher-harmonic force runs at the cross-flow plus in-line phase)'; RETURN
+      END IF
+    END IF
     ! the previous configuration and state, kept for a rollback
     had_viv = model%has_viv
     had_il = model%has_viv_il
@@ -1245,8 +1269,10 @@ CONTAINS
       ALLOCATE (model%vil_cx(ne), model%vil_k(ne), model%vil_alpha(nn), model%vil_phi(nn), model%vil_phi_eval(nn), &
                 model%vil_rate(nn), model%vil_ms(2, nn), model%vil_ms_next(2, nn), model%ws_recovery_vil_phi(nn), &
                 model%ws_recovery_vil_ms(2, nn), model%snap_vil_phi(nn), model%snap_vil_ms(2, nn), &
-                model%vil_node(nn))
+                model%vil_node(nn), model%vhh_cx(ne), model%vhh_k(ne))
       model%vil_cx = clx
+      model%vhh_cx = CD_ZERO
+      IF (PRESENT(chh)) model%vhh_cx = chh
       model%vil_alpha = CD_ZERO
       model%vil_node = .FALSE.
       model%vil_phi = CD_ZERO
@@ -1322,6 +1348,7 @@ CONTAINS
         CALL MOVE_ALLOC(x_rec_phi, model%ws_recovery_vil_phi); CALL MOVE_ALLOC(x_rec_ms, model%ws_recovery_vil_ms)
         CALL MOVE_ALLOC(x_snap_phi, model%snap_vil_phi); CALL MOVE_ALLOC(x_snap_ms, model%snap_vil_ms)
         CALL MOVE_ALLOC(x_node, model%vil_node)
+        CALL MOVE_ALLOC(x_hcx, model%vhh_cx); CALL MOVE_ALLOC(x_hk, model%vhh_k)
       ELSE
         CALL MOVE_ALLOC(model%viv_cl, o_cl); CALL MOVE_ALLOC(model%viv_k, o_k)
         CALL MOVE_ALLOC(model%viv_cf, o_cf); CALL MOVE_ALLOC(model%viv_df, o_df)
@@ -1338,6 +1365,7 @@ CONTAINS
         CALL MOVE_ALLOC(model%ws_recovery_vil_phi, x_rec_phi); CALL MOVE_ALLOC(model%ws_recovery_vil_ms, x_rec_ms)
         CALL MOVE_ALLOC(model%snap_vil_phi, x_snap_phi); CALL MOVE_ALLOC(model%snap_vil_ms, x_snap_ms)
         CALL MOVE_ALLOC(model%vil_node, x_node)
+        CALL MOVE_ALLOC(model%vhh_cx, x_hcx); CALL MOVE_ALLOC(model%vhh_k, x_hk)
       END IF
     END SUBROUTINE move_viv
   END SUBROUTINE CD_HermiteCable_Dyn_Set_VIV
@@ -1355,6 +1383,7 @@ CONTAINS
                                             model%vil_phi_eval, model%vil_rate, model%vil_ms, model%vil_ms_next, &
                                             model%ws_recovery_vil_phi, model%ws_recovery_vil_ms, &
                                             model%snap_vil_phi, model%snap_vil_ms, model%vil_node)
+    IF (ALLOCATED(model%vhh_k)) DEALLOCATE (model%vhh_cx, model%vhh_k)
     model%has_viv = .FALSE.
     model%has_viv_il = .FALSE.
     model%viv_tw = CD_ZERO
@@ -1370,6 +1399,7 @@ CONTAINS
     REAL(wp) :: wsum
     model%viv_k = 0.5_wp*model%rho_w*model%diam*model%viv_cl
     IF (model%has_viv_il) model%vil_k = 0.5_wp*model%rho_w*model%diam*model%vil_cx
+    IF (model%has_viv_il) model%vhh_k = 0.5_wp*model%rho_w*model%diam*model%vhh_cx
     model%viv_dn = CD_ZERO
     DO k = 1, model%nn
       IF (.NOT. model%viv_node(k)) CYCLE
@@ -1504,7 +1534,8 @@ CONTAINS
   SUBROUTINE viv_element_lift(model, q_cfg, v_cfg, e, flift, ErrStat, ErrMsg, djq, djv)
     !! The VIV lift load of element e at the phase viv_phi_eval in the flow the drag sees (current,
     !! held field), with its Jacobians djq, djv (both or neither); with in-line VIV it includes the
-    !! in-line shedding force at the phase vil_phi_eval.
+    !! in-line shedding force at the phase vil_phi_eval, and the higher-harmonic force of
+    !! Ulveseter et al. (2019), the lift's form at the phase sum viv_phi_eval + vil_phi_eval.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     REAL(wp), INTENT(IN) :: q_cfg(:), v_cfg(:)
     INTEGER, INTENT(IN) :: e
@@ -1532,6 +1563,10 @@ CONTAINS
     il = .FALSE.
     IF (model%has_viv_il) il = model%vil_k(e) > CD_ZERO
     IF (il) THEN
+      IF (model%vhh_k(e) > CD_ZERO) THEN
+        kn = kn + model%vhh_k(e)*[COS(model%viv_phi_eval(e) + model%vil_phi_eval(e)), &
+                                  COS(model%viv_phi_eval(e + 1) + model%vil_phi_eval(e + 1))]
+      END IF
       knx = model%vil_k(e)*[COS(model%vil_phi_eval(e)), COS(model%vil_phi_eval(e + 1))]
       IF (PRESENT(djq)) THEN
         CALL CD_HermiteCable_VIV_Lift_Element(qe, ve, model%l0(e), uu, wl, kn, flift, djq, djv, ErrStat, ErrMsg, &

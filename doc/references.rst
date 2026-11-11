@@ -95,6 +95,12 @@ Hydrodynamics and ocean environment
   simulation of riser VIV in current and irregular waves. *Marine Structures* **60**, 241–260.
   https://doi.org/10.1016/j.marstruc.2018.04.001
 
+.. _ref-ulveseter2019:
+
+- **Ulveseter, J. V., Thorsen, M. J., Sævik, S. & Larsen, C. M. (2019).** Simulating fundamental
+  and higher harmonic VIV of slender structures. *Applied Ocean Research* **90**, 101856.
+  https://doi.org/10.1016/j.apor.2019.101856
+
 .. _ref-feeny2008:
 
 - **Feeny, B. F. (2008).** A complex orthogonal decomposition for wave motion analysis.

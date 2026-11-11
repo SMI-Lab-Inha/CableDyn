@@ -420,6 +420,8 @@ MODULE CableDyn_Model
     ! cross-flow node next to a vil_cx > 0 element.
     LOGICAL :: has_viv_il = .FALSE.
     REAL(wp), ALLOCATABLE :: vil_cx(:), vil_alpha(:)
+    ! the higher-harmonic coefficient C_hh per element (Ulveseter et al. 2019), with in-line VIV
+    REAL(wp), ALLOCATABLE :: vhh_cx(:)
     LOGICAL, ALLOCATABLE :: vil_node(:)
     REAL(wp), ALLOCATABLE :: vil_phi(:), vil_ms(:, :), vil_phi_rollback(:), vil_ms_rollback(:, :)
     REAL(wp), ALLOCATABLE :: recovery_vil_phi(:), recovery_vil_ms(:, :)
@@ -3926,7 +3928,7 @@ CONTAINS
   END SUBROUTINE CD_Set_Model_Syrope_State
 
   SUBROUTINE CD_Set_Model_VIV(model, rho, cl, diameter, cf, df, t_window, ErrStat, ErrMsg, phase_seed, &
-                              tangent_reversed, clx, il_alpha)
+                              tangent_reversed, clx, il_alpha, chh)
     !! Install the cross-flow VIV model (CableDyn_VIV) on an initialised line. Per element:
     !! the lift coefficient cl (0 = no lift on that element), hydrodynamic diameter, and the
     !! synchronisation centre cf and half-range df of the non-dimensional shedding frequency;
@@ -3945,7 +3947,9 @@ CONTAINS
     !! In-line VIV (Ulveseter et al. 2018; both or neither): clx, per element, the in-line shedding
     !! coefficient (0: none; > 0 only where cl > 0, the in-line phase running at twice the
     !! cross-flow one) and il_alpha its band (0 <= alpha < 1); the in-line phase of a node starts at
-    !! twice its cross-flow phase.
+    !! twice its cross-flow phase. chh (optional, with clx), per element, the coefficient C_hh >= 0
+    !! of the higher-harmonic force of Ulveseter et al. (2019), the lift's form at the phase sum
+    !! phi_y + phi_x (0: none; > 0 only where clx > 0).
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: rho, cl(:), diameter(:), cf(:), df(:), t_window
     INTEGER, INTENT(OUT) :: ErrStat
@@ -3955,7 +3959,7 @@ CONTAINS
     !! MoorDyn's, so a node at rest takes the cross-flow phase pi (CD_VIV_Phase_Rate phi_rest);
     !! .FALSE. on a line the reader turned around, whose tangent runs as MoorDyn's
     LOGICAL, INTENT(IN), OPTIONAL :: tangent_reversed
-    REAL(wp), INTENT(IN), OPTIONAL :: clx(:), il_alpha(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: clx(:), il_alpha(:), chh(:)
     INTEGER :: n_nodes, n_elem, e, nd, istat, k
     REAL(wp) :: wsum
     LOGICAL :: want_il
@@ -4016,6 +4020,21 @@ CONTAINS
         RETURN
       END IF
       want_il = ANY(clx > CD_ZERO)
+    END IF
+    IF (PRESENT(chh)) THEN
+      IF (.NOT. PRESENT(clx)) THEN
+        CALL fail(ErrStat, ErrMsg, 'the higher-harmonic VIV chh needs the in-line clx')
+        RETURN
+      END IF
+      IF (SIZE(chh) /= n_elem .OR. .NOT. CD_All_Finite(chh)) THEN
+        CALL fail(ErrStat, ErrMsg, 'the higher-harmonic VIV chh must be finite with shape (n_elem)')
+        RETURN
+      END IF
+      IF (ANY(chh < CD_ZERO) .OR. ANY(chh > CD_ZERO .AND. .NOT. (clx > CD_ZERO))) THEN
+        CALL fail(ErrStat, ErrMsg, 'the higher-harmonic VIV needs chh >= 0, and chh > 0 only where clx > 0 '// &
+                  '(it runs at the cross-flow plus in-line phase)')
+        RETURN
+      END IF
     END IF
     CALL clear_viv(model)
     IF (.NOT. ANY(cl > CD_ZERO)) RETURN
@@ -4098,13 +4117,16 @@ CONTAINS
     ALLOCATE (model%vil_cx(n_elem), model%vil_alpha(n_nodes), model%vil_node(n_nodes), model%vil_phi(n_nodes), &
               model%vil_ms(2, n_nodes), model%vil_phi_rollback(n_nodes), model%vil_ms_rollback(2, n_nodes), &
               model%recovery_vil_phi(n_nodes), model%recovery_vil_ms(2, n_nodes), model%vil_phi_eval(n_nodes), &
-              model%vil_rate(n_nodes), model%vil_ms_next(2, n_nodes), model%vil_phi_next(n_nodes), STAT=istat)
+              model%vil_rate(n_nodes), model%vil_ms_next(2, n_nodes), model%vil_phi_next(n_nodes), &
+              model%vhh_cx(n_elem), STAT=istat)
     IF (istat /= 0) THEN
       CALL clear_viv(model)
       CALL alloc_fail(ErrStat, ErrMsg, 'in-line VIV storage allocation failed')
       RETURN
     END IF
     model%vil_cx = MERGE(clx, CD_ZERO, clx > CD_ZERO)
+    model%vhh_cx = CD_ZERO
+    IF (PRESENT(chh)) model%vhh_cx = MERGE(chh, CD_ZERO, chh > CD_ZERO)
     model%vil_alpha = CD_ZERO
     model%vil_node = .FALSE.
     model%vil_phi = CD_ZERO
@@ -4387,13 +4409,13 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: force(3)
     LOGICAL, INTENT(OUT) :: ok
     REAL(wp), INTENT(OUT), OPTIONAL :: jac_v(3, 3), jac_prev(3, 3), jac_next(3, 3)
-    REAL(wp) :: coef, coefx, uu(3), phi, fx(3), jv(3, 3), jp(3, 3), jn(3, 3)
+    REAL(wp) :: coef, coefx, coefh, uu(3), phi, fx(3), jv(3, 3), jp(3, 3), jn(3, 3)
     INTEGER :: ia
     LOGICAL :: il
     il = .FALSE.
     IF (model%has_viv_il) il = model%vil_node(nd)
     IF (il) THEN
-      CALL viv_node_coef(model, q, nd, coef, uu, coefx)
+      CALL viv_node_coef(model, q, nd, coef, uu, coefx, coefh)
     ELSE
       CALL viv_node_coef(model, q, nd, coef, uu)
     END IF
@@ -4418,6 +4440,22 @@ CONTAINS
       CALL CD_VIV_Node_Inline(q(ia - 3:ia - 1), q(ia + 3:ia + 5), smoothed(v, ia), uu, coefx, phi, fx, ok)
     END IF
     force = force + fx
+    IF (.NOT. (ok .AND. coefh > CD_ZERO)) RETURN
+    ! the higher-harmonic force: the lift's form at the phase sum (Ulveseter et al. 2019, Eq. 6)
+    IF (in_step) THEN
+      phi = model%viv_phi_eval(nd) + model%vil_phi_eval(nd)
+    ELSE
+      phi = model%viv_phi(nd) + model%vil_phi(nd)
+    END IF
+    IF (PRESENT(jac_v)) THEN
+      CALL CD_VIV_Node_Lift(q(ia - 3:ia - 1), q(ia + 3:ia + 5), smoothed(v, ia), uu, coefh, phi, fx, ok, jv, jp, jn)
+      jac_v = jac_v + jv
+      jac_prev = jac_prev + jp
+      jac_next = jac_next + jn
+    ELSE
+      CALL CD_VIV_Node_Lift(q(ia - 3:ia - 1), q(ia + 3:ia + 5), smoothed(v, ia), uu, coefh, phi, fx, ok)
+    END IF
+    force = force + fx
   END SUBROUTINE viv_node_load
 
   PURE LOGICAL FUNCTION CD_Model_Has_VIV(model) RESULT(has)
@@ -4426,20 +4464,22 @@ CONTAINS
     has = model%has_viv
   END FUNCTION CD_Model_Has_VIV
 
-  SUBROUTINE viv_node_coef(model, q, nd, coef, uu, coefx)
+  SUBROUTINE viv_node_coef(model, q, nd, coef, uu, coefx, coefh)
     !! Lift scale of interior node nd at positions q, sum over its two elements of
     !! (1/2 l0_e w_e)(1/2 rho D_e Cl_e) with w_e the wetted fraction under the drag waterline
     !! (as MoorDyn's 1/4 rho d Cl (F_i l_i + F_i+1 l_i+1)), and the ambient fluid velocity there;
-    !! coefx (optional, in-line VIV) the same sum with the in-line coefficient C_x.
+    !! coefx (optional, in-line VIV) the same sum with the in-line coefficient C_x, and coefh
+    !! (optional, with coefx) with the higher-harmonic coefficient C_hh.
     TYPE(CD_ModelType), INTENT(IN) :: model
     REAL(wp), INTENT(IN) :: q(:)
     INTEGER, INTENT(IN) :: nd
     REAL(wp), INTENT(OUT) :: coef, uu(3)
-    REAL(wp), INTENT(OUT), OPTIONAL :: coefx
+    REAL(wp), INTENT(OUT), OPTIONAL :: coefx, coefh
     INTEGER :: e
     REAL(wp) :: wla, wlb, frac
     coef = CD_ZERO
     IF (PRESENT(coefx)) coefx = CD_ZERO
+    IF (PRESENT(coefh)) coefh = CD_ZERO
     DO e = nd - 1, nd
       IF (.NOT. (model%viv_cl(e) > CD_ZERO)) CYCLE
       wla = CD_ZERO
@@ -4451,6 +4491,7 @@ CONTAINS
       CALL CD_Submerged_Fraction(q(3*e) - wla, q(3*e + 3) - wlb, frac)
       coef = coef + 0.25_wp*model%viv_rho*model%viv_d(e)*model%viv_cl(e)*model%l0(e)*frac
       IF (PRESENT(coefx)) coefx = coefx + 0.25_wp*model%viv_rho*model%viv_d(e)*model%vil_cx(e)*model%l0(e)*frac
+      IF (PRESENT(coefh)) coefh = coefh + 0.25_wp*model%viv_rho*model%viv_d(e)*model%vhh_cx(e)*model%l0(e)*frac
     END DO
     uu = CD_ZERO
     IF (ALLOCATED(model%fluid_velocity)) uu = model%fluid_velocity(:, nd)
@@ -4598,6 +4639,7 @@ CONTAINS
     IF (ALLOCATED(model%viv_ms_next)) DEALLOCATE (model%viv_ms_next)
     IF (ALLOCATED(model%viv_phi_next)) DEALLOCATE (model%viv_phi_next)
     IF (ALLOCATED(model%vil_cx)) DEALLOCATE (model%vil_cx)
+    IF (ALLOCATED(model%vhh_cx)) DEALLOCATE (model%vhh_cx)
     IF (ALLOCATED(model%vil_alpha)) DEALLOCATE (model%vil_alpha)
     IF (ALLOCATED(model%vil_node)) DEALLOCATE (model%vil_node)
     IF (ALLOCATED(model%vil_phi)) DEALLOCATE (model%vil_phi)
@@ -7372,6 +7414,8 @@ CONTAINS
     work%has_viv_il = src%has_viv_il
     CALL copy_real1(src%vil_cx, work%vil_cx, 'vil_cx', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%vhh_cx, work%vhh_cx, 'vhh_cx', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
     CALL copy_real1(src%vil_alpha, work%vil_alpha, 'vil_alpha', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
     CALL copy_logical1(src%vil_node, work%vil_node, 'vil_node', ErrStat, ErrMsg)
@@ -7554,6 +7598,7 @@ CONTAINS
     CALL MOVE_ALLOC(from%viv_phi_next, to%viv_phi_next)
     to%has_viv_il = from%has_viv_il
     CALL MOVE_ALLOC(from%vil_cx, to%vil_cx)
+    CALL MOVE_ALLOC(from%vhh_cx, to%vhh_cx)
     CALL MOVE_ALLOC(from%vil_alpha, to%vil_alpha)
     CALL MOVE_ALLOC(from%vil_node, to%vil_node)
     CALL MOVE_ALLOC(from%vil_phi, to%vil_phi)

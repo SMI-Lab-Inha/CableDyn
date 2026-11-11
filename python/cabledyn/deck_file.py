@@ -3201,16 +3201,17 @@ class DeckFile:
     ) -> None:
         """Native ``apply_type_viv`` for the VIV section.
 
-        A row ``TypeName ClX [alpha]`` gives a line type in-line VIV: the in-line shedding
-        coefficient ``ClX >= 0`` (0 = off) and the band ``0 <= alpha < 1`` (default 0.15) of
-        its phase about twice the cross-flow one, so ``ClX > 0`` needs the type's LINE TYPES
-        lift ``Cl > 0``. A type takes one row.
+        A row ``TypeName ClX [alpha [Chh]]`` gives a line type in-line VIV: the in-line
+        shedding coefficient ``ClX >= 0`` (0 = off) and the band ``0 <= alpha < 1`` (default
+        0.15) of its phase about twice the cross-flow one, so ``ClX > 0`` needs the type's LINE
+        TYPES lift ``Cl > 0``; and the higher-harmonic coefficient ``Chh >= 0`` (default 0),
+        which needs ``ClX > 0``. A type takes one row.
         """
         named: set[str] = set()
         for row in self._rows("VIV"):
             where = self._at(row)
-            if len(row.tokens) not in (2, 3):
-                raise DeckFormatError(f"{where}: VIV rows must be: TypeName ClX [alpha]")
+            if len(row.tokens) not in (2, 3, 4):
+                raise DeckFormatError(f"{where}: VIV rows must be: TypeName ClX [alpha [Chh]]")
             name = row.tokens[0].lower()
             if name not in line_type_meta:
                 raise DeckFormatError(
@@ -3221,11 +3222,14 @@ class DeckFile:
             named.add(name)
             try:
                 clx = _native_float(row.tokens[1])
-                alpha = _native_float(row.tokens[2]) if len(row.tokens) == 3 else 0.15
+                alpha = _native_float(row.tokens[2]) if len(row.tokens) >= 3 else 0.15
+                chh = _native_float(row.tokens[3]) if len(row.tokens) == 4 else 0.0
             except ValueError as exc:
-                raise DeckFormatError(f"{where}: VIV ClX and alpha must be plain numbers") from exc
-            if not (math.isfinite(clx) and math.isfinite(alpha)):
-                raise DeckFormatError(f"{where}: VIV ClX and alpha must be finite")
+                raise DeckFormatError(
+                    f"{where}: VIV ClX, alpha and Chh must be plain numbers"
+                ) from exc
+            if not (math.isfinite(clx) and math.isfinite(alpha) and math.isfinite(chh)):
+                raise DeckFormatError(f"{where}: VIV ClX, alpha and Chh must be finite")
             if clx < 0.0 or clx > _NATIVE_MAX_COEFFICIENT:
                 raise DeckFormatError(
                     f"{where}: VIV in-line coefficient ClX must be non-negative (0 = in-line VIV "
@@ -3234,6 +3238,16 @@ class DeckFile:
             if not 0.0 <= alpha < 1.0:
                 raise DeckFormatError(
                     f"{where}: VIV in-line frequency band alpha must satisfy 0 <= alpha < 1"
+                )
+            if chh < 0.0 or chh > _NATIVE_MAX_COEFFICIENT:
+                raise DeckFormatError(
+                    f"{where}: VIV higher-harmonic coefficient Chh must be non-negative (0 = off) "
+                    "and at most 1e15"
+                )
+            if chh > 0.0 and not clx > 0.0:
+                raise DeckFormatError(
+                    f'{where}: VIV higher-harmonic force of LINE TYPE "{row.tokens[0]}" needs its '
+                    "in-line VIV (ClX > 0): it runs at the cross-flow plus in-line phase"
                 )
             if clx > 0.0 and name not in lift_type_names:
                 raise DeckFormatError(

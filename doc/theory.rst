@@ -1214,6 +1214,24 @@ run exactly as without the row. On the taut line of ``viv_taut_cable_inline.dat`
 span moves in line at twice the cross-flow frequency, A/D 0.19 against 0.03 with the cross-flow
 lift alone, and the same line as an ``EI = 0`` line gives the cable's amplitudes within 1 %.
 
+A fourth column ``Chh`` adds the higher-harmonic force of
+:ref:`Ulveseter et al. (2019) <ref-ulveseter2019>`, the lift's form at the sum of the two phases,
+
+.. math::
+
+   \mathbf{f}_{hh} = \tfrac{1}{2}\rho\,d\,C_{hh}\cos(\phi + \phi_x)\;U\,
+                     (\mathbf{t}\times\mathbf{v}_n) .
+
+With the cross-flow phase at the frequency :math:`\omega` and the in-line one at :math:`2\omega`
+it acts across the flow at :math:`3\omega`, and, through the turn of the relative flow by the
+motion, at :math:`\omega` and :math:`5\omega` across and :math:`2\omega` and :math:`4\omega` along the flow. It takes no
+state of its own: on a finite-EI cable it adds :math:`k_{hh}\cos(\phi + \phi_x)` to the node
+values of the lift scale the element integrates, on an ``EI = 0`` line it is a second node lift
+at the phase sum, and its derivatives enter the tangent with the lift's. Ulveseter et al. use
+:math:`C_{hh}` from 0 to 1.5 (with :math:`C_{v,y}` 0.85 and :math:`C_{v,x}` 0.75). On the
+in-line example with ``Chh`` 1.0 the quarter-span in-line response at four times the cross-flow
+frequency grows from A/D 0.002 to 0.007, the same on an ``EI = 0`` line.
+
 .. _theory-dry-buoyancy:
 
 Buoyancy and wetting

@@ -12,7 +12,12 @@ PROGRAM test_viv_inline_deck
   !!      and alpha outside [0, 1) are refused by name;
   !!   D4 the same deck as an EI = 0 line (the lumped node force, neighbour-averaged kinematics)
   !!      matches the finite-EI cable: cross-flow and in-line amplitudes within 2 %, the same
-  !!      frequencies within one 0.01 Hz bin.
+  !!      frequencies within one 0.01 Hz bin;
+  !!   D5 a higher-harmonic coefficient Chh 1.0 (Ulveseter et al. 2019, the fourth column) at
+  !!      least triples the quarter-span in-line response at four times the cross-flow frequency
+  !!      (the in-line share of the force at the cross-flow plus in-line phase), on the cable and
+  !!      the EI = 0 line alike (within 5 %); Chh 0 is the row without it, to the printed digits;
+  !!      Chh on a type without in-line VIV and a negative Chh are refused.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   IMPLICIT NONE
@@ -253,16 +258,66 @@ CONTAINS
       CALL require(ABS(peak_frequency(tt, z) - fz_f) <= 0.01_wp .AND. ABS(peak_frequency(tt, y) - fy_f) <= 0.01_wp, &
                    'D4: and its frequencies within 0.01 Hz')
     END BLOCK
+    ! D5: the higher-harmonic force
+    BLOCK
+      REAL(wp), ALLOCATABLE :: th(:, :), t0h(:, :), te(:, :)
+      INTEGER :: nh, n0h, neh
+      REAL(wp) :: f1, a4_il, a4_hh, a4_e
+      CALL write_deck('vid_hh.dat', 'riser 0.85 0.15 1.0', 100.0_wp)
+      CALL run('vid_hh.dat', 'vid_hh', ok, msg)
+      CALL require(ok, 'D5: the Chh deck runs: '//TRIM(msg))
+      CALL write_deck('vid_hh0.dat', 'riser 0.85 0.15 0.0', 100.0_wp)
+      CALL run('vid_hh0.dat', 'vid_hh0', ok, msg)
+      CALL require(ok, 'D5: the Chh 0 deck runs: '//TRIM(msg))
+      CALL write_deck('vid_hhe.dat', 'riser 0.85 0.15 1.0', 100.0_wp, ei='0.0')
+      CALL run('vid_hhe.dat', 'vid_hhe', ok, msg)
+      CALL require(ok, 'D5: the EI = 0 Chh deck runs: '//TRIM(msg))
+      CALL read_out('vid_hh.out', th, nh)
+      CALL read_out('vid_hh0.out', t0h, n0h)
+      CALL read_out('vid_hhe.out', te, neh)
+      CALL require(nh == ni .AND. n0h == ni .AND. neh == ni, 'D5: the runs wrote the same rows')
+      IF (.NOT. (nh == ni .AND. n0h == ni .AND. neh == ni)) RETURN
+      CALL require(ALL(t0h(:, 1:n0h) == ti(:, 1:ni)), 'D5: a VIV row with Chh 0 is the row without it')
+      CALL window(ti, ni, 50.0_wp, tt, z, y)
+      f1 = peak_frequency(tt, z)
+      a4_il = fourier_amplitude(tt, y, 4.0_wp*f1)
+      CALL window(th, nh, 50.0_wp, tt, z, y)
+      f1 = peak_frequency(tt, z)
+      a4_hh = fourier_amplitude(tt, y, 4.0_wp*f1)
+      CALL window(te, neh, 50.0_wp, tt, z, y)
+      a4_e = fourier_amplitude(tt, y, 4.0_wp*peak_frequency(tt, z))
+      WRITE (*, '(A,3F8.4)') 'D5: quarter-span in-line amplitude/D at 4 f, Chh 0, Chh 1, Chh 1 EI = 0: ', &
+        a4_il/D, a4_hh/D, a4_e/D
+      CALL require(a4_hh >= 3.0_wp*a4_il, 'D5: Chh raises the fourth in-line harmonic at least threefold')
+      CALL require(ABS(a4_e/a4_hh - 1.0_wp) <= 0.05_wp, 'D5: the EI = 0 line takes it within 5 %')
+    END BLOCK
   END SUBROUTINE check_runs
 
+  REAL(wp) FUNCTION fourier_amplitude(tt, x, f) RESULT(a)
+    !! The amplitude of x - mean(x) at frequency f (Hann window, so a sine of amplitude A gives A).
+    REAL(wp), INTENT(IN) :: tt(:), x(:), f
+    REAL(wp) :: w(SIZE(x)), xm(SIZE(x)), re, im
+    INTEGER :: i, n
+    n = SIZE(x)
+    DO i = 1, n
+      w(i) = 0.5_wp - 0.5_wp*COS(2.0_wp*PI*REAL(i - 1, wp)/REAL(n - 1, wp))
+    END DO
+    xm = x - SUM(x)/REAL(n, wp)
+    re = SUM(w*xm*COS(2.0_wp*PI*f*tt))
+    im = SUM(w*xm*SIN(2.0_wp*PI*f*tt))
+    a = 2.0_wp*SQRT(re*re + im*im)/SUM(w)
+  END FUNCTION fourier_amplitude
+
   SUBROUTINE check_refusals()
-    CALL refused('riser 0.85 0.15 7', 'TypeName ClX [alpha]', 'a row of four columns')
+    CALL refused('riser 0.85 0.15 7 1', 'TypeName ClX [alpha [Chh]]', 'a row of five columns')
     CALL refused('cable 0.85', 'undefined LINE TYPE', 'an unknown type')
     CALL refused('riser 0.85;riser 0.5', 'twice', 'a repeated type')
     CALL refused('riser -0.1', 'non-negative', 'a negative ClX')
     CALL refused('riser 0.85 1.0', '0 <= alpha < 1', 'alpha = 1')
     CALL refused('riser 0.85 x', 'plain numbers', 'a non-numeric alpha')
     CALL refused('riser 0.85', 'cross-flow lift', 'ClX on a type without the cross-flow lift', cl='0.0')
+    CALL refused('riser 0.0 0.15 1.0', 'needs its in-line VIV', 'Chh without in-line VIV')
+    CALL refused('riser 0.85 0.15 -1.0', 'Chh must be non-negative', 'a negative Chh')
   END SUBROUTINE check_refusals
 
   SUBROUTINE refused(rows, needle, what, ei, cl)

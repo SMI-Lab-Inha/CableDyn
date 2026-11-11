@@ -1154,9 +1154,9 @@ relative flow, the direction of the drag, at twice the cross-flow frequency (Ulv
 
 ```text
 --------------------- VIV ----------------------------------------------
-TypeName   ClX    alpha
-(-)        (-)    (-)
-cable      0.85   0.15
+TypeName   ClX    alpha   Chh
+(-)        (-)    (-)     (-)
+cable      0.85   0.15    0.5
 ```
 
 | Column | Meaning |
@@ -1164,6 +1164,7 @@ cable      0.85   0.15
 | `TypeName` | an existing LINE TYPES name (case-insensitive), at most one row each |
 | `ClX` | in-line shedding coefficient `C_x` >= 0, at most 1e15; `0` is no in-line VIV |
 | `alpha` | optional frequency band of the in-line phase about twice the cross-flow one, `0 <= alpha < 1` (default 0.15) |
+| `Chh` | optional higher-harmonic coefficient `C_hh` >= 0, at most 1e15 (default 0, none); `Chh > 0` needs `ClX > 0` |
 
 Behaviour:
 
@@ -1171,14 +1172,19 @@ Behaviour:
   flow and `U` its speed; its phase follows `dphi_x/dt = 2 (dphi/dt) [1 + alpha sin(phi_xd - phi_x)]`,
   `phi` the cross-flow phase and `phi_xd` the phase of the in-line motion. Ulveseter et al. take
   `ClX = 0.85` and `alpha = 0.15` with `Cl = 0.65`.
+- `Chh` adds the higher-harmonic force of Ulveseter et al. (2019), the lift's form
+  `1/2 rho D Chh cos(phi + phi_x) U (t x v_n)` at the sum of the two phases: across the flow at
+  three times the cross-flow frequency (and once and five times, through the in-line motion),
+  along it at twice and four times. It needs no state of its own. Ulveseter et al. use `Chh`
+  from 0 to 1.5.
 - The Outputs flag `V` file carries the in-line force with the lift, and the phase is part of
   the step-recovery, snapshot and checkpoint state. A row with `ClX = 0` leaves the run exactly as
   without it.
 - It acts wherever the cross-flow lift does: on `EI = 0` lines (a node force over the node's
   half elements, as the lift) and on finite-EI cables (integrated with the lift), standalone and
-  coupled. A row fails if it is not `TypeName ClX [alpha]`,
-  names an undefined or already named type, or holds a value out of range, and `ClX > 0` fails
-  on a type without the cross-flow lift.
+  coupled. A row fails if it is not `TypeName ClX [alpha [Chh]]`,
+  names an undefined or already named type, or holds a value out of range; `ClX > 0` fails
+  on a type without the cross-flow lift, and `Chh > 0` with `ClX = 0`.
 - See `examples/viv_taut_cable_inline.dat`.
 
 ### FAILURE (optional, EI = 0 decks)

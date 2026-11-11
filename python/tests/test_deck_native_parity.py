@@ -989,7 +989,15 @@ _VIV_CABLE = _example("viv_taut_line_crossflow.dat", (_VIV_EI0, "-0.8       1.0 
 
 
 @pytest.mark.parametrize(
-    "rows", [("riser 0.85 0.15",), ("riser 0.85",), ("riser 0",), ("RISER 0.5 0.0",)]
+    "rows",
+    [
+        ("riser 0.85 0.15",),
+        ("riser 0.85",),
+        ("riser 0",),
+        ("RISER 0.5 0.0",),
+        ("riser 0.85 0.15 1.0",),
+        ("riser 0 0.15 0",),
+    ],
 )
 def test_inline_viv_rows_are_accepted(rows):
     DeckFile.from_text(_section(_VIV_CABLE, "VIV", "TypeName ClX alpha", "(-) (-) (-)", *rows))
@@ -998,10 +1006,13 @@ def test_inline_viv_rows_are_accepted(rows):
 @pytest.mark.parametrize(
     ("rows", "message"),
     [
-        (("riser 0.85 0.15 7",), "VIV rows must be: TypeName ClX [alpha]"),
+        (("riser 0.85 0.15 7 1",), "VIV rows must be: TypeName ClX [alpha [Chh]]"),
         (("cable 0.85",), 'VIV row names undefined LINE TYPE "cable"'),
         (("riser 0.85", "riser 0.5"), 'VIV names LINE TYPE "riser" twice'),
-        (("riser 0.85 x",), "VIV ClX and alpha must be plain numbers"),
+        (("riser 0.85 x",), "VIV ClX, alpha and Chh must be plain numbers"),
+        (("riser 0.85 0.15 y",), "VIV ClX, alpha and Chh must be plain numbers"),
+        (("riser 0.85 0.15 -1",), "Chh must be non-negative"),
+        (("riser 0 0.15 1",), "needs its in-line VIV (ClX > 0)"),
         (("riser -0.1",), "ClX must be non-negative"),
         (("riser 2.0e15",), "ClX must be non-negative"),
         (("riser 0.85 1.0",), "alpha must satisfy 0 <= alpha < 1"),
