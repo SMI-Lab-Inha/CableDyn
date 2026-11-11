@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from cabledyn import LineNodeHistory, VIVResponse, viv_response
+from cabledyn.results import TimeHistory
 
 L = 100.0
 D = 0.1
@@ -79,6 +80,41 @@ def test_modal_amplitudes_find_the_modes():
     s = response.arc_length
     custom = response.modal_amplitudes("cross_flow", shapes=[np.sin(2 * np.pi * s / L)])
     assert custom.mode_numbers == (1,) and custom.residual == pytest.approx(1.0, rel=1e-6)
+
+
+def _main_output(displacement, nodes) -> TimeHistory:
+    """The L1N<J>p[xyz] channels of some nodes of the _history line, as a main output."""
+    whole = _history(displacement)
+    channels = ["Time(s)"]
+    columns = [whole.time]
+    for node in nodes:
+        for axis in "XYZ":
+            channels.append(f"L1N{node}p{axis.lower()}")
+            columns.append(whole.column(f"Node{node}{axis}(m)"))
+    return TimeHistory(Path("run.out"), "", tuple(channels), None, np.column_stack(columns))
+
+
+def test_default_shapes_need_the_whole_line():
+    interior = viv_response(_main_output(_standing, range(5, 38)), flow=FLOW, diameter=D, line_id=1)
+    assert not interior.whole_line
+    # the sines would vanish at nodes 5 and 37 instead of the line's ends: refused
+    with pytest.raises(ValueError, match="the default shapes need the whole line"):
+        interior.modal_amplitudes("cross_flow")
+    # shapes at the nodes held are fitted as given
+    s = np.linspace(0.0, L, N_NODES)[4:37]
+    fit = interior.modal_amplitudes("cross_flow", shapes=[np.sin(np.pi * s / L)])
+    assert fit.rms_over_diameter[0] == pytest.approx(0.08 / math.sqrt(2) / D, rel=1e-9)
+    assert fit.residual < 1e-9
+    assert viv_response(_history(_standing), flow=FLOW, diameter=D).whole_line
+
+
+def test_travelling_wave_index_is_nan_without_motion():
+    still = viv_response(_history(lambda t, s: (0.0 * t * s, 0.0 * t * s)), flow=FLOW, diameter=D)
+    assert math.isnan(still.frequency("cross_flow"))
+    assert math.isnan(still.travelling_wave_index("cross_flow"))
+    assert math.isnan(still.travelling_wave_index("in_line"))
+    along = viv_response(_history(_standing), flow=(1.0, 0.0, 0.0), diameter=D)
+    assert math.isnan(along.travelling_wave_index("cross_flow"))
 
 
 def test_travelling_wave_index_separates_standing_and_travelling_waves():

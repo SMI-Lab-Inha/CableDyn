@@ -35,7 +35,8 @@ import numpy.typing as npt
 
 from cabledyn._csv import number, write_csv
 from cabledyn._optional import pyplot
-from cabledyn.results import TimeHistory
+from cabledyn.formats import MoorDynLineHistory
+from cabledyn.results import LineNodeHistory, TimeHistory
 from cabledyn.spectra import _sampling
 from cabledyn.touchdown import _positions
 
@@ -131,6 +132,10 @@ class VIVResponse:
         Diameter the amplitudes are divided by, m.
     flow : numpy.ndarray
         Read-only ``(3,)`` flow velocity the frame is taken against, m/s.
+    whole_line : bool
+        Whether the nodes are the whole line, End A to End B (a per-line
+        file), so that ``arc_length`` spans it; a main output may hold only
+        some of its nodes.
     """
 
     time: npt.NDArray[Any]
@@ -144,6 +149,7 @@ class VIVResponse:
     cross_flow: npt.NDArray[Any]
     diameter: float
     flow: npt.NDArray[Any]
+    whole_line: bool = True
 
     @property
     def node_count(self) -> int:
@@ -249,12 +255,20 @@ class VIVResponse:
         ------
         ValueError
             If the shapes are not finite, have the wrong number of nodes, or
-            fewer nodes with a frame than shapes remain.
+            fewer nodes with a frame than shapes remain; or if the default
+            shapes are asked of a response that does not hold the whole line.
         """
         values = self.displacement(direction)
         if shapes is None:
             if isinstance(n_modes, bool) or int(n_modes) != n_modes or n_modes < 1:
                 raise ValueError("n_modes must be a positive integer")
+            if not self.whole_line:
+                # the sines vanish at the line's ends, which the nodes of a main output may
+                # not include: fitted over the span of the nodes it holds, they would be wrong
+                raise ValueError(
+                    "the default shapes need the whole line, End A to End B: analyse the "
+                    "per-line .p.out file, or give shapes at the nodes held"
+                )
             span = float(self.arc_length[-1])
             if not span > 0.0:
                 raise ValueError("the mean shape has no length")
@@ -317,6 +331,8 @@ class VIVResponse:
         whose nodes move in or out of phase, and 1 for a wave of constant
         amplitude travelling over whole wavelengths. ``nan`` without motion.
         """
+        if frequency is None and not math.isfinite(self.frequency(direction)):
+            return math.nan  # no motion, or no node with a flow frame
         shape = self.complex_shape(direction, frequency)
         framed = np.isfinite(shape)
         parts = np.vstack((shape[framed].real, shape[framed].imag))
@@ -523,4 +539,5 @@ def viv_response(
         cross_flow=_readonly(cross_flow),
         diameter=float(diameter),
         flow=_readonly(velocity),
+        whole_line=isinstance(history, (LineNodeHistory, MoorDynLineHistory)),
     )

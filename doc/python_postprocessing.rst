@@ -443,7 +443,8 @@ in-line and cross-flow displacement of every node at every sample and gives:
   ``sin(n pi s/S)`` of a taut line with fixed ends (``s`` the mean chord length from End A, ``S``
   the line's), or of shapes you give (for example a component of the run's mode shapes,
   :doc:`outputs`), with their RMS, the dominant mode and the share of the motion they leave
-  unexplained;
+  unexplained. The sines need the whole line, so they take a per-line file; on the nodes a main
+  output holds, give the shapes;
 * ``complex_shape``, the node Fourier coefficients at one frequency, and from it
   ``travelling_wave_index``, the ratio of the smaller to the larger singular value of its real and
   imaginary parts (the travelling index of the complex orthogonal decomposition of
