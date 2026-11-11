@@ -1174,7 +1174,7 @@ them with the rest of the state.
 In-line vortex-induced vibration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A finite-EI line type can add the in-line shedding force of the combined cross-flow and in-line
+A line type can add the in-line shedding force of the combined cross-flow and in-line
 model of :ref:`Ulveseter et al. (2018) <ref-ulveseter2018>`, a ``VIV`` section row
 ``TypeName ClX [alpha]`` (see :doc:`file_formats`). A second phase :math:`\phi_x` per node drives
 a force along the relative normal flow, per unit deformed length
@@ -1197,14 +1197,22 @@ with the running RMS values of the cross-flow phase (:math:`\phi_{\dot x} = 0` a
 in-line motion). Ulveseter et al. take :math:`C_x = 0.85` and :math:`\alpha = 0.15` (the default
 here) with a cross-flow :math:`C_L` of 0.65. The in-line phase starts at twice the cross-flow
 one, so the two start locked. The in-line rate is twice the cross-flow one, so ``ClX > 0``
-needs the type's cross-flow :math:`C_L > 0`. The force is integrated with the lift at the same
-Gauss points, :math:`\cos\phi_x` interpolated between the element's end nodes, and its exact
-position and velocity derivatives enter the tangent. The phase is explicit with the Heun commit,
+needs the type's cross-flow :math:`C_L > 0`. On an ``EI = 0`` line it is a node force like the
+lift,
+
+.. math::
+
+   \mathbf{F}_x = \tfrac{1}{4}\rho\,d\,C_x\,(l_{i} + l_{i+1})\,U\cos\phi_x\;\mathbf{v}_n ,
+
+with the lift's wetted fractions, node tangent and neighbour-averaged kinematics (for the phase
+and in the force). On a finite-EI cable it is integrated with the lift at the same Gauss points,
+:math:`\cos\phi_x` interpolated between the element's end nodes. Its exact position and velocity
+derivatives enter the tangent on both. The phase is explicit with the Heun commit,
 its end-state rate taken from the end-state cross-flow rate. The phase and the two mean squares
 are part of the step-recovery, snapshot and checkpoint state, and a ``ClX`` of zero leaves the
 run exactly as without the row. On the taut line of ``viv_taut_cable_inline.dat`` the quarter
 span moves in line at twice the cross-flow frequency, A/D 0.19 against 0.03 with the cross-flow
-lift alone. ``EI = 0`` lines do not take in-line VIV yet.
+lift alone, and the same line as an ``EI = 0`` line gives the cable's amplitudes within 1 %.
 
 .. _theory-dry-buoyancy:
 

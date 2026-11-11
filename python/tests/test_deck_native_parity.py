@@ -1020,11 +1020,9 @@ def test_inline_viv_needs_the_crossflow_lift():
     )
 
 
-def test_inline_viv_needs_a_finite_ei_line():
-    text = _section(_example("viv_taut_line_crossflow.dat"), "VIV", "riser 0.85")
-    _rejects(text, re.escape("in-line VIV acts on finite-EI lines (EI > 0)"))
-    # a zero in-line coefficient is no in-line VIV, which the EI = 0 line takes
-    DeckFile.from_text(_section(_example("viv_taut_line_crossflow.dat"), "VIV", "riser 0.0"))
+@pytest.mark.parametrize("row", ["riser 0.85", "riser 0.0"])
+def test_inline_viv_acts_on_an_ei0_line(row):
+    DeckFile.from_text(_section(_example("viv_taut_line_crossflow.dat"), "VIV", row))
 
 
 def test_stiffener_needs_a_finite_ei_line():

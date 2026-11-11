@@ -296,7 +296,7 @@ the half-range and centre of its band in non-dimensional frequency (MoorDyn's `d
 `cF = 0.18` when only `Cl` is given). `Cl = 0` is no VIV; `Cl > 0` needs `cF > 0` and
 `0 <= dF < cF`, and the line's drag in water. It acts in the dynamics on `EI = 0` lines and
 finite-EI cables (see [Cross-flow VIV](theory.rst)); the 14-column row has no VIV columns. The
-in-line force of a finite-EI type is a [VIV](#viv-optional-finite-ei-lines) section row.
+in-line force of a type is a [VIV](#viv-optional) section row.
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:
@@ -1145,7 +1145,7 @@ Behaviour:
   `NodeA`) the `End` column follows the written row, so the stiffener stays on the same physical
   end. Stiffeners run wherever the cubic-Hermite cable does, standalone and coupled.
 
-### VIV (optional, finite-EI lines)
+### VIV (optional)
 
 In-line vortex-induced vibration of a line type: a second vortex-shedding force along the
 relative flow, the direction of the drag, at twice the cross-flow frequency (Ulveseter et al.
@@ -1174,8 +1174,9 @@ Behaviour:
 - The Outputs flag `V` file carries the in-line force with the lift, and the phase is part of
   the step-recovery, snapshot and checkpoint state. A row with `ClX = 0` leaves the run exactly as
   without it.
-- It acts on finite-EI lines (`EI > 0`) on every route the cubic-Hermite cable runs; an `EI = 0`
-  line of a type with `ClX > 0` stops by name. A row fails if it is not `TypeName ClX [alpha]`,
+- It acts wherever the cross-flow lift does: on `EI = 0` lines (a node force over the node's
+  half elements, as the lift) and on finite-EI cables (integrated with the lift), standalone and
+  coupled. A row fails if it is not `TypeName ClX [alpha]`,
   names an undefined or already named type, or holds a value out of range, and `ClX > 0` fails
   on a type without the cross-flow lift.
 - See `examples/viv_taut_cable_inline.dat`.

@@ -30,7 +30,7 @@ LineID   LineType   Length   NumSegs
 1        riser      99.9001  50
 --------------------- VIV ----------------------------------------------
 -- In-line VIV of a line type: the in-line shedding coefficient ClX (0 = off; it needs the type's
--- cross-flow Cl > 0) and the band alpha (0 <= alpha < 1, default 0.15). Finite-EI lines only.
+-- cross-flow Cl > 0) and the band alpha (0 <= alpha < 1, default 0.15). EI = 0 lines take it too.
 TypeName   ClX    alpha
 (-)        (-)    (-)
 riser      0.85   0.15

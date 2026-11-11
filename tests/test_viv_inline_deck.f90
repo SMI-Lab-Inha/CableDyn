@@ -8,8 +8,11 @@ PROGRAM test_viv_inline_deck
   !!   D1 with ClX 0.85 the quarter-span in-line (y) response oscillates at twice the mid-span
   !!      cross-flow (z) frequency and is larger than without the VIV section;
   !!   D2 a VIV row with ClX 0 is the deck without the section, to the printed digits;
-  !!   D3 malformed rows, an unknown or repeated type, ClX on a type without the cross-flow lift,
-  !!      alpha outside [0, 1) and in-line VIV on an EI = 0 line are refused by name.
+  !!   D3 malformed rows, an unknown or repeated type, ClX on a type without the cross-flow lift
+  !!      and alpha outside [0, 1) are refused by name;
+  !!   D4 the same deck as an EI = 0 line (the lumped node force, neighbour-averaged kinematics)
+  !!      matches the finite-EI cable: cross-flow and in-line amplitudes within 2 %, the same
+  !!      frequencies within one 0.01 Hz bin.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   IMPLICIT NONE
@@ -222,6 +225,34 @@ CONTAINS
       ay_cf/D
     CALL require(ABS(fy/fz - 2.0_wp) <= 0.15_wp, 'D1: the in-line response is at twice the cross-flow frequency')
     CALL require(ay_il > 2.0_wp*ay_cf, 'D1: the in-line force raises the in-line response')
+    ! D4: the EI = 0 line
+    BLOCK
+      REAL(wp), ALLOCATABLE :: te(:, :)
+      INTEGER :: ne0
+      REAL(wp) :: az_f, az_0, ay_f, ay_0, fz_f, fy_f
+      CALL window(ti, ni, 50.0_wp, tt, z, y)
+      az_f = 0.5_wp*(MAXVAL(z) - MINVAL(z))
+      ay_f = 0.5_wp*(MAXVAL(y) - MINVAL(y))
+      fz_f = peak_frequency(tt, z)
+      fy_f = peak_frequency(tt, y)
+      CALL write_deck('vid_ei0.dat', 'riser 0.85 0.15', 100.0_wp, ei='0.0')
+      CALL run('vid_ei0.dat', 'vid_ei0', ok, msg)
+      CALL require(ok, 'D4: the EI = 0 in-line VIV deck runs: '//TRIM(msg))
+      CALL read_out('vid_ei0.out', te, ne0)
+      CALL require(ne0 == ni, 'D4: the EI = 0 run wrote the same rows')
+      IF (ne0 /= ni) RETURN
+      CALL window(te, ne0, 50.0_wp, tt, z, y)
+      az_0 = 0.5_wp*(MAXVAL(z) - MINVAL(z))
+      ay_0 = 0.5_wp*(MAXVAL(y) - MINVAL(y))
+      WRITE (*, '(A,2F8.4,A,2F8.4)') 'D4: CF and IL amplitude/D, EI = 0 line ', az_0/D, ay_0/D, &
+        ', finite-EI cable ', az_f/D, ay_f/D
+      WRITE (*, '(A,2F8.4,A,2F8.4)') 'D4: CF and IL frequency [Hz], EI = 0 line ', peak_frequency(tt, z), &
+        peak_frequency(tt, y), ', finite-EI cable ', fz_f, fy_f
+      CALL require(ABS(az_0/az_f - 1.0_wp) <= 0.02_wp .AND. ABS(ay_0/ay_f - 1.0_wp) <= 0.02_wp, &
+                   'D4: the EI = 0 line matches the cable''s amplitudes within 2 %')
+      CALL require(ABS(peak_frequency(tt, z) - fz_f) <= 0.01_wp .AND. ABS(peak_frequency(tt, y) - fy_f) <= 0.01_wp, &
+                   'D4: and its frequencies within 0.01 Hz')
+    END BLOCK
   END SUBROUTINE check_runs
 
   SUBROUTINE check_refusals()
@@ -232,7 +263,6 @@ CONTAINS
     CALL refused('riser 0.85 1.0', '0 <= alpha < 1', 'alpha = 1')
     CALL refused('riser 0.85 x', 'plain numbers', 'a non-numeric alpha')
     CALL refused('riser 0.85', 'cross-flow lift', 'ClX on a type without the cross-flow lift', cl='0.0')
-    CALL refused('riser 0.85', 'finite-EI lines', 'in-line VIV on an EI = 0 line', ei='0.0')
   END SUBROUTINE check_refusals
 
   SUBROUTINE refused(rows, needle, what, ei, cl)

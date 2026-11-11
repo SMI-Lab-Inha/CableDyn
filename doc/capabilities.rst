@@ -147,8 +147,8 @@ Line and constitutive capability
    * - In-line VIV (``VIV`` section ``ClX``, ``alpha``)
      - Standalone and coupled
      - the in-line shedding force of Ulveseter et al. (2018) at twice the cross-flow frequency, on
-       finite-EI cables of the Hermite and multibody marches (:ref:`theory-viv-inline`), its state
-       in the checkpoint; not on ``EI = 0`` lines yet
+       ``EI = 0`` lines and finite-EI cables wherever the cross-flow lift runs
+       (:ref:`theory-viv-inline`), its state in the checkpoint
 
 Loads and environment
 ---------------------

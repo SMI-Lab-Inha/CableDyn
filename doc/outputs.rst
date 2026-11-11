@@ -340,8 +340,8 @@ write. Any other letter is a parse error. Mixed ``EI = 0`` + finite-EI decks rej
        flag ``V``; a static run carries no lift and writes no file). On an ``EI = 0`` line the
        end nodes carry none, as in MoorDyn; on a finite-EI line each element's lift is lumped to
        its two nodes (the translational part of its consistent load), so the end nodes carry
-       the lift of their half-elements, and a type with in-line VIV (the ``VIV`` section) adds
-       its in-line force. Zero on a line without VIV (``Cl = 0``)
+       the lift of their half-elements. On both, a type with in-line VIV (the ``VIV`` section)
+       adds its in-line force. Zero on a line without VIV (``Cl = 0``)
    * - ``r``
      - ``<out_root>.Line<L>.range.out``
      - range graph: minimum, maximum and mean over the run of the node tension, curvature, bend
