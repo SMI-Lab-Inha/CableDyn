@@ -3180,20 +3180,17 @@ class DeckFile:
 
     def _check_viv_section(
         self,
-        line_ids: set[str],
-        section_types_by_line: dict[str, list[str]],
         line_type_meta: dict[str, tuple[float, float, float, float]],
         lift_type_names: set[str],
     ) -> None:
-        """Native ``apply_type_viv`` and its finalize check for the VIV section.
+        """Native ``apply_type_viv`` for the VIV section.
 
         A row ``TypeName ClX [alpha]`` gives a line type in-line VIV: the in-line shedding
         coefficient ``ClX >= 0`` (0 = off) and the band ``0 <= alpha < 1`` (default 0.15) of
         its phase about twice the cross-flow one, so ``ClX > 0`` needs the type's LINE TYPES
-        lift ``Cl > 0``. A type takes one row; the in-line force acts on finite-EI lines.
+        lift ``Cl > 0``. A type takes one row.
         """
         named: set[str] = set()
-        inline_types: set[str] = set()
         for row in self._rows("VIV"):
             where = self._at(row)
             if len(row.tokens) not in (2, 3):
@@ -3227,16 +3224,6 @@ class DeckFile:
                     f'{where}: VIV in-line VIV of LINE TYPE "{row.tokens[0]}" needs its '
                     "cross-flow lift (LINE TYPES Cl > 0): the in-line phase runs at twice the "
                     "cross-flow one"
-                )
-            if clx > 0.0:
-                inline_types.add(name)
-        for line_id in sorted(line_ids, key=int):
-            names = section_types_by_line.get(line_id, [])
-            finite = any(line_type_meta[name][3] > 0.0 for name in names if name in line_type_meta)
-            if not finite and inline_types & set(names):
-                raise DeckFormatError(
-                    f"{self._label}: line {line_id} is an EI = 0 line of a type with in-line VIV "
-                    "(VIV ClX > 0): in-line VIV acts on finite-EI lines (EI > 0)"
                 )
 
     def _legacy_rod_type_columns(self, record: DeckRecord) -> bool:
@@ -4409,7 +4396,7 @@ class DeckFile:
             )
 
         self._check_stiffeners(line_ids, section_types_by_line, line_type_meta, line_lengths)
-        self._check_viv_section(line_ids, section_types_by_line, line_type_meta, viv_type_names)
+        self._check_viv_section(line_type_meta, viv_type_names)
         self._check_attachments(line_ids, section_types_by_line, line_type_meta, line_lengths)
 
         assigned_end_connections: set[tuple[str, str]] = set()

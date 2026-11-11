@@ -53,7 +53,8 @@ PROGRAM test_model
   CALL case_resolved_substeps()
   CALL case_substep_paths()
   CALL case_substep_snap_only()
-  CALL case_substeps_restore_viv_state()
+  CALL case_substeps_restore_viv_state(.FALSE.)
+  CALL case_substeps_restore_viv_state(.TRUE.)
   CALL case_coupled_load_sign()
   CALL case_coupled_motion_update()
   CALL case_external_load_update()
@@ -1721,7 +1722,7 @@ CONTAINS
     CALL require(es == CD_MODEL_OK, 'damping:end')
   END SUBROUTINE case_damping_model_load
 
-  SUBROUTINE case_substeps_restore_viv_state()
+  SUBROUTINE case_substeps_restore_viv_state(inline)
     !! The rotation-resolved sub-stepping of a line carrying VIV: a 10 m taut line in a 0.5 m/s
     !! cross current with Cl 0.8 on every element, End B heaved by 1 m over 2 s so that its
     !! chords turn by more than a degree per 0.02 s step. Solving the first sub-stepped pass
@@ -1729,14 +1730,16 @@ CONTAINS
     !! nothing bit for bit, the shedding phases and running mean squares included; a failing
     !! sub-step (TEST-ONLY sub_test_fail) returns the plain step, and the run then equals the
     !! run with ei0_substeps off bit for bit. Without the VIV state in the sub-step slots the
-    !! sub-steps advanced the phase again from the plain step's phase.
+    !! sub-steps advanced the phase again from the plain step's phase. inline adds in-line VIV
+    !! (clx 0.85): its phase and mean squares follow the same rules, and a model copy carries them.
+    LOGICAL, INTENT(IN) :: inline
     INTEGER, PARAMETER :: NE = 10, NN = NE + 1, NSTEP = 60
     REAL(wp), PARAMETER :: DT = 0.02_wp, AMP = 1.0_wp, PER = 2.0_wp
     TYPE(CD_ModelType) :: auto_m, rep_m, fb_m, off_m
     TYPE(GenAlphaConfig) :: cfg
     INTEGER :: conn(2, NE), fixed(6), es, k, n_iter
     REAL(wp) :: q0(3*NN), v0(3*NN), f_ext(3*NN), pq(3*NN), pv(3*NN), pa(3*NN), fluid(3, NN), wl(NN)
-    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), cl(NE), dia(NE), cf(NE), df(NE), phi0(NN), w, t
+    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), cl(NE), dia(NE), cf(NE), df(NE), phi0(NN), w, t, phx0(NN)
     LOGICAL :: conv, stalled, all_conv
     CHARACTER(200) :: em
 
@@ -1766,10 +1769,17 @@ CONTAINS
                        drag_diameter=0.1_wp, drag_cdn=1.2_wp, drag_cdt=0.0_wp)
     CALL require(es == CD_MODEL_OK, 'substep-viv:init: '//TRIM(em))
     IF (es /= CD_MODEL_OK) RETURN
-    CALL CD_Set_Model_VIV(auto_m, 1025.0_wp, cl, dia, cf, df, 0.25_wp, es, em)
+    IF (inline) THEN
+      CALL CD_Set_Model_VIV(auto_m, 1025.0_wp, cl, dia, cf, df, 0.25_wp, es, em, clx=0.85_wp + 0.0_wp*cl, &
+                            il_alpha=0.15_wp + 0.0_wp*cl)
+    ELSE
+      CALL CD_Set_Model_VIV(auto_m, 1025.0_wp, cl, dia, cf, df, 0.25_wp, es, em)
+    END IF
     CALL require(es == CD_MODEL_OK, 'substep-viv:viv: '//TRIM(em))
     IF (es /= CD_MODEL_OK) RETURN
+    CALL require(auto_m%has_viv_il .EQV. inline, 'substep-viv:in-line installed as asked')
     phi0 = auto_m%viv_phi
+    IF (inline) phx0 = auto_m%vil_phi
     CALL CD_Copy_Model(auto_m, rep_m, es, em)
     rep_m%sub_test_repeat = .TRUE.
     CALL CD_Copy_Model(auto_m, fb_m, es, em)
@@ -1807,6 +1817,14 @@ CONTAINS
     CALL require(fb_m%sub_stats%fallbacks > 0 .AND. ALL(fb_m%q == off_m%q) .AND. ALL(fb_m%v == off_m%v) .AND. &
                  ALL(fb_m%a == off_m%a) .AND. ALL(fb_m%viv_phi == off_m%viv_phi) .AND. &
                  ALL(fb_m%viv_ms == off_m%viv_ms), 'substep-viv:fallback-is-the-plain-step')
+    IF (inline) THEN
+      CALL require(rep_m%has_viv_il .AND. fb_m%has_viv_il .AND. off_m%has_viv_il, 'substep-viv:copies-carry-in-line')
+      CALL require(ANY(auto_m%vil_phi /= phx0) .AND. ANY(auto_m%vil_ms /= 0.0_wp), 'substep-viv:in-line-states-move')
+      CALL require(ALL(rep_m%vil_phi == auto_m%vil_phi) .AND. ALL(rep_m%vil_ms == auto_m%vil_ms), &
+                   'substep-viv:in-line-restore-is-complete')
+      CALL require(ALL(fb_m%vil_phi == off_m%vil_phi) .AND. ALL(fb_m%vil_ms == off_m%vil_ms), &
+                   'substep-viv:in-line-fallback-is-the-plain-step')
+    END IF
     CALL CD_End_Model(auto_m, es, em)
     CALL CD_End_Model(rep_m, es, em)
     CALL CD_End_Model(fb_m, es, em)

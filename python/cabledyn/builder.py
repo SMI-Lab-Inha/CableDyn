@@ -208,7 +208,7 @@ class LineType:
         in non-dimensional frequency). ``cl`` set writes the 13-column row, with
         MoorDyn's ``df = 0.08`` and ``cf = 0.18`` where they are ``None``.
     clx, il_alpha : float | None
-        Optional in-line VIV of a finite-EI type, a ``VIV`` section row
+        Optional in-line VIV of a type, a ``VIV`` section row
         ``Name ClX [alpha]``: the in-line shedding coefficient (it needs ``cl``,
         the in-line phase running at twice the cross-flow one) and the frequency
         band of that phase, ``0 <= il_alpha < 1``; ``None`` leaves alpha out of

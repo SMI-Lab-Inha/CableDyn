@@ -23,7 +23,10 @@ PROGRAM test_viv_coupled
   !!   step: 0.5 s), and over 500 coupling steps when the deck has no dtM (5 s);
   !! * phase seed: MoorDyn's 2 pi i/N with node i counted from the deck's End A, also on a deck
   !!   written anchor first (which the reader turns around) and, through CD_Deck_VIV_Phase_Seed,
-  !!   at the deck nodes of a refined mesh (added nodes interpolated in arc length).
+  !!   at the deck nodes of a refined mesh (added nodes interpolated in arc length);
+  !! * in-line VIV (a VIV section, ClX 0.85, on both lines): the checkpoint blocks grow by the
+  !!   in-line phase and mean squares (3 per node), the restarted run continues bit for bit with
+  !!   both phases, a rebuild without the VIV state does not, and a rewound step repeats.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_End, CD_AGG_OK, &
                                          CD_AGG_NMovingPoints, CD_AGG_GetMovingPointMesh, CD_AGG_Step_Moving, &
@@ -41,15 +44,23 @@ PROGRAM test_viv_coupled
   REAL(wp), PARAMETER :: MD_AD = 0.662_wp, MD_F = 0.293_wp
   INTEGER, PARAMETER :: MID = 26
   INTEGER :: nfail
+  ! the deck of the restart and rewind cases, and whether its lines carry in-line VIV
+  CHARACTER(32) :: deck_name = 'viv_coupled.dat'
+  LOGICAL :: il_case = .FALSE.
 
   nfail = 0
   CALL write_deck('viv_coupled.dat', 0.8_wp)
   CALL write_deck('viv_coupled_nolift.dat', 0.0_wp)
+  CALL write_deck('viv_coupled_il.dat', 0.8_wp, inline=.TRUE.)
   CALL case_lockin()
   CALL case_restart()
   CALL case_rewind()
   CALL case_window()
   CALL case_seed()
+  deck_name = 'viv_coupled_il.dat'
+  il_case = .TRUE.
+  CALL case_restart()
+  CALL case_rewind()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' coupled VIV check(s) failed'
     ERROR STOP 1
@@ -96,7 +107,7 @@ CONTAINS
     TYPE(CD_AGG_ModuleType) :: a, b, c
     INTEGER :: s
     LOGICAL :: same_b, same_c
-    IF (.NOT. start(a, 'viv_coupled.dat')) RETURN
+    IF (.NOT. start(a, TRIM(deck_name))) RETURN
     DO s = 1, NPRE
       IF (.NOT. advance(a)) RETURN
     END DO
@@ -111,8 +122,8 @@ CONTAINS
       same_b = same_b .AND. identical(a, b)
       same_c = same_c .AND. identical(a, c)
     END DO
-    CALL check(same_b, 'the restarted run continues bit for bit')
-    CALL check(.NOT. same_c, 'a restart without the VIV state does not')
+    CALL check(same_b, TRIM(deck_name)//': the restarted run continues bit for bit')
+    CALL check(.NOT. same_c, TRIM(deck_name)//': a restart without the VIV state does not')
     CALL finish(a)
     CALL finish(b)
     CALL finish(c)
@@ -123,8 +134,8 @@ CONTAINS
     TYPE(CD_AGG_ModuleType) :: a, b
     INTEGER :: s, es
     CHARACTER(512) :: em
-    IF (.NOT. start(a, 'viv_coupled.dat')) RETURN
-    IF (.NOT. start(b, 'viv_coupled.dat')) RETURN
+    IF (.NOT. start(a, TRIM(deck_name))) RETURN
+    IF (.NOT. start(b, TRIM(deck_name))) RETURN
     DO s = 1, 500
       IF (.NOT. advance(a)) RETURN
       IF (.NOT. advance(b)) RETURN
@@ -138,7 +149,7 @@ CONTAINS
       IF (.NOT. advance(a)) RETURN
       IF (.NOT. advance(b)) RETURN
     END DO
-    CALL check(identical(a, b), 'a rewound step repeats bit for bit')
+    CALL check(identical(a, b), TRIM(deck_name)//': a rewound step repeats bit for bit')
     CALL CD_AGG_End(a, es, em)
     CALL CD_AGG_End(b, es, em)
   END SUBROUTINE case_rewind
@@ -285,7 +296,7 @@ CONTAINS
                              fresh(:)
     INTEGER :: es, npt, il, ndof, nv, nvc
     CHARACTER(512) :: em
-    ok = start(b, 'viv_coupled.dat')
+    ok = start(b, TRIM(deck_name))
     IF (.NOT. ok) RETURN
     npt = CD_AGG_NMovingPoints(a, es, em)
     ALLOCATE (pos(3, npt), vel(3, npt), acc(3, npt), load(3, npt))
@@ -300,7 +311,7 @@ CONTAINS
                                                 a_interior=aL(4:ndof - 3))
       ok = ok .AND. es == CD_SYSTEM_OK
       nv = CD_System_Line_VIV_MirrorSize(a%sys%fast%system, il)
-      ok = ok .AND. nv == 3*(ndof/3) + 1
+      ok = ok .AND. nv == MERGE(6, 3, il_case)*(ndof/3) + 1
       IF (with_viv .AND. nv > 0) THEN
         ALLOCATE (buf(nv))
         CALL CD_Get_System_Line_VIV_State(a%sys%fast%system, il, buf, es, em)
@@ -313,7 +324,7 @@ CONTAINS
     ALLOCATE (buf(CD_HFMF_MirrorSize(a%cables(1))), fresh(CD_HFMF_MirrorSize(b%cables(1))))
     CALL CD_HFMF_PackMirror(a%cables(1), buf, es, em)
     nvc = CD_HFMF_VIVMirrorSize(a%cables(1))
-    ok = ok .AND. nvc == 3*a%cables(1)%line%nn + 1
+    ok = ok .AND. nvc == MERGE(6, 3, il_case)*a%cables(1)%line%nn + 1
     IF (.NOT. with_viv) THEN
       ! the cable's VIV block as the fresh build has it (the torsion-free cable ends with it)
       CALL CD_HFMF_PackMirror(b%cables(1), fresh, es, em)
@@ -325,12 +336,16 @@ CONTAINS
   END FUNCTION rebuild
 
   LOGICAL FUNCTION identical(a, b) RESULT(same)
-    !! Both lines' state and shedding phases are the same bits.
+    !! Both lines' state and shedding phases (in-line too in the in-line case) are the same bits.
     TYPE(CD_AGG_ModuleType), INTENT(IN) :: a, b
     same = MAXVAL(ABS(a%sys%fast%system%lines(1)%q - b%sys%fast%system%lines(1)%q)) <= 0.0_wp .AND. &
            MAXVAL(ABS(a%sys%fast%system%lines(1)%viv_phi - b%sys%fast%system%lines(1)%viv_phi)) <= 0.0_wp .AND. &
            MAXVAL(ABS(a%cables(1)%line%q - b%cables(1)%line%q)) <= 0.0_wp .AND. &
            MAXVAL(ABS(a%cables(1)%line%viv_phi - b%cables(1)%line%viv_phi)) <= 0.0_wp
+    IF (.NOT. (same .AND. il_case)) RETURN
+    same = a%sys%fast%system%lines(1)%has_viv_il .AND. a%cables(1)%line%has_viv_il .AND. &
+           MAXVAL(ABS(a%sys%fast%system%lines(1)%vil_phi - b%sys%fast%system%lines(1)%vil_phi)) <= 0.0_wp .AND. &
+           MAXVAL(ABS(a%cables(1)%line%vil_phi - b%cables(1)%line%vil_phi)) <= 0.0_wp
   END FUNCTION identical
 
   SUBROUTINE response(z, ad, f)
@@ -355,13 +370,14 @@ CONTAINS
     IF (n > 1) f = REAL(n - 1, wp)/(t1 - t0)
   END SUBROUTINE response
 
-  SUBROUTINE write_deck(path, cl, window, dtm, anchor_first)
+  SUBROUTINE write_deck(path, cl, window, dtm, anchor_first, inline)
     !! The EI = 0 riser (line 1) and the finite-EI cable (line 2), 20 m apart across the current;
-    !! VIVrmsWindow 0.25 s unless window is given (0: none), and a deck dtM when dtm is given.
+    !! VIVrmsWindow 0.25 s unless window is given (0: none), and a deck dtM when dtm is given;
+    !! inline adds the in-line VIV of both types (a VIV section, ClX 0.85).
     CHARACTER(*), INTENT(IN) :: path
     REAL(wp), INTENT(IN) :: cl
     REAL(wp), INTENT(IN), OPTIONAL :: window, dtm
-    LOGICAL, INTENT(IN), OPTIONAL :: anchor_first
+    LOGICAL, INTENT(IN), OPTIONAL :: anchor_first, inline
     INTEGER :: u
     LOGICAL :: stock
     REAL(wp) :: tw
@@ -395,6 +411,15 @@ CONTAINS
     ELSE
       WRITE (u, '(A)') '1 riser 1 2 '//TRIM(ADJUSTL(len_txt))//' 50 -'
       WRITE (u, '(A)') '2 cable 3 4 '//TRIM(ADJUSTL(len_txt))//' 50 -'
+    END IF
+    IF (PRESENT(inline)) THEN
+      IF (inline) THEN
+        WRITE (u, '(A)') '--------------------- VIV ---'
+        WRITE (u, '(A)') 'TypeName ClX alpha'
+        WRITE (u, '(A)') '(name) (-) (-)'
+        WRITE (u, '(A)') 'riser 0.85 0.15'
+        WRITE (u, '(A)') 'cable 0.85 0.15'
+      END IF
     END IF
     WRITE (u, '(A)') '--------------------- OPTIONS ---'
     WRITE (u, '(A)') '100.0 WtrDpth'

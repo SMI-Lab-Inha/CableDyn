@@ -10367,7 +10367,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: ba(:), fluid_velocity(:, :), fluid_acceleration(:, :), drag_waterline(:)
     REAL(wp), ALLOCATABLE :: hydro_diam(:), hydro_cdn(:), hydro_cdt(:), hydro_can(:), hydro_cat(:)
     REAL(wp), ALLOCATABLE :: ve_ead(:), ve_bas(:), ve_bad(:), ve_ambl(:), ve_vbet(:)
-    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:)
+    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:)
     LOGICAL, ALLOCATABLE :: syr_el(:)
     REAL(wp) :: anchor(3), fairlead(3), mode1_omega
     REAL(wp), PARAMETER :: factors(4) = [0.25_wp, 0.5_wp, 0.75_wp, CD_ONE]
@@ -10406,10 +10406,12 @@ CONTAINS
     ALLOCATE (ba(SIZE(l0)), hydro_diam(SIZE(l0)), hydro_cdn(SIZE(l0)), hydro_cdt(SIZE(l0)), &
               hydro_can(SIZE(l0)), hydro_cat(SIZE(l0)), ve_ead(SIZE(l0)), ve_bas(SIZE(l0)), &
               ve_bad(SIZE(l0)), ve_ambl(SIZE(l0)), ve_vbet(SIZE(l0)), viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), &
-              viv_df(SIZE(l0)), syr_el(SIZE(l0)))
+              viv_df(SIZE(l0)), syr_el(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)))
     viv_cl = CD_ZERO
     viv_cf = CD_ZERO
     viv_df = CD_ZERO
+    viv_clx = CD_ZERO
+    viv_al = CD_ZERO
     ve_ead = CD_ZERO
     ve_bas = CD_ZERO
     ve_bad = CD_ZERO
@@ -10468,6 +10470,8 @@ CONTAINS
         viv_cl(e) = types(line_section_type(sections, ln%id, i))%cl
         viv_cf(e) = types(line_section_type(sections, ln%id, i))%viv_cf
         viv_df(e) = types(line_section_type(sections, ln%id, i))%viv_df
+        viv_clx(e) = types(line_section_type(sections, ln%id, i))%clx
+        viv_al(e) = types(line_section_type(sections, ln%id, i))%il_alpha
         syr_el(e) = types(line_section_type(sections, ln%id, i))%is_syrope
       END DO
     END DO
@@ -10475,6 +10479,8 @@ CONTAINS
     viv_cl = viv_cl(SIZE(viv_cl):1:-1)
     viv_cf = viv_cf(SIZE(viv_cf):1:-1)
     viv_df = viv_df(SIZE(viv_df):1:-1)
+    viv_clx = viv_clx(SIZE(viv_clx):1:-1)
+    viv_al = viv_al(SIZE(viv_al):1:-1)
     ba = ba(SIZE(ba):1:-1)
     ve_ead = ve_ead(SIZE(ve_ead):1:-1)
     ve_bas = ve_bas(SIZE(ve_bas):1:-1)
@@ -10764,8 +10770,15 @@ CONTAINS
         BLOCK
           REAL(wp) :: seed(model%n_dof/3)
           CALL CD_Deck_VIV_Phase_Seed(model%l0, ln%ends_swapped, seed, zero=opts%viv_phase_zero)
-          CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
-                                phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped)
+          ! with the in-line VIV of the VIV section where a type has ClX > 0
+          IF (ANY(viv_clx > CD_ZERO)) THEN
+            CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
+                                  phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, &
+                                  il_alpha=viv_al)
+          ELSE
+            CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
+                                  phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped)
+          END IF
         END BLOCK
         IF (es == CD_MODEL_OK) CALL CD_Recompute_Model_Acceleration(model, es, em)
         IF (es /= CD_MODEL_OK) THEN
@@ -11601,20 +11614,6 @@ CONTAINS
     clx = clx(SIZE(clx):1:-1)
     il_alpha = il_alpha(SIZE(il_alpha):1:-1)
   END SUBROUTINE finite_viv_arrays
-
-  LOGICAL FUNCTION line_has_viv_il(ln, types, sections) RESULT(has)
-    !! Whether a section of the line uses a line type with in-line VIV (VIV ClX > 0).
-    TYPE(DeckLine), INTENT(IN) :: ln
-    TYPE(DeckLineType), INTENT(IN) :: types(:)
-    TYPE(DeckSection), INTENT(IN) :: sections(:)
-    INTEGER :: j
-    has = .FALSE.
-    DO j = 1, SIZE(sections)
-      IF (sections(j)%line_id /= ln%id) CYCLE
-      IF (sections(j)%ltype < 1 .OR. sections(j)%ltype > SIZE(types)) CYCLE
-      IF (types(sections(j)%ltype)%clx > CD_ZERO) has = .TRUE.
-    END DO
-  END FUNCTION line_has_viv_il
 
   LOGICAL FUNCTION line_has_viv(ln, types, sections) RESULT(has)
     !! Whether a section of the line uses a line type with a VIV lift coefficient Cl > 0.
@@ -19781,15 +19780,6 @@ CONTAINS
                     'sections require a dynamic finite-EI deck'); RETURN
         END IF
       END IF
-    END DO
-
-    ! VIV in-line rows: the in-line force acts on finite-EI lines
-    DO j = 1, SIZE(lines)
-      IF (line_is_finite_ei(lines(j), types, sections)) CYCLE
-      IF (.NOT. line_has_viv_il(lines(j), types, sections)) CYCLE
-      at_line = lines(j)%deck_line
-      CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(lines(j)%id))//' is an EI = 0 line of a type with '// &
-                'in-line VIV (VIV ClX > 0): in-line VIV acts on finite-EI lines (EI > 0)'); RETURN
     END DO
 
     ! STIFFENERS: bend stiffeners sleeving the ends of a finite-EI line
