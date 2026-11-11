@@ -207,6 +207,12 @@ class LineType:
         coefficient and the half-range and centre of the synchronisation band
         in non-dimensional frequency). ``cl`` set writes the 13-column row, with
         MoorDyn's ``df = 0.08`` and ``cf = 0.18`` where they are ``None``.
+    clx, il_alpha : float | None
+        Optional in-line VIV of a finite-EI type, a ``VIV`` section row
+        ``Name ClX [alpha]``: the in-line shedding coefficient (it needs ``cl``,
+        the in-line phase running at twice the cross-flow one) and the frequency
+        band of that phase, ``0 <= il_alpha < 1``; ``None`` leaves alpha out of
+        the row (the solver takes 0.15).
     """
 
     name: str
@@ -226,6 +232,8 @@ class LineType:
     cl: float | None = None
     df: float | None = None
     cf: float | None = None
+    clx: float | None = None
+    il_alpha: float | None = None
 
 
 @dataclass(eq=False)
@@ -1642,6 +1650,8 @@ class DeckModel:
         cl: float | None = None,
         df: float | None = None,
         cf: float | None = None,
+        clx: float | None = None,
+        il_alpha: float | None = None,
     ) -> LineType:
         """Add a ``LINE TYPES`` row; see :class:`LineType` for the fields.
 
@@ -1658,7 +1668,25 @@ class DeckModel:
         _text(name, "line-type name")
         self._check_new_key(self.line_types, name)
         item = LineType(
-            name, diam, mass, ea, ba, ei, cdn, cdt, can, cat, gas, gj, irt, irn, cl, df, cf
+            name,
+            diam,
+            mass,
+            ea,
+            ba,
+            ei,
+            cdn,
+            cdt,
+            can,
+            cat,
+            gas,
+            gj,
+            irt,
+            irn,
+            cl,
+            df,
+            cf,
+            clx,
+            il_alpha,
         )
         self._line_types.append(item)
         return item
@@ -2549,6 +2577,7 @@ class DeckModel:
         _emit(out, "EQUIVALENT BUOYANCY", *self._equivalent_table())
         _emit(out, "ATTACHMENTS", *self._attachment_table())
         _emit(out, "STIFFENERS", *self._stiffener_table())
+        _emit(out, "VIV", *self._viv_table())
         _emit(out, "FAILURE", *self._failure_table())
         _emit(out, "CONTROL", *self._control_table())
         _emit(out, "EXTERNAL LOADS", *self._external_load_table())
@@ -2912,6 +2941,20 @@ class DeckModel:
         header = "LineID End Length RootOD TipOD InnerD E Density"
         return header, "(-) (-) (m) (m) (m) (m) (Pa) (kg/m^3)", rows
 
+    def _viv_table(self) -> tuple[str, str, list[list[str]]]:
+        rows: list[list[str]] = []
+        for item in self._line_types:
+            what = f"line type {item.name!r}"
+            if item.clx is None:
+                if item.il_alpha is not None:
+                    raise ValueError(f"{what}: il_alpha needs the in-line VIV coefficient clx")
+                continue
+            row = [_text(item.name, what), _num(item.clx, what)]
+            if item.il_alpha is not None:
+                row.append(_num(item.il_alpha, what))
+            rows.append(row)
+        return "Name ClX alpha", "(-) (-) (-)", rows
+
     def _syrope_table(self) -> tuple[str, str, list[list[str]]]:
         rows = [
             [_line_list(row.lines), _num(row.tmax0, "SYROPE IC"), _num(row.tmean0, "SYROPE IC")]
@@ -3110,6 +3153,11 @@ class _Loader:
         for row in self.rows("STIFFENERS"):
             t = row.tokens
             model.add_stiffener(_native_int(t[0]), t[1][-1], *(_f(token) for token in t[2:8]))
+        for row in self.rows("VIV"):
+            t = row.tokens
+            item = model.line_types[t[0]]
+            item.clx = _f(t[1])
+            item.il_alpha = _f(t[2]) if len(t) == 3 else None
         for row in self.rows("ATTACHMENTS"):
             t = row.tokens
             arc: float | tuple[float, float, float]

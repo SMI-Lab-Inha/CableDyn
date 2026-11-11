@@ -265,6 +265,12 @@ Dynamic environment
        :ref:`theory-viv`
      - cable, dynamic
      - ~2 s
+   * - ``viv_taut_cable_inline.dat``
+     - in-line VIV (the ``VIV`` section, ``ClX`` and ``alpha``): the same line as a finite-EI
+       cable; the quarter span moves in line at twice the cross-flow frequency, A/D 0.19 against
+       0.03 with the cross-flow lift alone — :ref:`theory-viv`
+     - cable, dynamic
+     - ~2 s
 
 Points, buoys, bodies, and rods
 -------------------------------

@@ -135,7 +135,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HFMF_SetCoupledKinematics, CD_HFMF_GetCoupledKinematics, &
                                           CD_HFMF_Set_Moving_End_B, CD_HFMF_GetEndBKinematics, &
                                           CD_HFMF_End, CD_HFMF_OK
-  USE CableDyn_VIV, ONLY: CD_VIV_DEFAULT_DF, CD_VIV_DEFAULT_CF, CD_VIV_NM
+  USE CableDyn_VIV, ONLY: CD_VIV_DEFAULT_DF, CD_VIV_DEFAULT_CF, CD_VIV_NM, CD_VIV_DEFAULT_IL_ALPHA
   USE CableDyn_Hydro, ONLY: CD_Airy_Wave_Kinematics_Precomputed, CD_Component_Wave_Kinematics, &
                             CD_Current_Profile_Velocity, CD_CurrentGridType, CD_Current_Grid_Resample, &
                             CD_Current_Grid_Velocity, &
@@ -445,6 +445,12 @@ MODULE CableDyn_DeckDriver
     ! non-dimensional shedding frequency. A row with Cl only takes MoorDyn's dF = 0.08 and
     ! cF = 0.18.
     REAL(wp) :: cl = CD_ZERO, viv_df = CD_VIV_DEFAULT_DF, viv_cf = CD_VIV_DEFAULT_CF
+    ! In-line VIV (the optional VIV section, a row per type: TypeName ClX [alpha]; Ulveseter et
+    ! al., Mar. Struct. 60, 2018): the in-line shedding coefficient C_vx (0 = off) and the
+    ! frequency band alpha of its phase about twice the cross-flow one; has_viv_row marks a type
+    ! the section names.
+    REAL(wp) :: clx = CD_ZERO, il_alpha = CD_VIV_DEFAULT_IL_ALPHA
+    LOGICAL :: has_viv_row = .FALSE.
     ! Deck file line of the row (0 when not read from a file), for error messages.
     INTEGER :: deck_line = 0
   END TYPE
@@ -1877,7 +1883,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: gas(:), gj(:), rho_a(:), i_rt(:), i_rn(:), w(:), nodes_ref(:, :), q0(:), q_static(:)
     REAL(wp), ALLOCATABLE :: q_sequence(:)
     REAL(wp), ALLOCATABLE :: curv(:), cdn(:), cdt(:), can(:), cat(:), catenary_pos(:)
-    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:)
+    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:)
     REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:), bb_el(:)
     REAL(wp) :: mode1_omega
     REAL(wp), ALLOCATABLE :: contact_kn(:), contact_cn(:)
@@ -3273,12 +3279,14 @@ CONTAINS
     ! property of the original element containing its reference-arc midpoint.
     ALLOCATE (cdn(SIZE(l0)), cdt(SIZE(l0)), can(SIZE(l0)), cat(SIZE(l0)))
     CALL finite_hydro_arrays(ln, sections, types, diam, cdn, cdt, can, cat)
-    ALLOCATE (viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), viv_df(SIZE(l0)))
-    CALL finite_viv_arrays(ln, sections, types, viv_cl, viv_cf, viv_df)
+    ALLOCATE (viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), viv_df(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)))
+    CALL finite_viv_arrays(ln, sections, types, viv_cl, viv_cf, viv_df, viv_clx, viv_al)
     IF (SIZE(l0_am) /= SIZE(l0)) THEN
       CALL remap_elem_by_reference_arc(viv_cl, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_cf, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_df, l0, l0_am)
+      CALL remap_elem_by_reference_arc(viv_clx, l0, l0_am)
+      CALL remap_elem_by_reference_arc(viv_al, l0, l0_am)
       CALL remap_elem_by_reference_arc(rho_a, l0, l0_am)
       CALL remap_elem_by_reference_arc(diam, l0, l0_am)
       CALL remap_elem_by_reference_arc(cdn, l0, l0_am)
@@ -3591,11 +3599,20 @@ CONTAINS
           ELSE
             CALL CD_Deck_VIV_Phase_Seed(cable%line%l0, ln%ends_swapped, seed, zero=opts%viv_phase_zero)
           END IF
-          CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
-                                           MERGE(opts%viv_rms_window, &
-                                                 REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
-                                                 opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
-                                           tangent_reversed=.NOT. ln%ends_swapped)
+          ! with the in-line VIV of the VIV section where a type has ClX > 0
+          IF (ANY(viv_clx > CD_ZERO)) THEN
+            CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
+                                             MERGE(opts%viv_rms_window, &
+                                                   REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
+                                                   opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
+                                             tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, il_alpha=viv_al)
+          ELSE
+            CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
+                                             MERGE(opts%viv_rms_window, &
+                                                   REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
+                                                   opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
+                                             tangent_reversed=.NOT. ln%ends_swapped)
+          END IF
         END BLOCK
         IF (es /= CD_HCDYN_OK) THEN
           CALL fail(ErrStat, ErrMsg, 'finite-EI cable VIV wiring failed: '//TRIM(em)); RETURN
@@ -11556,13 +11573,13 @@ CONTAINS
     cat = cat(SIZE(cat):1:-1)
   END SUBROUTINE finite_hydro_arrays
 
-  SUBROUTINE finite_viv_arrays(ln, sections, types, cl, cf, df)
-    !! Expand the section VIV columns (Cl dF cF) to finite-EI element arrays, in the element
-    !! order of finite_hydro_arrays.
+  SUBROUTINE finite_viv_arrays(ln, sections, types, cl, cf, df, clx, il_alpha)
+    !! Expand the section VIV columns (Cl dF cF) and the VIV section's in-line ClX and alpha to
+    !! finite-EI element arrays, in the element order of finite_hydro_arrays.
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
-    REAL(wp), INTENT(OUT) :: cl(:), cf(:), df(:)
+    REAL(wp), INTENT(OUT) :: cl(:), cf(:), df(:), clx(:), il_alpha(:)
     INTEGER :: i, j, e, tidx
 
     e = 0
@@ -11574,12 +11591,30 @@ CONTAINS
         cl(e) = types(tidx)%cl
         cf(e) = types(tidx)%viv_cf
         df(e) = types(tidx)%viv_df
+        clx(e) = types(tidx)%clx
+        il_alpha(e) = types(tidx)%il_alpha
       END DO
     END DO
     cl = cl(SIZE(cl):1:-1)
     cf = cf(SIZE(cf):1:-1)
     df = df(SIZE(df):1:-1)
+    clx = clx(SIZE(clx):1:-1)
+    il_alpha = il_alpha(SIZE(il_alpha):1:-1)
   END SUBROUTINE finite_viv_arrays
+
+  LOGICAL FUNCTION line_has_viv_il(ln, types, sections) RESULT(has)
+    !! Whether a section of the line uses a line type with in-line VIV (VIV ClX > 0).
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    INTEGER :: j
+    has = .FALSE.
+    DO j = 1, SIZE(sections)
+      IF (sections(j)%line_id /= ln%id) CYCLE
+      IF (sections(j)%ltype < 1 .OR. sections(j)%ltype > SIZE(types)) CYCLE
+      IF (types(sections(j)%ltype)%clx > CD_ZERO) has = .TRUE.
+    END DO
+  END FUNCTION line_has_viv_il
 
   LOGICAL FUNCTION line_has_viv(ln, types, sections) RESULT(has)
     !! Whether a section of the line uses a line type with a VIV lift coefficient Cl > 0.
@@ -13692,6 +13727,9 @@ CONTAINS
     CHARACTER(DECK_RECLEN), ALLOCATABLE :: stf_rows(:)
     INTEGER, ALLOCATABLE :: stf_lines(:)
     INTEGER :: n_stf
+    CHARACTER(DECK_RECLEN), ALLOCATABLE :: viv_rows(:)
+    INTEGER, ALLOCATABLE :: viv_lines(:)
+    INTEGER :: n_viv
     CHARACTER(2*NAMELEN), ALLOCATABLE :: channel_keys(:)
     LOGICAL :: ext_march, types_stock_cols, rodtypes_legacy_cols, turb_ok, static_finite_ok, tors_marched
     INTEGER :: unit, ios, section, nt, nb, nrt, nr, np, nlin, nsec, neq, nch, nfl, nct, nec, lineno
@@ -13709,7 +13747,7 @@ CONTAINS
                           SEC_SECTIONS = 5, SEC_OPTIONS = 6, SEC_OUTPUTS = 7, SEC_RODTYPES = 8, SEC_RODS = 9, &
                           SEC_EQUIV = 10, SEC_FAILURE = 11, SEC_CONTROL = 12, SEC_SYROPE_IC = 13, &
                           SEC_ENDCONN = 14, SEC_TURBINES = 15, SEC_EXTLOADS = 16, SEC_ATTACH = 17, &
-                          SEC_STIFF = 18
+                          SEC_STIFF = 18, SEC_VIV = 19
 
     ErrStat = 0; ErrMsg = ''
     ext_march = .FALSE.
@@ -13731,6 +13769,8 @@ CONTAINS
     n_att = 0
     ALLOCATE (stf_rows(0), stf_lines(0))
     n_stf = 0
+    ALLOCATE (viv_rows(0), viv_lines(0))
+    n_viv = 0
     nt = 0; nb = 0; nrt = 0; nr = 0; np = 0; nlin = 0; nsec = 0; neq = 0; nch = 0; nfl = 0; nct = 0; nec = 0
     section = SEC_NONE
     ALLOCATE (channel_lines(0))
@@ -13856,6 +13896,15 @@ CONTAINS
         END IF
         stf_rows(n_stf) = line(1:MIN(LEN(line), DECK_RECLEN))
         stf_lines(n_stf) = lineno
+      CASE (SEC_VIV)
+        IF (.NOT. has_numeric_token(line)) CYCLE
+        n_viv = n_viv + 1
+        IF (n_viv > SIZE(viv_rows)) THEN
+          viv_rows = [viv_rows, [(REPEAT(' ', DECK_RECLEN), i_ch=1, 8)]]
+          viv_lines = [viv_lines, [(0, i_ch=1, 8)]]
+        END IF
+        viv_rows(n_viv) = line(1:MIN(LEN(line), DECK_RECLEN))
+        viv_lines(n_viv) = lineno
       CASE (SEC_OPTIONS)
         CALL apply_option(line, opts, ErrStat, ErrMsg)
       CASE (SEC_OUTPUTS)
@@ -13950,6 +13999,13 @@ CONTAINS
       CALL append_line_stiffener(stf_rows(i_ch), lines, ErrStat, ErrMsg)
       IF (ErrStat /= 0) THEN
         CALL add_row_context('deck', stf_lines(i_ch), stf_rows(i_ch), ErrMsg)
+        RETURN
+      END IF
+    END DO
+    DO i_ch = 1, n_viv
+      CALL apply_type_viv(viv_rows(i_ch), types, ErrStat, ErrMsg)
+      IF (ErrStat /= 0) THEN
+        CALL add_row_context('deck', viv_lines(i_ch), viv_rows(i_ch), ErrMsg)
         RETURN
       END IF
     END DO
@@ -15619,6 +15675,8 @@ CONTAINS
       section = 17
     CASE ('STIFFENERS', 'STIFFENER', 'BEND STIFFENERS', 'BEND STIFFENER')
       section = 18
+    CASE ('VIV', 'VORTEX-INDUCED VIBRATION', 'VORTEX INDUCED VIBRATION')
+      section = 19
     CASE DEFAULT
       IF (LEN_TRIM(secname) > NAMELEN) THEN
         CALL fail(ErrStat, ErrMsg, 'unknown deck section "'//secname(1:NAMELEN)//'..."')
@@ -17134,6 +17192,63 @@ CONTAINS
     END DO
     CALL MOVE_ALLOC(grown, lines(li)%att)
   END SUBROUTINE append_line_attachment
+
+  SUBROUTINE apply_type_viv(row, types, ErrStat, ErrMsg)
+    !! One VIV row: TypeName ClX [alpha] -- the in-line VIV of a line type (Ulveseter et al. 2018):
+    !! the in-line shedding coefficient C_vx >= 0 (0 = off) and the frequency band 0 <= alpha < 1
+    !! of its phase about twice the cross-flow one (default 0.15). The in-line phase rate is
+    !! slaved to the cross-flow one, so ClX > 0 needs the type's LINE TYPES lift Cl > 0. A type
+    !! takes one row.
+    CHARACTER(*), INTENT(IN) :: row
+    TYPE(DeckLineType), INTENT(INOUT) :: types(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(DECK_RECLEN) :: tok
+    INTEGER :: it, ntok
+    REAL(wp) :: clx, alpha
+    LOGICAL :: found, ok
+
+    ErrStat = 0; ErrMsg = ''
+    ntok = count_tokens(row)
+    IF (ntok /= 2 .AND. ntok /= 3) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV rows must be: TypeName ClX [alpha]'); RETURN
+    END IF
+    CALL get_token(row, 1, tok, found)
+    it = find_type(types, TRIM(tok))
+    IF (it == 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV row names undefined LINE TYPE "'//TRIM(tok)//'"'); RETURN
+    END IF
+    IF (types(it)%has_viv_row) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV names LINE TYPE "'//TRIM(types(it)%name)//'" twice'); RETURN
+    END IF
+    CALL get_token(row, 2, tok, found)
+    CALL parse_real_token(tok, clx, ok)
+    alpha = CD_VIV_DEFAULT_IL_ALPHA
+    IF (ok .AND. ntok == 3) THEN
+      CALL get_token(row, 3, tok, found)
+      CALL parse_real_token(tok, alpha, ok)
+    END IF
+    IF (.NOT. ok) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV ClX and alpha must be plain numbers'); RETURN
+    END IF
+    IF (.NOT. (IEEE_IS_FINITE(clx) .AND. IEEE_IS_FINITE(alpha))) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV ClX and alpha must be finite'); RETURN
+    END IF
+    IF (clx < CD_ZERO .OR. clx > MAX_COEFFICIENT) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV in-line coefficient ClX must be non-negative (0 = in-line VIV off) and at '// &
+                'most 1e15'); RETURN
+    END IF
+    IF (.NOT. (alpha >= CD_ZERO .AND. alpha < CD_ONE)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV in-line frequency band alpha must satisfy 0 <= alpha < 1'); RETURN
+    END IF
+    IF (clx > CD_ZERO .AND. .NOT. (types(it)%cl > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV in-line VIV of LINE TYPE "'//TRIM(types(it)%name)//'" needs its '// &
+                'cross-flow lift (LINE TYPES Cl > 0): the in-line phase runs at twice the cross-flow one'); RETURN
+    END IF
+    types(it)%clx = clx
+    types(it)%il_alpha = alpha
+    types(it)%has_viv_row = .TRUE.
+  END SUBROUTINE apply_type_viv
 
   SUBROUTINE append_line_stiffener(row, lines, ErrStat, ErrMsg)
     !! One STIFFENERS row: LineID End Length RootOD TipOD InnerD E Density -- a conical segment of
@@ -19666,6 +19781,15 @@ CONTAINS
                     'sections require a dynamic finite-EI deck'); RETURN
         END IF
       END IF
+    END DO
+
+    ! VIV in-line rows: the in-line force acts on finite-EI lines
+    DO j = 1, SIZE(lines)
+      IF (line_is_finite_ei(lines(j), types, sections)) CYCLE
+      IF (.NOT. line_has_viv_il(lines(j), types, sections)) CYCLE
+      at_line = lines(j)%deck_line
+      CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(lines(j)%id))//' is an EI = 0 line of a type with '// &
+                'in-line VIV (VIV ClX > 0): in-line VIV acts on finite-EI lines (EI > 0)'); RETURN
     END DO
 
     ! STIFFENERS: bend stiffeners sleeving the ends of a finite-EI line

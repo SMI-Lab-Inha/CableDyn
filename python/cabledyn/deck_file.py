@@ -76,6 +76,9 @@ _SECTION_ALIASES = {
     "STIFFENER": "STIFFENERS",
     "BEND STIFFENERS": "STIFFENERS",
     "BEND STIFFENER": "STIFFENERS",
+    "VIV": "VIV",
+    "VORTEX-INDUCED VIBRATION": "VIV",
+    "VORTEX INDUCED VIBRATION": "VIV",
 }
 # Table sections whose rows the native reader takes through a Fortran
 # list-directed READ. Their descriptive and units rows are recognized by the
@@ -98,7 +101,7 @@ _LIST_DIRECTED_SECTIONS = frozenset(
 # Table sections the native reader splits on whitespace and parses column by
 # column (their comma-separated line lists are valid there).
 _WHITESPACE_TABLE_SECTIONS = frozenset(
-    {"FAILURE", "CONTROL", "SYROPE IC", "ATTACHMENTS", "STIFFENERS"}
+    {"FAILURE", "CONTROL", "SYROPE IC", "ATTACHMENTS", "STIFFENERS", "VIV"}
 )
 _TABLE_SECTIONS = _LIST_DIRECTED_SECTIONS | _WHITESPACE_TABLE_SECTIONS
 _NATIVE_RECORD_LENGTH = 512
@@ -3175,6 +3178,67 @@ class DeckFile:
                     "(End A and End B stiffeners together)"
                 )
 
+    def _check_viv_section(
+        self,
+        line_ids: set[str],
+        section_types_by_line: dict[str, list[str]],
+        line_type_meta: dict[str, tuple[float, float, float, float]],
+        lift_type_names: set[str],
+    ) -> None:
+        """Native ``apply_type_viv`` and its finalize check for the VIV section.
+
+        A row ``TypeName ClX [alpha]`` gives a line type in-line VIV: the in-line shedding
+        coefficient ``ClX >= 0`` (0 = off) and the band ``0 <= alpha < 1`` (default 0.15) of
+        its phase about twice the cross-flow one, so ``ClX > 0`` needs the type's LINE TYPES
+        lift ``Cl > 0``. A type takes one row; the in-line force acts on finite-EI lines.
+        """
+        named: set[str] = set()
+        inline_types: set[str] = set()
+        for row in self._rows("VIV"):
+            where = self._at(row)
+            if len(row.tokens) not in (2, 3):
+                raise DeckFormatError(f"{where}: VIV rows must be: TypeName ClX [alpha]")
+            name = row.tokens[0].lower()
+            if name not in line_type_meta:
+                raise DeckFormatError(
+                    f'{where}: VIV row names undefined LINE TYPE "{row.tokens[0]}"'
+                )
+            if name in named:
+                raise DeckFormatError(f'{where}: VIV names LINE TYPE "{row.tokens[0]}" twice')
+            named.add(name)
+            try:
+                clx = _native_float(row.tokens[1])
+                alpha = _native_float(row.tokens[2]) if len(row.tokens) == 3 else 0.15
+            except ValueError as exc:
+                raise DeckFormatError(f"{where}: VIV ClX and alpha must be plain numbers") from exc
+            if not (math.isfinite(clx) and math.isfinite(alpha)):
+                raise DeckFormatError(f"{where}: VIV ClX and alpha must be finite")
+            if clx < 0.0 or clx > _NATIVE_MAX_COEFFICIENT:
+                raise DeckFormatError(
+                    f"{where}: VIV in-line coefficient ClX must be non-negative (0 = in-line VIV "
+                    "off) and at most 1e15"
+                )
+            if not 0.0 <= alpha < 1.0:
+                raise DeckFormatError(
+                    f"{where}: VIV in-line frequency band alpha must satisfy 0 <= alpha < 1"
+                )
+            if clx > 0.0 and name not in lift_type_names:
+                raise DeckFormatError(
+                    f'{where}: VIV in-line VIV of LINE TYPE "{row.tokens[0]}" needs its '
+                    "cross-flow lift (LINE TYPES Cl > 0): the in-line phase runs at twice the "
+                    "cross-flow one"
+                )
+            if clx > 0.0:
+                inline_types.add(name)
+        for line_id in sorted(line_ids, key=int):
+            names = section_types_by_line.get(line_id, [])
+            finite = any(line_type_meta[name][3] > 0.0 for name in names if name in line_type_meta)
+            if not finite and inline_types & set(names):
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id} is an EI = 0 line of a type with in-line VIV "
+                    "(VIV ClX > 0): in-line VIV acts on finite-EI lines (EI > 0)"
+                )
+
     def _legacy_rod_type_columns(self, record: DeckRecord) -> bool:
         """Return whether ``record`` sits under a legacy CableDyn ROD TYPES header.
 
@@ -4345,6 +4409,7 @@ class DeckFile:
             )
 
         self._check_stiffeners(line_ids, section_types_by_line, line_type_meta, line_lengths)
+        self._check_viv_section(line_ids, section_types_by_line, line_type_meta, viv_type_names)
         self._check_attachments(line_ids, section_types_by_line, line_type_meta, line_lengths)
 
         assigned_end_connections: set[tuple[str, str]] = set()

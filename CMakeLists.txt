@@ -1321,6 +1321,16 @@ target_link_libraries(test_hermite_viv PRIVATE cabledyn_core)
 add_test(NAME hermite_viv COMMAND test_hermite_viv)
 set_tests_properties(hermite_viv PROPERTIES LABELS "fortran;dynamic;viv")
 
+add_executable(test_hermite_viv_inline tests/test_hermite_viv_inline.f90)
+target_link_libraries(test_hermite_viv_inline PRIVATE cabledyn_core)
+add_test(NAME hermite_viv_inline COMMAND test_hermite_viv_inline)
+set_tests_properties(hermite_viv_inline PROPERTIES LABELS "fortran;dynamic;viv")
+
+add_executable(test_viv_inline_deck tests/test_viv_inline_deck.f90)
+target_link_libraries(test_viv_inline_deck PRIVATE cabledyn_core)
+add_test(NAME viv_inline_deck COMMAND test_viv_inline_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(viv_inline_deck PROPERTIES LABELS "fortran;integration;dynamic;viv;driver")
+
 add_executable(test_viv_coupled tests/test_viv_coupled.f90)
 target_link_libraries(test_viv_coupled PRIVATE cabledyn_core)
 add_test(NAME viv_coupled COMMAND test_viv_coupled WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
@@ -3568,7 +3578,7 @@ foreach(_feature_example IN ITEMS
     airy_wave_shallow_chain laid_cable_cross_current chain_modes lazy_wave_modes buoy_clamped_cable
     moordynC_wavekin/chain_wavekin7_currents1 spar_pinned_rods mixed_body_rods_points
     als_volturnus_line_break_time als_volturnus_line_break_tension
-    viv_taut_line_crossflow composite_axial_damping_mode1 composite_ve_syrope_jonswap
+    viv_taut_line_crossflow viv_taut_cable_inline composite_axial_damping_mode1 composite_ve_syrope_jonswap
     composite_chain_poly_chain_modes shared_cable_two_floaters lazy_wave_modules_stiffener
     chain_sloped_bathymetry_friction torsion_free_end_armoured_cable
     moordynC_currents/chain_wavekin3_currents2 moordynC_currents/chain_currents5_grid)
