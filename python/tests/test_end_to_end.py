@@ -23,6 +23,7 @@ from cabledyn import (
     DriverExecutionError,
     StaticProfile,
     compare_histories,
+    current_steps,
     fft_filter,
     generate_deck_cases,
     line_geometry,
@@ -305,3 +306,29 @@ def test_viv_response_of_the_inline_example(driver, tmp_path):
     assert response.modal_amplitudes("cross_flow").dominant_mode == 1
     assert response.modal_amplitudes("in_line").dominant_mode == 2
     assert response.travelling_wave_index("cross_flow") < 0.2
+
+
+def test_stepped_current_continues_the_response(driver, tmp_path):
+    # the in-line VIV example under a current stepped 0.10 -> 0.18 -> 0.10 m/s in one run
+    steps = current_steps([0.10, 0.18, 0.10], hold=60.0, ramp=5.0)
+    text = (EXAMPLES / "viv_taut_cable_inline.dat").read_text(encoding="utf-8")
+    text = text.replace("1     1       2       V", "1     1       2       p")
+    lines = []
+    for line in text.splitlines():
+        if line.startswith("uniform 0.0 0.15 0.0 current"):
+            line = "2         Currents"
+        elif line.startswith("90.0      TMax"):
+            line = f"{steps.duration}  TMax"
+        lines.append(line)
+    deck = tmp_path / "stepped.dat"
+    deck.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    steps.write(tmp_path)
+    result = driver.run(deck, "out/stepped", timeout=600)
+    first, middle, last = steps.responses(result.read_line_positions(1), diameter=0.1, settle=30.0)
+    # the lock-in frequency follows the current up and comes back with it
+    assert middle.frequency("cross_flow") > first.frequency("cross_flow") + 0.03
+    assert last.frequency("cross_flow") == pytest.approx(first.frequency("cross_flow"), abs=0.01)
+    assert (
+        middle.amplitude_over_diameter("cross_flow").max()
+        > first.amplitude_over_diameter("cross_flow").max()
+    )

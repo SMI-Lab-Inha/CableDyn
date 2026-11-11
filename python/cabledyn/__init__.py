@@ -150,7 +150,13 @@ from cabledyn.summary import (
 )
 from cabledyn.sweep import parameter_grid
 from cabledyn.touchdown import TouchdownHistory, touchdown_history
-from cabledyn.viv import ModalAmplitudes, VIVResponse, viv_response
+from cabledyn.viv import (
+    CurrentSteps,
+    ModalAmplitudes,
+    VIVResponse,
+    current_steps,
+    viv_response,
+)
 
 if TYPE_CHECKING:
     from cabledyn._lib import abi_minor as abi_minor
@@ -177,6 +183,7 @@ __all__ = [
     "CoherenceResult",
     "ConvergenceError",
     "CoupledRun",
+    "CurrentSteps",
     "DamageProfile",
     "DeckFile",
     "DeckFormatError",
@@ -243,6 +250,7 @@ __all__ = [
     "channel_summary",
     "clearance_matrix",
     "compare_histories",
+    "current_steps",
     "cycle_histogram",
     "damage_along_arc",
     "damage_equivalent_range",

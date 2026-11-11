@@ -41,6 +41,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   (`CurvX`/`CurvY`), `T/A - E r (kappa_x cos theta + kappa_y sin theta)`, counted point by point
   for the fatigue of biaxial bending; a whirling section, which the two-fibre recovery from the
   curvature magnitude sees as constant, now accumulates its damage.
+- `cabledyn.current_steps`: a stepped-current schedule for a VIV study in one run (each speed
+  held, then ramped to the next), written as the deck's MoorDyn-C `Currents 2` file, with the
+  VIV response of every hold.
 
 ## [0.4.2] - 2026-11-09
 

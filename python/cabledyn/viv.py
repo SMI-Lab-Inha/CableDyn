@@ -41,7 +41,7 @@ from cabledyn.results import LineNodeHistory, TimeHistory
 from cabledyn.spectra import _sampling
 from cabledyn.touchdown import _positions
 
-__all__ = ["ModalAmplitudes", "VIVResponse", "viv_response"]
+__all__ = ["CurrentSteps", "ModalAmplitudes", "VIVResponse", "current_steps", "viv_response"]
 
 _DIRECTIONS = ("cross_flow", "in_line")
 
@@ -595,4 +595,160 @@ def viv_response(
         flow=_readonly(velocity),
         whole_line=whole_line,
         node_numbers=numbers,
+    )
+
+
+@dataclass(frozen=True)
+class CurrentSteps:
+    """A uniform current held at a sequence of speeds, for a stepped-current VIV study.
+
+    Created by :func:`current_steps`. The current is held at ``speeds[k]`` for
+    ``hold`` seconds, then ramps linearly over ``ramp`` seconds to the next
+    speed, so one run continues each step from the state the previous one
+    left (the response branch an up-and-down sweep follows). :meth:`write`
+    gives the deck its MoorDyn-C ``Currents 2`` file.
+
+    Attributes
+    ----------
+    speeds : numpy.ndarray
+        Read-only ``(n_steps,)`` current speeds, m/s.
+    hold, ramp : float
+        Hold time of each speed and ramp time between speeds, s.
+    direction : numpy.ndarray
+        Read-only ``(3,)`` unit direction of the current.
+    """
+
+    speeds: npt.NDArray[Any]
+    hold: float
+    ramp: float
+    direction: npt.NDArray[Any]
+
+    @property
+    def starts(self) -> npt.NDArray[Any]:
+        """Read-only ``(n_steps,)`` start time of each hold, s."""
+        return _readonly(np.arange(self.speeds.size) * (self.hold + self.ramp))
+
+    @property
+    def duration(self) -> float:
+        """End of the last hold, s: the deck's ``TMax`` (a longer run repeats the record)."""
+        return float(self.starts[-1] + self.hold)
+
+    def windows(self, settle: float) -> tuple[tuple[float, float], ...]:
+        """Return the analysis window of every hold, from ``settle`` seconds into it to its end."""
+        if not (math.isfinite(float(settle)) and 0.0 <= float(settle) < self.hold):
+            raise ValueError("settle must be finite, non-negative and shorter than the hold")
+        return tuple((float(t) + float(settle), float(t) + self.hold) for t in self.starts)
+
+    def write(
+        self,
+        folder: str | os.PathLike[str],
+        *,
+        depths: tuple[float, float] = (-1.0e4, 0.0),
+        overwrite: bool = False,
+    ) -> Path:
+        """Write ``current_profile_dynamic.txt``, the deck's ``Currents 2`` file, into ``folder``.
+
+        The current is uniform between the two ``depths`` (z, m, increasing) and
+        held beyond them. The file's smallest time interval is the ramp, the time
+        step MoorDyn-C and CableDyn resample it to, so the holds stay exact.
+
+        Raises
+        ------
+        FileExistsError
+            If the file exists and ``overwrite`` is false.
+        ValueError
+            If the depths are not two finite, increasing elevations.
+        """
+        low, high = (float(z) for z in depths)
+        if not (math.isfinite(low) and math.isfinite(high) and low < high):
+            raise ValueError("depths must be two finite, increasing elevations")
+        target = Path(folder).expanduser().resolve() / "current_profile_dynamic.txt"
+        if target.exists() and not overwrite:
+            raise FileExistsError(f"output already exists: {target}")
+        rows: list[str] = []
+        for k, (start, speed) in enumerate(zip(self.starts, self.speeds, strict=True)):
+            velocity = float(speed) * self.direction
+            values = " ".join(f"{number(v)} {number(v)}" for v in velocity)
+            times = (float(start), float(start) + self.hold) if k else (0.0, self.hold)
+            rows.extend(f"{number(t)} {values}" for t in times)
+        lines = [
+            "--------------------- MoorDyn dynamic currents File -------------------------",
+            "a uniform current held at a sequence of speeds (cabledyn.current_steps)",
+            "line 5 lists the depths (m); each later row is t ux(z1 z2) uy(z1 z2) uz(z1 z2)",
+            "------------------------------------------------------------------------------",
+            f"{number(low)} {number(high)}",
+            "time ux... uy... uz...",
+            *rows,
+        ]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("\n".join(lines) + "\n", encoding="ascii")
+        return target
+
+    def responses(
+        self,
+        history: TimeHistory,
+        *,
+        diameter: float,
+        settle: float,
+        line_id: int | None = None,
+    ) -> tuple[VIVResponse, ...]:
+        """Return the :func:`viv_response` of every hold, from ``settle`` seconds into it."""
+        return tuple(
+            viv_response(
+                history,
+                flow=float(speed) * self.direction,
+                diameter=diameter,
+                start=start,
+                stop=stop,
+                line_id=line_id,
+            )
+            for speed, (start, stop) in zip(self.speeds, self.windows(settle), strict=True)
+        )
+
+
+def current_steps(
+    speeds: npt.ArrayLike,
+    *,
+    hold: float,
+    ramp: float,
+    direction: npt.ArrayLike = (0.0, 1.0, 0.0),
+) -> CurrentSteps:
+    """Return a stepped current schedule.
+
+    Parameters
+    ----------
+    speeds : array_like
+        Positive current speeds, m/s, in the order they are held; an
+        up-and-down sweep lists them up and back.
+    hold : float
+        Hold time of each speed, s; a whole number of ramps.
+    ramp : float
+        Positive ramp time between speeds, s.
+    direction : array_like
+        ``(3,)`` direction of the current (normalised), default ``+y``.
+
+    Raises
+    ------
+    ValueError
+        If a speed is not finite and positive, the times are invalid, the hold
+        is not a whole number of ramps, or the direction is not a finite,
+        non-zero 3-vector.
+    """
+    values = np.array(speeds, dtype=np.float64).reshape(-1)
+    if values.size < 1 or not np.all(np.isfinite(values)) or np.any(values <= 0.0):
+        raise ValueError("speeds must be one or more finite, positive values")
+    hold_s, ramp_s = float(hold), float(ramp)
+    if not (math.isfinite(hold_s) and hold_s > 0.0 and math.isfinite(ramp_s) and ramp_s > 0.0):
+        raise ValueError("hold and ramp must be finite and positive")
+    ratio = hold_s / ramp_s
+    if abs(ratio - round(ratio)) > 1.0e-9 * ratio:
+        raise ValueError("hold must be a whole number of ramps (the file's resampling step)")
+    unit = np.array(direction, dtype=np.float64)
+    if unit.shape != (3,) or not np.all(np.isfinite(unit)) or not np.any(unit):
+        raise ValueError("direction must be a finite, non-zero 3-vector")
+    return CurrentSteps(
+        speeds=_readonly(values),
+        hold=hold_s,
+        ramp=ramp_s,
+        direction=_readonly(unit / np.linalg.norm(unit)),
     )

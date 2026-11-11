@@ -495,6 +495,30 @@ is 0.05, a standing wave between the pinned ends.
    viv.plot_orbit(13)
    viv.export("results/line1_viv.csv")
 
+A stepped-current study holds the current at a sequence of speeds in one run, so each step
+starts from the state the previous one left: the response follows a branch as the current goes
+up and comes back down, where separate runs would each start from rest.
+:func:`cabledyn.current_steps` builds the schedule (each speed held ``hold`` seconds, ramped
+linearly over ``ramp`` seconds to the next, along one direction); its ``write`` puts the deck's
+MoorDyn-C ``Currents 2`` file ``current_profile_dynamic.txt`` (:doc:`options`) in the deck
+folder, its ``duration`` is the ``TMax`` to give, and its ``responses`` returns the
+:func:`~cabledyn.viv_response` of every hold from ``settle`` seconds into it. The file's
+smallest time interval is the ramp, the step the current table is resampled to, so a hold must
+be a whole number of ramps; the static start takes the first speed.
+
+.. code-block:: python
+
+   from cabledyn import current_steps
+
+   speeds = [0.10, 0.14, 0.18, 0.22, 0.26, 0.22, 0.18, 0.14, 0.10]
+   steps = current_steps(speeds, hold=60.0, ramp=5.0, direction=(0.0, 1.0, 0.0))
+   steps.write("cases/stepped")          # next to the deck, which sets "2 Currents" and TMax
+   print(steps.duration)
+   # ... run the deck, then:
+   for speed, viv in zip(steps.speeds, steps.responses(
+           result.read_line_positions(1), diameter=0.1, settle=30.0)):
+       print(speed, viv.amplitude_over_diameter("cross_flow").max(), viv.frequency("cross_flow"))
+
 Parameter grids
 ---------------
 
