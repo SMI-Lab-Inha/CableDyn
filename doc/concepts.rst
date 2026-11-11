@@ -80,9 +80,10 @@ A ``LINE TYPES`` row is the reusable material a section refers to by name: diame
 metre, axial stiffness ``EA``, axial damping ``BA``, bending stiffness ``EI``, and the four Morison
 coefficients (``Cd_n``, ``Cd_t``, ``Ca_n``, ``Ca_t``). ``EI`` is the switch between the two solver paths
 (next section). Axial response can be linear ``EA`` or a stateful constitutive model
-(viscoelastic, Syrope) — see :doc:`theory`. An ``EI = 0`` row may end with MoorDyn's cross-flow
+(viscoelastic, Syrope) — see :doc:`theory`. A 10-column row may end with MoorDyn's cross-flow
 VIV columns ``Cl`` or ``Cl dF cF`` (lift coefficient and synchronisation band; see
-:ref:`theory-viv`).
+:ref:`theory-viv`), and a ``VIV`` section row adds the in-line force of a finite-EI type
+(:ref:`theory-viv-inline`).
 
 Two solver paths, selected by ``EI``
 ------------------------------------

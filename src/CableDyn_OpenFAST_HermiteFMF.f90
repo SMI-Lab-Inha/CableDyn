@@ -2249,13 +2249,15 @@ CONTAINS
   END FUNCTION CD_HFMF_ForceMirrorSize
 
   INTEGER FUNCTION CD_HFMF_VIVMirrorSize(self) RESULT(n)
-    !! Mirror slots of the cross-flow VIV state, before the torsion block: the shedding phase
+    !! Mirror slots of the VIV state, before the torsion block: the cross-flow shedding phase
     !! per node, the running mean squares of the cross-flow velocity and acceleration per node
-    !! (interleaved) and the averaging time (3 nn + 1 values); zero without VIV.
+    !! (interleaved) and the averaging time (3 nn + 1 values); with in-line VIV then the in-line
+    !! phase and mean squares (3 nn more); zero without VIV.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
     n = 0
     IF (.NOT. self%initialized) RETURN
     IF (self%line%has_viv) n = 3*self%line%nn + 1
+    IF (self%line%has_viv_il) n = n + 3*self%line%nn
   END FUNCTION CD_HFMF_VIVMirrorSize
 
   INTEGER FUNCTION CD_HFMF_FrictionMirrorSize(self) RESULT(n)
@@ -2337,6 +2339,11 @@ CONTAINS
       buf(k + self%line%nn + 1:k + 3*self%line%nn) = RESHAPE(self%line%viv_ms, [2*self%line%nn])
       buf(k + 3*self%line%nn + 1) = self%line%viv_tw
       k = k + 3*self%line%nn + 1
+    END IF
+    IF (self%line%has_viv_il) THEN
+      buf(k + 1:k + self%line%nn) = self%line%vil_phi
+      buf(k + self%line%nn + 1:k + 3*self%line%nn) = RESHAPE(self%line%vil_ms, [2*self%line%nn])
+      k = k + 3*self%line%nn
     END IF
     IF (self%line%torsion%active) THEN
       buf(k + 1) = self%line%torsion%theta
@@ -2427,6 +2434,14 @@ CONTAINS
         RETURN
       END IF
     END IF
+    IF (self%line%has_viv_il) THEN
+      kb = SIZE(buf) - CD_HFMF_TorsionMirrorSize(self) - 2*self%line%nn
+      IF (ANY(buf(kb + 1:kb + 2*self%line%nn) < CD_ZERO)) THEN
+        ErrStat = CD_HFMF_BADINPUT
+        ErrMsg = 'CD_HFMF_UnpackMirror: the in-line VIV mean squares must be non-negative'
+        RETURN
+      END IF
+    END IF
     k = 0
     DO i = 1, self%line%ndof
       IF (self%line%freemask(i)) THEN
@@ -2496,6 +2511,15 @@ CONTAINS
       self%line%ws_recovery_viv_phi = self%line%viv_phi
       self%line%ws_recovery_viv_ms = self%line%viv_ms
       k = k + 3*self%line%nn + 1
+    END IF
+    IF (self%line%has_viv_il) THEN
+      self%line%vil_phi = buf(k + 1:k + self%line%nn)
+      self%line%vil_ms = RESHAPE(buf(k + self%line%nn + 1:k + 3*self%line%nn), [2, self%line%nn])
+      self%line%vil_phi_eval = self%line%vil_phi
+      self%line%vil_ms_next = self%line%vil_ms
+      self%line%ws_recovery_vil_phi = self%line%vil_phi
+      self%line%ws_recovery_vil_ms = self%line%vil_ms
+      k = k + 3*self%line%nn
     END IF
     IF (self%line%torsion%active) THEN
       self%line%torsion%theta = buf(k + 1)

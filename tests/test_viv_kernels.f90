@@ -11,15 +11,22 @@ PROGRAM test_viv_kernels
   !!   4) the phase rate is 2 pi (cF + dF sin(phi_y - phi)) U/D, with phi_y from the RMS-normalised
   !!      y', y'' (cF at phase lock, cF + dF a quarter period ahead);
   !!   5) the running mean square is MoorDyn's ((n_m - 1) old^2 + new^2)/n_m;
-  !!   6) the phase wraps to [0, 2 pi), and a node whose neighbours coincide fails closed.
+  !!   6) the phase wraps to [0, 2 pi), and a node whose neighbours coincide fails closed;
+  !!   7) the per-length lift of a centreline point (the finite-EI Gauss points);
+  !!   8) in-line VIV (Ulveseter et al. 2018): the node and per-length forces are
+  !!      1/2 rho D C_vx cos(phi_x) U v_n along the normal flow, their Jacobians match central
+  !!      differences, the in-line motion is the component along v_n/U, and the phase rate is
+  !!      2 rate_y [1 + alpha sin(phi_xd - phi_x)] (twice the cross-flow rate at phase lock).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_VIV, ONLY: CD_VIV_Node_Lift, CD_VIV_Crossflow_Motion, CD_VIV_Phase_Rate, CD_VIV_Mean_Square, &
-                          CD_VIV_Wrap_Phase, CD_VIV_TWO_PI, CD_VIV_NM, CD_VIV_Lift_Per_Length
+                          CD_VIV_Wrap_Phase, CD_VIV_TWO_PI, CD_VIV_NM, CD_VIV_Lift_Per_Length, &
+                          CD_VIV_Node_Inline, CD_VIV_Inline_Per_Length, CD_VIV_Inline_Phase_Rate, &
+                          CD_VIV_Crossflow_Along
   IMPLICIT NONE
   REAL(wp), PARAMETER :: RHO = 1025.0_wp, DIAM = 0.1_wp, CL = 0.8_wp, L1 = 2.0_wp, L2 = 1.5_wp
   REAL(wp) :: rp(3), rn(3), rd(3), u(3), coef, phi, f(3), q(3), vr(3), vn(3), un, w(3), ref(3)
   REAL(wp) :: jv(3, 3), jp(3, 3), jn(3, 3), fd(3, 3), fp(3), fm(3), h, e(3), yd, ydd, un2, rate
-  REAL(wp) :: ms, ms_md, rpv(3), kk, fl(3), jr(3, 3), jt(3, 3)
+  REAL(wp) :: ms, ms_md, rpv(3), kk, fl(3), jr(3, 3), jt(3, 3), xd, xdd, yd2, ydd2, un3, rdd(3)
   LOGICAL :: ok
   INTEGER :: nfail, j, k
 
@@ -118,6 +125,77 @@ PROGRAM test_viv_kernels
                'per-length lift: tangent Jacobian matches differences')
   CALL CD_VIV_Lift_Per_Length(u - rd, 3.0_wp*rpv, kk, fp, ok)
   CALL require(NORM2(fp - fl) <= 1.0e-12_wp*NORM2(fl), 'per-length lift does not depend on |dr/dxi|')
+
+  ! (8) in-line VIV: the node force along the normal flow and its Jacobians
+  CALL CD_VIV_Node_Inline(rp, rn, rd, u, coef, phi, f, ok)
+  ref = 0.25_wp*RHO*DIAM*un*CL*COS(phi)*vn*(L1 + L2)
+  CALL require(ok .AND. NORM2(f - ref) <= 1.0e-12_wp*NORM2(ref), 'in-line: node force = coef cos(phi_x) U v_n')
+  CALL require(ABS(DOT_PRODUCT(f, q)) <= 1.0e-12_wp*NORM2(f), 'in-line: node force normal to the tangent')
+  CALL CD_VIV_Node_Inline(rp, rn, rd, rd + 0.3_wp*q, coef, phi, f, ok)
+  CALL require(ok .AND. NORM2(f) <= 1.0e-14_wp, 'in-line: no force for flow along the line')
+  CALL CD_VIV_Node_Inline(rp, rn, rd, u, coef, phi, f, ok, jv, jp, jn)
+  DO j = 1, 3
+    CALL CD_VIV_Node_Inline(rp, rn, rd + h*unit(j), u, coef, phi, fp, ok)
+    CALL CD_VIV_Node_Inline(rp, rn, rd - h*unit(j), u, coef, phi, fm, ok)
+    fd(:, j) = -(fp - fm)/(2.0_wp*h)
+  END DO
+  CALL require(MAXVAL(ABS(jv - fd)) <= 1.0e-6_wp*MAXVAL(ABS(fd)), 'in-line: velocity Jacobian matches differences')
+  DO j = 1, 3
+    CALL CD_VIV_Node_Inline(rp + h*unit(j), rn, rd, u, coef, phi, fp, ok)
+    CALL CD_VIV_Node_Inline(rp - h*unit(j), rn, rd, u, coef, phi, fm, ok)
+    fd(:, j) = -(fp - fm)/(2.0_wp*h)
+  END DO
+  CALL require(MAXVAL(ABS(jp - fd)) <= 1.0e-6_wp*MAXVAL(ABS(fd)), 'in-line: previous-node Jacobian matches differences')
+  DO j = 1, 3
+    CALL CD_VIV_Node_Inline(rp, rn + h*unit(j), rd, u, coef, phi, fp, ok)
+    CALL CD_VIV_Node_Inline(rp, rn - h*unit(j), rd, u, coef, phi, fm, ok)
+    fd(:, j) = -(fp - fm)/(2.0_wp*h)
+  END DO
+  CALL require(MAXVAL(ABS(jn - fd)) <= 1.0e-6_wp*MAXVAL(ABS(fd)), 'in-line: next-node Jacobian matches differences')
+  CALL CD_VIV_Node_Inline(rp, rp, rd, u, coef, phi, f, ok)
+  CALL require(.NOT. ok .AND. NORM2(f) <= 0.0_wp, 'in-line: coinciding neighbours fail closed with no force')
+
+  ! in-line force per unit length: the node formula with the exact tangent, independent of |dr/dxi|
+  CALL CD_VIV_Inline_Per_Length(u - rd, rpv, kk, fl, ok, jr, jt)
+  CALL CD_VIV_Node_Inline(rp, rn, rd, u, 1.0_wp, phi, f, ok)
+  CALL require(ok .AND. NORM2(fl - 0.5_wp*RHO*DIAM*CL*f) <= 1.0e-12_wp*NORM2(fl), &
+               'in-line: per-length force = 1/2 rho D C_vx cos(phi_x) U v_n')
+  DO j = 1, 3
+    CALL CD_VIV_Inline_Per_Length(u - rd + h*unit(j), rpv, kk, fp, ok)
+    CALL CD_VIV_Inline_Per_Length(u - rd - h*unit(j), rpv, kk, fm, ok)
+    fd(:, j) = (fp - fm)/(2.0_wp*h)
+  END DO
+CALL require(MAXVAL(ABS(jr - fd)) <= 1.0e-6_wp*MAXVAL(ABS(fd)), 'in-line: per-length flow Jacobian matches differences')
+  DO j = 1, 3
+    CALL CD_VIV_Inline_Per_Length(u - rd, rpv + h*unit(j), kk, fp, ok)
+    CALL CD_VIV_Inline_Per_Length(u - rd, rpv - h*unit(j), kk, fm, ok)
+    fd(:, j) = (fp - fm)/(2.0_wp*h)
+  END DO
+  CALL require(MAXVAL(ABS(jt - fd)) <= 1.0e-6_wp*MAXVAL(ABS(fd)), &
+               'in-line: per-length tangent Jacobian matches differences')
+  CALL CD_VIV_Inline_Per_Length(u - rd, 3.0_wp*rpv, kk, fp, ok)
+  CALL require(NORM2(fp - fl) <= 1.0e-12_wp*NORM2(fl), 'in-line: per-length force does not depend on |dr/dxi|')
+
+  ! in-line motion along v_n/U, from both motion routines; the cross-flow outputs are unchanged
+  rdd = [1.0_wp, 2.0_wp, -0.5_wp]
+  CALL CD_VIV_Crossflow_Motion(rp, rn, rd, rdd, u, yd2, ydd2, un3, ok, xd, xdd)
+  CALL require(ok .AND. yd2 == yd .AND. ydd2 == ydd, 'in-line: the cross-flow motion is unchanged')
+  CALL require(ABS(xd - DOT_PRODUCT(rd, vn)/un) <= 1.0e-14_wp .AND. ABS(xdd - DOT_PRODUCT(rdd, vn)/un) <= 1.0e-14_wp, &
+               'in-line: velocity and acceleration along v_n/U')
+  CALL CD_VIV_Crossflow_Along(rn - rp, rd, rdd, u, yd2, ydd2, un3, ok, xd, xdd)
+  CALL require(ok .AND. ABS(yd2 - yd) <= 1.0e-14_wp .AND. ABS(xd - DOT_PRODUCT(rd, vn)/un) <= 1.0e-14_wp .AND. &
+               ABS(xdd - DOT_PRODUCT(rdd, vn)/un) <= 1.0e-14_wp, 'in-line: motion along a given tangent')
+
+  ! in-line phase rate: twice the cross-flow rate at phase lock, (1 + alpha) times that a quarter
+  ! period ahead; a node with no in-line motion takes phi_xd = 0
+  rate = CD_VIV_Inline_Phase_Rate(COS(2.2_wp), -SIN(2.2_wp), 1.0_wp, 1.0_wp, 2.2_wp, 3.0_wp, 0.15_wp)
+  CALL require(ABS(rate - 6.0_wp) <= 1.0e-12_wp*rate, 'in-line: rate at phase lock is twice the cross-flow rate')
+  rate = CD_VIV_Inline_Phase_Rate(COS(2.2_wp), -SIN(2.2_wp), 1.0_wp, 1.0_wp, 2.2_wp - 0.25_wp*CD_VIV_TWO_PI, &
+                                  3.0_wp, 0.15_wp)
+  CALL require(ABS(rate - 6.0_wp*1.15_wp) <= 1.0e-12_wp*rate, 'in-line: rate a quarter period ahead is 2 (1+alpha) rate_y')
+  rate = CD_VIV_Inline_Phase_Rate(0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.5_wp, 3.0_wp, 0.15_wp)
+  CALL require(ABS(rate - 6.0_wp*(1.0_wp + 0.15_wp*SIN(-0.5_wp))) <= 1.0e-12_wp*rate, &
+               'in-line: no in-line motion takes phi_xd = 0')
 
   ! (6) wrap and degenerate frame
   CALL require(CD_VIV_Wrap_Phase(-1.0e-300_wp) >= 0.0_wp .AND. CD_VIV_Wrap_Phase(-1.0e-300_wp) < CD_VIV_TWO_PI, &

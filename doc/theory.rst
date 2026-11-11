@@ -1169,6 +1169,43 @@ phases, the running mean squares and the averaging time are part of the checkpoi
 restart continues the uninterrupted run bit for bit. The OpenFAST correction iterations rewind
 them with the rest of the state.
 
+.. _theory-viv-inline:
+
+In-line vortex-induced vibration
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A finite-EI line type can add the in-line shedding force of the combined cross-flow and in-line
+model of :ref:`Ulveseter et al. (2018) <ref-ulveseter2018>`, a ``VIV`` section row
+``TypeName ClX [alpha]`` (see :doc:`file_formats`). A second phase :math:`\phi_x` per node drives
+a force along the relative normal flow, per unit deformed length
+
+.. math::
+
+   \mathbf{f}_x = \tfrac{1}{2}\rho\,d\,C_{x}\cos\phi_x\;U\,\mathbf{v}_n ,
+
+the direction of the drag, at twice the cross-flow frequency. Its phase is slaved to the
+cross-flow shedding phase :math:`\phi`, with a band :math:`\alpha` in which it locks onto the
+in-line motion :math:`\dot x = \dot{\mathbf{r}}\cdot\mathbf{v}_n/U`:
+
+.. math::
+
+   \dot\phi_x = 2\,\dot\phi\,\bigl[1 + \alpha\sin(\phi_{\dot x} - \phi_x)\bigr], \qquad
+   \phi_{\dot x} = \operatorname{atan2}\!\left(-\frac{\ddot x}{\ddot x_\text{rms}},\,
+                   \frac{\dot x}{\dot x_\text{rms}}\right),
+
+with the running RMS values of the cross-flow phase (:math:`\phi_{\dot x} = 0` at a node with no
+in-line motion). Ulveseter et al. take :math:`C_x = 0.85` and :math:`\alpha = 0.15` (the default
+here) with a cross-flow :math:`C_L` of 0.65. The in-line phase starts at twice the cross-flow
+one, so the two start locked. The in-line rate is twice the cross-flow one, so ``ClX > 0``
+needs the type's cross-flow :math:`C_L > 0`. The force is integrated with the lift at the same
+Gauss points, :math:`\cos\phi_x` interpolated between the element's end nodes, and its exact
+position and velocity derivatives enter the tangent. The phase is explicit with the Heun commit,
+its end-state rate taken from the end-state cross-flow rate. The phase and the two mean squares
+are part of the step-recovery, snapshot and checkpoint state, and a ``ClX`` of zero leaves the
+run exactly as without the row. On the taut line of ``viv_taut_cable_inline.dat`` the quarter
+span moves in line at twice the cross-flow frequency, A/D 0.19 against 0.03 with the cross-flow
+lift alone. ``EI = 0`` lines do not take in-line VIV yet.
+
 .. _theory-dry-buoyancy:
 
 Buoyancy and wetting

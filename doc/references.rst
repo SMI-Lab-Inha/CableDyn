@@ -89,6 +89,12 @@ Hydrodynamics and ocean environment
   vortex-induced vibrations in stationary and oscillating flows. *Journal of Fluids and
   Structures* **61**, 1–19. https://doi.org/10.1016/j.jfluidstructs.2015.11.006
 
+.. _ref-ulveseter2018:
+
+- **Ulveseter, J. V., Thorsen, M. J., Sævik, S. & Larsen, C. M. (2018).** Time domain
+  simulation of riser VIV in current and irregular waves. *Marine Structures* **60**, 241–260.
+  https://doi.org/10.1016/j.marstruc.2018.04.001
+
 .. _ref-morison1950:
 
 - **Morison, J. R., O'Brien, M. P., Johnson, J. W. & Schaaf, S. A. (1950).** The force

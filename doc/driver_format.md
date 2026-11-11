@@ -133,8 +133,8 @@ except that `SYROPE IC` must come **after** `LINES`, because its rows name lines
 exist. A conventional layout is:
 
 LINE TYPES → BODIES → EXTERNAL LOADS → ROD TYPES → RODS → POINTS → TURBINES → LINES → SYROPE IC →
-SECTIONS → END CONNECTIONS / EQUIVALENT BUOYANCY / ATTACHMENTS / STIFFENERS / FAILURE / CONTROL →
-OPTIONS → OUTPUTS
+SECTIONS → END CONNECTIONS / EQUIVALENT BUOYANCY / ATTACHMENTS / STIFFENERS / VIV / FAILURE /
+CONTROL → OPTIONS → OUTPUTS
 
 Within LINE TYPES, the header row must precede the data rows because it selects their column
 order.
@@ -210,6 +210,7 @@ are collapsed. It must match one of the spellings below; any other name fails wi
 | EQUIVALENT BUOYANCY | `EQUIVALENT BUOYANCY`, `EQUIVALENT SECTIONS`, `BUOYANCY SECTIONS` |
 | ATTACHMENTS | `ATTACHMENTS`, `LINE ATTACHMENTS`, `CLUMPS` |
 | STIFFENERS | `STIFFENERS`, `STIFFENER`, `BEND STIFFENERS`, `BEND STIFFENER` |
+| VIV | `VIV`, `VORTEX-INDUCED VIBRATION`, `VORTEX INDUCED VIBRATION` |
 | FAILURE | `FAILURE`, `FAILURES` |
 | CONTROL | `CONTROL`, `CONTROLS` |
 | TURBINES | `TURBINES`, `TURBINE` |
@@ -288,6 +289,14 @@ tension `T`. `EI|-zeta|f` gives it as the damping ratio `0 < ζ < 1` of a pure b
 frequency `f` [Hz], `Bb = ζ EI/(π f)`, set once per line type (it does not depend on the mesh).
 `EI|0` is the plain `EI`. It needs `EI > 0` and acts in the dynamics only (a static solve has no
 rates).
+
+**Cross-flow VIV columns (MoorDyn v2).** A 10-column row may end with `Cl` (11 columns) or
+`Cl dF cF` (13 columns): the lift coefficient of the vortex-shedding synchronisation model and
+the half-range and centre of its band in non-dimensional frequency (MoorDyn's `dF = 0.08` and
+`cF = 0.18` when only `Cl` is given). `Cl = 0` is no VIV; `Cl > 0` needs `cF > 0` and
+`0 <= dF < cF`, and the line's drag in water. It acts in the dynamics on `EI = 0` lines and
+finite-EI cables (see [Cross-flow VIV](theory.rst)); the 14-column row has no VIV columns. The
+in-line force of a finite-EI type is a [VIV](#viv-optional-finite-ei-lines) section row.
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:
@@ -1135,6 +1144,41 @@ Behaviour:
   of End A and End B together are longer than the line. On a stock-order line (anchor as
   `NodeA`) the `End` column follows the written row, so the stiffener stays on the same physical
   end. Stiffeners run wherever the cubic-Hermite cable does, standalone and coupled.
+
+### VIV (optional, finite-EI lines)
+
+In-line vortex-induced vibration of a line type: a second vortex-shedding force along the
+relative flow, the direction of the drag, at twice the cross-flow frequency (Ulveseter et al.
+2018; see [In-line VIV](theory.rst)). One row per line type, which must carry the cross-flow lift
+(`Cl > 0` in LINE TYPES), since the in-line phase runs at twice the cross-flow one.
+
+```text
+--------------------- VIV ----------------------------------------------
+TypeName   ClX    alpha
+(-)        (-)    (-)
+cable      0.85   0.15
+```
+
+| Column | Meaning |
+|--------|---------|
+| `TypeName` | an existing LINE TYPES name (case-insensitive), at most one row each |
+| `ClX` | in-line shedding coefficient `C_x` >= 0, at most 1e15; `0` is no in-line VIV |
+| `alpha` | optional frequency band of the in-line phase about twice the cross-flow one, `0 <= alpha < 1` (default 0.15) |
+
+Behaviour:
+
+- Per unit length the force is `1/2 rho D ClX cos(phi_x) U v_n`, with `v_n` the relative normal
+  flow and `U` its speed; its phase follows `dphi_x/dt = 2 (dphi/dt) [1 + alpha sin(phi_xd - phi_x)]`,
+  `phi` the cross-flow phase and `phi_xd` the phase of the in-line motion. Ulveseter et al. take
+  `ClX = 0.85` and `alpha = 0.15` with `Cl = 0.65`.
+- The Outputs flag `V` file carries the in-line force with the lift, and the phase is part of
+  the step-recovery, snapshot and checkpoint state. A row with `ClX = 0` leaves the run exactly as
+  without it.
+- It acts on finite-EI lines (`EI > 0`) on every route the cubic-Hermite cable runs; an `EI = 0`
+  line of a type with `ClX > 0` stops by name. A row fails if it is not `TypeName ClX [alpha]`,
+  names an undefined or already named type, or holds a value out of range, and `ClX > 0` fails
+  on a type without the cross-flow lift.
+- See `examples/viv_taut_cable_inline.dat`.
 
 ### FAILURE (optional, EI = 0 decks)
 

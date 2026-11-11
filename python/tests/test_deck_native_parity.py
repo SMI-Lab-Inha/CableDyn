@@ -983,6 +983,50 @@ def test_bending_damping_rows_are_native(ei, message):
     _rejects(text, re.escape(message))
 
 
+_VIV_EI0 = "-0.8       0.0      1.2"
+# the cross-flow VIV example as a finite-EI cable (EI 1 N m^2)
+_VIV_CABLE = _example("viv_taut_line_crossflow.dat", (_VIV_EI0, "-0.8       1.0      1.2"))
+
+
+@pytest.mark.parametrize(
+    "rows", [("riser 0.85 0.15",), ("riser 0.85",), ("riser 0",), ("RISER 0.5 0.0",)]
+)
+def test_inline_viv_rows_are_accepted(rows):
+    DeckFile.from_text(_section(_VIV_CABLE, "VIV", "TypeName ClX alpha", "(-) (-) (-)", *rows))
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        (("riser 0.85 0.15 7",), "VIV rows must be: TypeName ClX [alpha]"),
+        (("cable 0.85",), 'VIV row names undefined LINE TYPE "cable"'),
+        (("riser 0.85", "riser 0.5"), 'VIV names LINE TYPE "riser" twice'),
+        (("riser 0.85 x",), "VIV ClX and alpha must be plain numbers"),
+        (("riser -0.1",), "ClX must be non-negative"),
+        (("riser 2.0e15",), "ClX must be non-negative"),
+        (("riser 0.85 1.0",), "alpha must satisfy 0 <= alpha < 1"),
+        (("riser 0.85 -0.1",), "alpha must satisfy 0 <= alpha < 1"),
+    ],
+)
+def test_inline_viv_rows_are_native(rows, message):
+    _rejects(_section(_VIV_CABLE, "VIV", *rows), re.escape(message))
+
+
+def test_inline_viv_needs_the_crossflow_lift():
+    text = _edit(_VIV_CABLE, ("0.0   0.8   0.08   0.18", "0.0   0.0   0.08   0.18"))
+    _rejects(
+        _section(text, "VIV", "riser 0.85"),
+        re.escape("needs its cross-flow lift (LINE TYPES Cl > 0)"),
+    )
+
+
+def test_inline_viv_needs_a_finite_ei_line():
+    text = _section(_example("viv_taut_line_crossflow.dat"), "VIV", "riser 0.85")
+    _rejects(text, re.escape("in-line VIV acts on finite-EI lines (EI > 0)"))
+    # a zero in-line coefficient is no in-line VIV, which the EI = 0 line takes
+    DeckFile.from_text(_section(_example("viv_taut_line_crossflow.dat"), "VIV", "riser 0.0"))
+
+
 def test_stiffener_needs_a_finite_ei_line():
     text = _section(_HELD, "STIFFENERS", "1 A 1.0 0.5 0.5 0.3 5.0e7 1150")
     _rejects(text, "STIFFENERS name line 1, which is not a finite-EI line")

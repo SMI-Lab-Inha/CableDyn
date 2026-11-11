@@ -17,6 +17,13 @@ All notable changes to CableDyn are recorded in this file. The format follows
   pinned cable match this to 0.05 %. It acts on every dynamic route beside the axial (`BA`) and
   torsional (`GJ|K|Bt`) damping, with exact Jacobians; the Python deck reader and builder take the
   same forms.
+- In-line VIV of finite-EI cables: an optional `VIV` section row `TypeName ClX [alpha]` adds the
+  in-line vortex-shedding force of Ulveseter et al. (2018), `1/2 rho D ClX cos(phi_x) U v_n` along
+  the relative flow, with its phase slaved to twice the cross-flow one in a band `alpha` (default
+  0.15). On the taut line of `examples/viv_taut_cable_inline.dat` the in-line response runs at
+  twice the cross-flow frequency, A/D 0.19 against 0.03 with the lift alone. Exact Jacobians; the
+  phase is in the step-recovery, snapshot and checkpoint state; the Python deck reader and
+  builder take the section. `EI = 0` lines refuse it for now.
 
 ## [0.4.2] - 2026-11-09
 

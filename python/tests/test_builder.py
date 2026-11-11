@@ -1009,6 +1009,36 @@ def test_bending_damping_round_trips_in_the_ei_column(
     assert next(t for t in loaded.line_types if t.name == "cable").ei == ei
 
 
+@pytest.mark.parametrize(("clx", "il_alpha"), [(0.85, 0.15), (0.85, None), (0.0, 0.2)])
+def test_inline_viv_round_trips_in_the_viv_section(
+    tmp_path: Path, clx: float, il_alpha: float | None
+) -> None:
+    model = _chain_model(tmp_path)
+    cable = model.add_line_type(
+        "cable", diam=0.2, mass=40.0, ea=5.0e8, ei=1.0e4, cl=0.8, clx=clx, il_alpha=il_alpha
+    )
+    assert (cable.clx, cable.il_alpha) == (clx, il_alpha)
+    target = model.save(tmp_path / "inline_viv.dat")
+    deck = DeckFile.read(target)
+    row = next(r for r in deck._rows("VIV") if r.tokens[0] == "cable")
+    assert [float(v) for v in row.tokens[1:]] == [clx] + ([] if il_alpha is None else [il_alpha])
+    loaded = next(t for t in DeckModel.load(target).line_types if t.name == "cable")
+    assert (loaded.clx, loaded.il_alpha) == (clx, il_alpha)
+
+
+def test_inline_viv_alpha_needs_the_coefficient(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type("cable", diam=0.2, mass=40.0, ea=5.0e8, ei=1.0e4, cl=0.8, il_alpha=0.15)
+    with pytest.raises(ValueError, match="il_alpha needs the in-line VIV coefficient clx"):
+        model.to_text()
+
+
+def test_no_viv_section_without_inline_viv(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type("cable", diam=0.2, mass=40.0, ea=5.0e8, ei=1.0e4, cl=0.8)
+    assert "VIV ---" not in model.to_text()
+
+
 def test_bending_damping_ei_tuple_length_is_checked(tmp_path: Path) -> None:
     model = _chain_model(tmp_path)
     model.add_line_type("cable", diam=0.2, mass=40.0, ea=5.0e8, ei=(1.0e4, 1.0, 2.0, 3.0))
