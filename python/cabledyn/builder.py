@@ -117,6 +117,7 @@ _CHANNEL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"(ten|curvx|curvy|curv|bendmom|stfmom|torq)([0-9]+)(n[0-9]+)", re.IGNORECASE),
     ),
     ("line", re.compile(r"(twist)([0-9]+)(n[0-9]+|)", re.IGNORECASE)),
+    ("line", re.compile(r"(vivpow|dragpow|damppow)([0-9]+)(n[0-9]+|)", re.IGNORECASE)),
     ("line", re.compile(r"(l)([0-9]+)(n[0-9]+(?:[pva][xyz]|dec|azi))", re.IGNORECASE)),
     ("point", re.compile(r"(point|con)([0-9]+)(p[xyz])", re.IGNORECASE)),
     ("point", re.compile(r"(point)([0-9]+)(f[xyzh])", re.IGNORECASE)),

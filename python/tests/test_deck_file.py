@@ -3862,6 +3862,8 @@ def test_case_generation_tolerates_unqueryable_existing_outputs(tmp_path, monkey
         ("TDP1Grd", "tdp01GRD"),
         ("AnchFz1", "anchfz01"),
         ("AnchFH1", "ANCHFH1"),
+        ("VIVPow1", "vivpow01"),
+        ("DragPow1N3", "dragpow01n03"),
     ],
 )
 def test_duplicate_output_channels_fail_like_native(first, second):

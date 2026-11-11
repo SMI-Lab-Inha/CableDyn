@@ -864,6 +864,60 @@ lowest value differs from the converged one by 0.6 m. Elements no longer than ab
 :math:`\sqrt{EI/T}` at touchdown keep the node tension there within about 1.5 % of the
 converged value through the motion, and a tenth within 0.5 %.
 
+Load power channels
+~~~~~~~~~~~~~~~~~~~
+
+The power three loads deliver to a line at every output time, for an energy ledger of its
+motion: the work the VIV loads put in against what the drag and the structural damping take out,
+along the line and over the run. Each is the load times the velocity it acts through at the
+committed state, positive when the load puts energy into the line:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 24 56 20
+
+   * - Channel
+     - Meaning
+     - Unit
+   * - ``VIVPow<L>``
+     - power of the VIV loads on line ``L``: the cross-flow lift (:ref:`theory-viv`) and, on a
+       type with a ``VIV`` section row, the in-line force (:ref:`theory-viv-inline`); zero on a
+       line without VIV
+     - W
+   * - ``DragPow<L>``
+     - power of the Morison drag on the line (current, waves and a host's fluid field) and, on a
+       finite-EI line, of its ATTACHMENTS' drag; zero without drag
+     - W
+   * - ``DampPow<L>``
+     - power of the structural damping: the axial dashpot ``BA`` and, on a finite-EI line, the
+       bending dashpot (``EI|Bb``); never positive
+     - W
+   * - ``VIVPow<L>N<J>``, ``DragPow<L>N<J>``, ``DampPow<L>N<J>``
+     - the same per unit unstretched length about node ``J``
+     - W/m
+
+The power of a load on an element is :math:`\mathbf{f}_e\cdot\dot{\mathbf{q}}_e`, its nodal
+(finite-EI: generalised) load on the element's degrees of freedom times their velocities, which
+is the exact rate of work of the load the solver applies; a node load (the lift of an
+``EI = 0`` line, an attachment's drag) delivers :math:`\mathbf{f}\cdot\mathbf{v}` at its node.
+A node takes half the power of each of its elements and the power of its own node loads, so the
+line total ``<name><L>`` is the sum over its nodes, and ``<name><L>N<J>`` is node ``J``'s share
+over half the unstretched length of its elements (W per metre of unstretched line; on a refined
+line, at the deck node's node of the final mesh). An element's damping power is never positive,
+so neither is a node's.
+
+The three are the non-conservative loads of a VIV study, not all of them: the work of the end
+supports and points, the seabed contact, damping and friction, the added mass and Froude-Krylov
+loads, a body's or point's own drag, the torsional damping ``Bt`` and the internal damping of the
+viscoelastic and Syrope laws is not in them. Where those do no net work, the energy the line holds
+only oscillates in a steady response, so the means balance:
+:math:`\overline{P}_\text{VIV} + \overline{P}_\text{drag} + \overline{P}_\text{damp} \approx 0`.
+On the locked-in taut line of ``viv_taut_cable_inline.dat`` (pinned ends, steady current) the VIV
+loads put in 8.52 W over 60-90 s, the drag takes out 8.56 W and the axial damping 0.002 W: the
+three balance within 0.5 % of the VIV power, the line's loss of energy over the window as its
+response settles, and as an ``EI = 0`` line the same. Integrating a channel over the output times gives the work of its
+load, :math:`W = \int P\,dt`; a static run reports 0.
+
 Point channels
 ~~~~~~~~~~~~~~
 

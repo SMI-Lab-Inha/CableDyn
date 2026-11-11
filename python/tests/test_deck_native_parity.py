@@ -1025,6 +1025,29 @@ def test_inline_viv_acts_on_an_ei0_line(row):
     DeckFile.from_text(_section(_example("viv_taut_line_crossflow.dat"), "VIV", row))
 
 
+@pytest.mark.parametrize(
+    ("channel", "message"),
+    [
+        ("VIVPow1", None),
+        ("DragPow1", None),
+        ("DampPow1", None),
+        ("vivpow01n26", None),
+        ("DampPow1N51", None),
+        ("VIVPow0", "bad load power channel"),
+        ("DragPow7", "bad load power channel"),
+        ("DampPowx", "bad load power channel"),
+        ("VIVPow1N0", "node numbers start at 1 = End A"),
+        ("DragPow1N52", "node exceeds the line node count"),
+    ],
+)
+def test_load_power_channels_are_native(channel, message):
+    text = _example("viv_taut_line_crossflow.dat", ('"FairTen1"', f'"FairTen1"\n"{channel}"'))
+    if message is None:
+        DeckFile.from_text(text)
+    else:
+        _rejects(text, re.escape(message))
+
+
 def test_stiffener_needs_a_finite_ei_line():
     text = _section(_HELD, "STIFFENERS", "1 A 1.0 0.5 0.5 0.3 5.0e7 1150")
     _rejects(text, "STIFFENERS name line 1, which is not a finite-EI line")

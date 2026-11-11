@@ -99,6 +99,7 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Latch_Model_VIV_Window
   PUBLIC :: CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, CD_Model_Has_VIV, CD_Get_Model_VIV_Lift
   PUBLIC :: CD_Model_Has_VIV_Inline
+  PUBLIC :: CD_Get_Model_Load_Power
   PUBLIC :: CD_Get_Model_Tension
   PUBLIC :: CD_Get_Model_Internal_Rates
   PUBLIC :: CD_Get_Model_EndForces
@@ -4287,6 +4288,86 @@ CONTAINS
       CALL viv_node_load(model, model%q, model%v, nd, .FALSE., lift(:, nd), ok)
     END DO
   END SUBROUTINE CD_Get_Model_VIV_Lift
+
+  SUBROUTINE CD_Get_Model_Load_Power(model, p_viv, p_drag, p_damp, ErrStat, ErrMsg)
+    !! The power [W] three loads deliver to the line at the committed state, per node (n_nodes):
+    !! the VIV loads (cross-flow lift, and the in-line force where it is on) at the committed
+    !! phases, the Morison drag and the axial structural damping (BA). An element's force on its
+    !! two nodes delivers f_a . v_a + f_b . v_b, half to each node, and a node load f . v to its
+    !! node, so the node values sum to the exact power of the load. The damping power of every
+    !! element, and so of every node, is never positive; the viscoelastic and Syrope laws' own
+    !! damping is not included.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: p_viv(:), p_drag(:), p_damp(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: e, nd, nn, idx(6), lk
+    REAL(wp) :: q2(6), v2(6), f2(6), fluid2(3, 2), wl2(2), fl(3)
+    LOGICAL :: ok
+    p_viv = CD_ZERO
+    p_drag = CD_ZERO
+    p_damp = CD_ZERO
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      CALL fail(ErrStat, ErrMsg, 'load power: the model is not initialised')
+      RETURN
+    END IF
+    nn = model%n_dof/3
+    IF (SIZE(p_viv) /= nn .OR. SIZE(p_drag) /= nn .OR. SIZE(p_damp) /= nn) THEN
+      CALL fail(ErrStat, ErrMsg, 'load power: the powers must have one entry per node')
+      RETURN
+    END IF
+    lk = MIN(LEN(ErrMsg), KERNEL_MSG_LEN)
+    DO e = 1, model%n_elem
+      CALL extract_element_state(model, e, model%q, model%v, idx, q2, v2)
+      IF (model%has_damping) THEN
+        CALL CD_Axial_Damping_Element_Force(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
+                                            model%ba_dyn(e), f2, ErrStat, ErrMsg(1:lk), &
+                                            l0_dot=model%l0_dot(e), inputs_validated=.TRUE.)
+        IF (ErrStat /= 0) RETURN
+        CALL add_shares(p_damp)
+      END IF
+      IF (model%has_morison_drag) THEN
+        CALL extract_nodal_vector(model%fluid_velocity, model, e, fluid2)
+        CALL extract_nodal_scalar(model%drag_waterline_z, model, e, wl2)
+        CALL CD_Morison_Drag_Element_Force(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
+                                           fluid2(:, 1), fluid2(:, 2), wl2(1), wl2(2), model%drag_rho, &
+                                           model%drag_diameter_elem(e), model%drag_cdn_elem(e), &
+                                           model%drag_cdt_elem(e), f2, ErrStat, ErrMsg(1:lk), inputs_validated=.TRUE.)
+        IF (ErrStat /= 0) RETURN
+        CALL add_shares(p_drag)
+      END IF
+    END DO
+    IF (model%has_viv) THEN
+      DO nd = 2, nn - 1
+        IF (.NOT. model%viv_node(nd)) CYCLE
+        CALL viv_node_load(model, model%q, model%v, nd, .FALSE., fl, ok)
+        IF (.NOT. ok) THEN
+          CALL fail(ErrStat, ErrMsg, 'load power: the neighbours of a VIV node coincide (no line tangent)')
+          RETURN
+        END IF
+        p_viv(nd) = DOT_PRODUCT(fl, model%v(3*nd - 2:3*nd))
+      END DO
+    END IF
+    IF (.NOT. (CD_All_Finite(p_viv) .AND. CD_All_Finite(p_drag) .AND. CD_All_Finite(p_damp))) THEN
+      CALL fail(ErrStat, ErrMsg, 'load power: non-finite load power')
+    END IF
+
+  CONTAINS
+
+    SUBROUTINE add_shares(p)
+      !! The element force f2 on its two nodes times their velocities, half to each node.
+      REAL(wp), INTENT(INOUT) :: p(:)
+      INTEGER :: a, b
+      REAL(wp) :: pe
+      a = (idx(1) + 2)/3
+      b = (idx(4) + 2)/3
+      pe = 0.5_wp*DOT_PRODUCT(f2, v2)
+      p(a) = p(a) + pe
+      p(b) = p(b) + pe
+    END SUBROUTINE add_shares
+  END SUBROUTINE CD_Get_Model_Load_Power
 
   PURE LOGICAL FUNCTION CD_Model_Has_VIV_Inline(model) RESULT(has)
     !! True if the model carries the in-line VIV phase state (as well as the cross-flow one).

@@ -267,7 +267,16 @@ def test_edit_fields_in_place_and_revalidate() -> None:
 def test_rename_propagates_to_rows_and_output_channels() -> None:
     model = _chain_model()
     model.outputs.add(
-        "Ten1N3", "L1N2px", "TDP1s", "TDP1Grd", "AnchFz1", "AnchFH1", "Point2FH", "Con1py"
+        "Ten1N3",
+        "L1N2px",
+        "TDP1s",
+        "TDP1Grd",
+        "AnchFz1",
+        "AnchFH1",
+        "Point2FH",
+        "Con1py",
+        "VIVPow1",
+        "DampPow1N3",
     )
     model.rename(model.lines[1], 7)
     model.rename(model.points[1], 11)
@@ -284,6 +293,8 @@ def test_rename_propagates_to_rows_and_output_channels() -> None:
         "AnchFH7",
         "Point2FH",
         "Con11py",
+        "VIVPow7",
+        "DampPow7N3",
     ]
     deck = model.to_deck_file()
     assert deck.lines[0].tokens == ("7", "11", "2", "-")

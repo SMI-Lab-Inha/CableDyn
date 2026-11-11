@@ -1326,6 +1326,16 @@ target_link_libraries(test_hermite_viv_inline PRIVATE cabledyn_core)
 add_test(NAME hermite_viv_inline COMMAND test_hermite_viv_inline)
 set_tests_properties(hermite_viv_inline PROPERTIES LABELS "fortran;dynamic;viv")
 
+add_executable(test_hermite_load_power tests/test_hermite_load_power.f90)
+target_link_libraries(test_hermite_load_power PRIVATE cabledyn_core)
+add_test(NAME hermite_load_power COMMAND test_hermite_load_power)
+set_tests_properties(hermite_load_power PROPERTIES LABELS "fortran;dynamic;viv")
+
+add_executable(test_load_power_deck tests/test_load_power_deck.f90)
+target_link_libraries(test_load_power_deck PRIVATE cabledyn_core)
+add_test(NAME load_power_deck COMMAND test_load_power_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(load_power_deck PROPERTIES LABELS "fortran;integration;dynamic;viv;driver")
+
 add_executable(test_viv_inline_deck tests/test_viv_inline_deck.f90)
 target_link_libraries(test_viv_inline_deck PRIVATE cabledyn_core)
 add_test(NAME viv_inline_deck COMMAND test_viv_inline_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

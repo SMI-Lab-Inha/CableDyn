@@ -128,6 +128,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Set_Irregular_Waves
   PUBLIC :: CD_HermiteCable_Drag_Element
   PUBLIC :: CD_HermiteCable_VIV_Lift_Element
+  PUBLIC :: CD_HermiteCable_Dyn_Load_Power
   PUBLIC :: CD_HermiteCable_Axial_Damping_Element
   PUBLIC :: CD_HermiteCable_Axial_Damping_Resultant
   PUBLIC :: CD_HermiteCable_AddedMass_Element
@@ -1547,6 +1548,45 @@ CONTAINS
     END IF
   END SUBROUTINE viv_element_lift
 
+  SUBROUTINE element_drag_load(model, e, qe, ve, l0, t_eval, fdrag, ErrStat, ErrMsg)
+    !! The Morison drag load of element e (generalised, 12) at element state (qe, ve) and
+    !! unstretched length l0, in the flow the drag configuration gives at time t_eval: the current
+    !! plus the regular or irregular wave kinematics, or plus the held field's element average.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    REAL(wp), INTENT(IN) :: qe(12), ve(12), l0, t_eval
+    REAL(wp), INTENT(OUT) :: fdrag(12)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    IF (model%has_wave .AND. model%wv_ncomp > 0) THEN
+      CALL CD_HermiteCable_Drag_Element(qe, ve, l0, model%current, model%waterline_z, &
+                                        model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                        fdrag, ErrStat=es, ErrMsg=ErrMsg, &
+                                        wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval, &
+                                        wvc_amp=model%wv_ampc, wvc_om=model%wv_omc, &
+                                        wvc_k=model%wv_kc, wvc_ph=model%wv_phc, &
+                                        wvc_e2kd=model%wv_e2kd)
+    ELSE IF (model%has_wave) THEN
+      CALL CD_HermiteCable_Drag_Element(qe, ve, l0, model%current, model%waterline_z, &
+                                        model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                        fdrag, ErrStat=es, ErrMsg=ErrMsg, &
+                                        wv_h=model%wv_h, wv_om=model%wv_om, wv_k=model%wv_k, &
+                                        wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval)
+    ELSE IF (model%has_held_field) THEN
+      CALL CD_HermiteCable_Drag_Element(qe, ve, l0, &
+                                        model%current + 0.5_wp*(model%hf_u(:, e) + model%hf_u(:, e + 1)), &
+                                        0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1)), &
+                                        model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                        fdrag, ErrStat=es, ErrMsg=ErrMsg)
+    ELSE
+      CALL CD_HermiteCable_Drag_Element(qe, ve, l0, model%current, model%waterline_z, &
+                                        model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                        fdrag, ErrStat=es, ErrMsg=ErrMsg)
+    END IF
+    ErrStat = es
+  END SUBROUTINE element_drag_load
+
   SUBROUTINE CD_HermiteCable_Dyn_VIV_Node_Lift(model, lift, ErrStat, ErrMsg)
     !! The VIV lift on every node at the committed state [N] (3, nn), in the model frame: the
     !! translational components of the elements' consistent lift loads, summed at the nodes
@@ -1574,6 +1614,86 @@ CONTAINS
       lift(:, e + 1) = lift(:, e + 1) + flift(7:9)
     END DO
   END SUBROUTINE CD_HermiteCable_Dyn_VIV_Node_Lift
+
+  SUBROUTINE CD_HermiteCable_Dyn_Load_Power(model, p_viv, p_drag, p_damp, ErrStat, ErrMsg)
+    !! The power [W] three loads deliver to the cable at the committed state, per node (nn): the
+    !! VIV loads (cross-flow lift, and the in-line force where it is on), the hydrodynamic drag
+    !! (the cable's Morison drag and the attachments' drag) and the structural damping (the axial
+    !! and bending dashpots, BA and Bb). An element's generalised load f (12) delivers f . v_e,
+    !! half to each of its two nodes, so the node values sum to the exact power of the load; an
+    !! attachment's drag delivers f . v at its node. The damping power of every element, and so of
+    !! every node, is never positive. The torsional damping Bt is not included.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: p_viv(:), p_drag(:), p_damp(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp) :: qe(12), ve(12), fe(12), rk(3), jrel(3, 3), jtan(3, 3), fd(3)
+    INTEGER :: e, k, base
+    LOGICAL :: has_jac
+    p_viv = CD_ZERO
+    p_drag = CD_ZERO
+    p_damp = CD_ZERO
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Load_Power: model not initialised'; RETURN
+    END IF
+    IF (SIZE(p_viv) /= model%nn .OR. SIZE(p_drag) /= model%nn .OR. SIZE(p_damp) /= model%nn) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Load_Power: the powers must have one entry per node'
+      RETURN
+    END IF
+    DO e = 1, model%ne
+      qe(1:6) = model%q(6*(e - 1) + 1:6*e); qe(7:12) = model%q(6*e + 1:6*(e + 1))
+      ve(1:6) = model%v(6*(e - 1) + 1:6*e); ve(7:12) = model%v(6*e + 1:6*(e + 1))
+      IF (model%has_axial_damping .OR. model%has_bend_damping) THEN
+        ! an internal force: the load on the nodes is -fe
+        CALL structural_damping_element(model, e, qe, ve, fe, ErrStat, ErrMsg)
+        IF (ErrStat /= CD_HCDYN_OK) THEN
+          ErrMsg = 'CD_HermiteCable_Dyn_Load_Power: '//TRIM(ErrMsg); RETURN
+        END IF
+        CALL add_shares(p_damp, -fe)
+      END IF
+      IF (model%has_drag) THEN
+        CALL element_drag_load(model, e, qe, ve, model%l0(e), model%t, fe, ErrStat, ErrMsg)
+        IF (ErrStat /= CD_HCDYN_OK) THEN
+          ErrMsg = 'CD_HermiteCable_Dyn_Load_Power: '//TRIM(ErrMsg); RETURN
+        END IF
+        CALL add_shares(p_drag, fe)
+      END IF
+      IF (model%has_viv) THEN
+        CALL viv_element_lift(model, model%q, model%v, e, fe, ErrStat, ErrMsg)
+        IF (ErrStat /= CD_HCDYN_OK) THEN
+          ErrMsg = 'CD_HermiteCable_Dyn_Load_Power: '//TRIM(ErrMsg); RETURN
+        END IF
+        CALL add_shares(p_viv, fe)
+      END IF
+    END DO
+    IF (ALLOCATED(model%att_node)) THEN
+      DO k = 1, SIZE(model%att_node)
+        CALL attachment_residual(model, k, model%q, model%v, .FALSE., rk, has_jac, jrel, jtan, ErrStat, ErrMsg, &
+                                 f_drag=fd)
+        IF (ErrStat /= CD_HCDYN_OK) THEN
+          ErrMsg = 'CD_HermiteCable_Dyn_Load_Power: '//TRIM(ErrMsg); RETURN
+        END IF
+        base = 6*(model%att_node(k) - 1)
+        p_drag(model%att_node(k)) = p_drag(model%att_node(k)) + DOT_PRODUCT(fd, model%v(base + 1:base + 3))
+      END DO
+    END IF
+    IF (.NOT. (CD_All_Finite(p_viv) .AND. CD_All_Finite(p_drag) .AND. CD_All_Finite(p_damp))) THEN
+      ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_Load_Power: non-finite load power'
+    END IF
+
+  CONTAINS
+
+    SUBROUTINE add_shares(p, f)
+      !! Element e's load f (on the nodes) times its generalised velocity, half to each node.
+      REAL(wp), INTENT(INOUT) :: p(:)
+      REAL(wp), INTENT(IN) :: f(12)
+      REAL(wp) :: pe
+      pe = 0.5_wp*DOT_PRODUCT(f, ve)
+      p(e) = p(e) + pe
+      p(e + 1) = p(e + 1) + pe
+    END SUBROUTINE add_shares
+  END SUBROUTINE CD_HermiteCable_Dyn_Load_Power
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_Friction_Anchors(model, anchors, ErrStat, ErrMsg)
     !! Switch the seabed friction of a contact model with mu > 0 to elastic-plastic friction
@@ -1793,10 +1913,12 @@ CONTAINS
     END DO
   END SUBROUTINE assemble_attachments
 
-  SUBROUTINE attachment_residual(model, k, q_cfg, v_cfg, want_jac, rk, has_jac, jrel, jtan, ErrStat, ErrMsg)
+  SUBROUTINE attachment_residual(model, k, q_cfg, v_cfg, want_jac, rk, has_jac, jrel, jtan, ErrStat, ErrMsg, &
+                                 f_drag)
     !! Contribution rk of attachment k to R = f_int - f_ext at the translations of its node:
     !! weight, buoyancy, Froude-Krylov force and drag (inertia excluded). With want_jac, the
-    !! drag Jacobians d f/d w and d f/d tangent are returned when has_jac is set.
+    !! drag Jacobians d f/d w and d f/d tangent are returned when has_jac is set. f_drag
+    !! (optional) returns the drag force on the node alone (zero above the free surface).
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: k
     REAL(wp), INTENT(IN) :: q_cfg(:), v_cfg(:)
@@ -1805,10 +1927,12 @@ CONTAINS
     LOGICAL, INTENT(OUT) :: has_jac
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    REAL(wp), INTENT(OUT), OPTIONAL :: f_drag(3)
     INTEGER :: j, base
     REAL(wp) :: u(3), ud(3), wrel(3), wl, f(3)
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     rk = CD_ZERO; jrel = CD_ZERO; jtan = CD_ZERO; has_jac = .FALSE.
+    IF (PRESENT(f_drag)) f_drag = CD_ZERO
     j = model%att_node(k)
     base = 6*(j - 1)
     u = CD_ZERO; ud = CD_ZERO; wl = CD_ZERO
@@ -1840,6 +1964,7 @@ CONTAINS
     END IF
     IF (ErrStat /= CD_HCDYN_OK) RETURN
     rk = rk - f
+    IF (PRESENT(f_drag)) f_drag = f
   END SUBROUTINE attachment_residual
 
   SUBROUTINE CD_HermiteCable_Dyn_Recompute_Acceleration(model, ErrStat, ErrMsg, pres_dofs, pres_a)
@@ -6899,31 +7024,7 @@ CONTAINS
       IF (gap > CD_ZERO) r3(3) = r3(3) - model%kn*gap*model%trib(node)
     END IF
     IF (model%has_drag) THEN
-      IF (model%has_wave .AND. model%wv_ncomp > 0) THEN
-        CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
-                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                          fdrag, ErrStat=es, ErrMsg=em2, &
-                                          wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=model%t, &
-                                          wvc_amp=model%wv_ampc, wvc_om=model%wv_omc, &
-                                          wvc_k=model%wv_kc, wvc_ph=model%wv_phc, &
-                                          wvc_e2kd=model%wv_e2kd)
-      ELSE IF (model%has_wave) THEN
-        CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
-                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                          fdrag, ErrStat=es, ErrMsg=em2, &
-                                          wv_h=model%wv_h, wv_om=model%wv_om, wv_k=model%wv_k, &
-                                          wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=model%t)
-      ELSE IF (model%has_held_field) THEN
-        CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), &
-                                          model%current + 0.5_wp*(model%hf_u(:, e) + model%hf_u(:, e + 1)), &
-                                          0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1)), &
-                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                          fdrag, ErrStat=es, ErrMsg=em2)
-      ELSE
-        CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
-                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                          fdrag, ErrStat=es, ErrMsg=em2)
-      END IF
+      CALL element_drag_load(model, e, qe, ve, model%l0(e), model%t, fdrag, es, em2)
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_End_Force: '//TRIM(em2); RETURN
       END IF
@@ -7802,31 +7903,7 @@ CONTAINS
       IF (dry) g(ZS) = g(ZS) + fdry
     END IF
     IF (model%has_drag) THEN
-      IF (model%has_wave .AND. model%wv_ncomp > 0) THEN
-        CALL CD_HermiteCable_Drag_Element(qe, ve, l0, model%current, model%waterline_z, &
-                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                          fx, ErrStat=es, ErrMsg=em2, &
-                                          wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=model%t, &
-                                          wvc_amp=model%wv_ampc, wvc_om=model%wv_omc, &
-                                          wvc_k=model%wv_kc, wvc_ph=model%wv_phc, &
-                                          wvc_e2kd=model%wv_e2kd)
-      ELSE IF (model%has_wave) THEN
-        CALL CD_HermiteCable_Drag_Element(qe, ve, l0, model%current, model%waterline_z, &
-                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                          fx, ErrStat=es, ErrMsg=em2, &
-                                          wv_h=model%wv_h, wv_om=model%wv_om, wv_k=model%wv_k, &
-                                          wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=model%t)
-      ELSE IF (model%has_held_field) THEN
-        CALL CD_HermiteCable_Drag_Element(qe, ve, l0, &
-                                          model%current + 0.5_wp*(model%hf_u(:, e) + model%hf_u(:, e + 1)), &
-                                          0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1)), &
-                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                          fx, ErrStat=es, ErrMsg=em2)
-      ELSE
-        CALL CD_HermiteCable_Drag_Element(qe, ve, l0, model%current, model%waterline_z, &
-                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                          fx, ErrStat=es, ErrMsg=em2)
-      END IF
+      CALL element_drag_load(model, e, qe, ve, l0, model%t, fx, es, em2)
       IF (es /= CD_HCDYN_OK) GOTO 900
       g = g - fx
     END IF
@@ -9244,31 +9321,7 @@ CONTAINS
                                               fdrag, djq, djv, es, em_e)
           END IF
         ELSE
-          IF (model%has_wave .AND. model%wv_ncomp > 0) THEN
-            CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
-                                              model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                              fdrag, ErrStat=es, ErrMsg=em_e, &
-                                              wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval, &
-                                              wvc_amp=model%wv_ampc, wvc_om=model%wv_omc, &
-                                              wvc_k=model%wv_kc, wvc_ph=model%wv_phc, &
-                                              wvc_e2kd=model%wv_e2kd)
-          ELSE IF (model%has_wave) THEN
-            CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
-                                              model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                              fdrag, ErrStat=es, ErrMsg=em_e, &
-                                              wv_h=model%wv_h, wv_om=model%wv_om, wv_k=model%wv_k, &
-                                              wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval)
-          ELSE IF (model%has_held_field) THEN
-            CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), &
-                                              model%current + 0.5_wp*(model%hf_u(:, e) + model%hf_u(:, e + 1)), &
-                                              0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1)), &
-                                              model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                              fdrag, ErrStat=es, ErrMsg=em_e)
-          ELSE
-            CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
-                                              model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
-                                              fdrag, ErrStat=es, ErrMsg=em_e)
-          END IF
+          CALL element_drag_load(model, e, qe, ve, model%l0(e), t_eval, fdrag, es, em_e)
         END IF
         IF (es /= CD_HCDYN_OK) THEN
           ErrStat = es; ErrMsg = TRIM(em_e); RETURN
