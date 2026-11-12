@@ -504,7 +504,9 @@ MoorDyn-C ``Currents 2`` file ``current_profile_dynamic.txt`` (:doc:`options`) i
 folder, its ``duration`` is the ``TMax`` to give, and its ``responses`` returns the
 :func:`~cabledyn.viv_response` of every hold from ``settle`` seconds into it. The file's
 smallest time interval is the ramp, the step the current table is resampled to, so a hold must
-be a whole number of ramps; the static start takes the first speed.
+be a whole number of ramps; the static start takes the first speed. The file holds the last
+speed for two ramps past ``duration``, because the resampled table returns to its first sample
+over its last interval; the run therefore keeps the last speed up to ``TMax``.
 
 .. code-block:: python
 

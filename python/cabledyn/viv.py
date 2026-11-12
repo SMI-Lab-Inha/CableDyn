@@ -630,7 +630,11 @@ class CurrentSteps:
 
     @property
     def duration(self) -> float:
-        """End of the last hold, s: the deck's ``TMax`` (a longer run repeats the record)."""
+        """End of the last hold, s: the deck's ``TMax``.
+
+        The file holds the last speed for two ramps beyond it (:meth:`write`); a
+        longer run then repeats the record.
+        """
         return float(self.starts[-1] + self.hold)
 
     def windows(self, settle: float) -> tuple[tuple[float, float], ...]:
@@ -652,6 +656,12 @@ class CurrentSteps:
         held beyond them. The file's smallest time interval is the ramp, the time
         step MoorDyn-C and CableDyn resample it to, so the holds stay exact.
 
+        The resampled table has ``floor(t_last/dt) + 1`` samples and takes its
+        first sample over its last interval (where a longer run starts to repeat
+        it), and a rounded ``dt`` can drop the last sample by one step. The file
+        therefore ends two ramps after :attr:`duration`, still at the last speed,
+        so the run up to ``TMax`` never returns to the first speed.
+
         Raises
         ------
         FileExistsError
@@ -671,6 +681,8 @@ class CurrentSteps:
             values = " ".join(f"{number(v)} {number(v)}" for v in velocity)
             times = (float(start), float(start) + self.hold) if k else (0.0, self.hold)
             rows.extend(f"{number(t)} {values}" for t in times)
+        # the guard: the last speed held two ramps past TMax (see above)
+        rows.append(f"{number(self.duration + 2.0 * self.ramp)} {values}")
         lines = [
             "--------------------- MoorDyn dynamic currents File -------------------------",
             "a uniform current held at a sequence of speeds (cabledyn.current_steps)",
