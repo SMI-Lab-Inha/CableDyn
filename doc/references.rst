@@ -235,6 +235,13 @@ Verification and validation references
   experiment of a mooring cable. *Journal of Marine Science and Engineering* **4**\ (1), 5.
   https://doi.org/10.3390/jmse4010005
 
+.. _ref-chaplin2005:
+
+- **Chaplin, J. R., Bearman, P. W., Huera Huarte, F. J. & Pattenden, R. J. (2005).** Laboratory
+  measurements of vortex-induced vibrations of a vertical tension riser in a stepped current.
+  *Journal of Fluids and Structures* **21**\ (1), 3–24.
+  https://doi.org/10.1016/j.jfluidstructs.2005.04.010
+
 Comparison codes
 ----------------
 

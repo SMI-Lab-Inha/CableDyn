@@ -52,6 +52,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - `cabledyn.current_steps`: a stepped-current schedule for a VIV study in one run (each speed
   held, then ramped to the next), written as the deck's MoorDyn-C `Currents 2` file, with the
   VIV response of every hold.
+- Validation case L3-C (`validation/experiments/chaplin`): the still-water natural frequencies of
+  the Delta Flume vertical riser of Chaplin et al. (2005), modes 1-7 at five top tensions, from
+  CableDyn's modal analysis with no fitted parameter: 1.87 % high on average over 34 of the 35
+  measured values (largest 4.88 %), the 35th, an outlier in the measurements, reported apart.
 
 ## [0.4.2] - 2026-11-09
 

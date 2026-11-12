@@ -1,0 +1,19 @@
+{
+  "source": "Chaplin et al. (2005), J. Fluids Struct. 21, 3-24, Table 2",
+  "doi": "10.1016/j.jfluidstructs.2005.04.010",
+  "segments": 64,
+  "added_mass_coefficient": 1.0,
+  "axial_stiffness_N": 5500000.0,
+  "mass_kg_per_m": 1.84726,
+  "submerged_weight_N_per_m": 12.077,
+  "frequencies_compared": 35,
+  "mean_abs_error_percent": 2.61,
+  "max_abs_error_percent": 13.78,
+  "without_C2": {
+    "frequencies_compared": 34,
+    "mean_error_percent": 1.87,
+    "mean_abs_error_percent": 2.28,
+    "max_abs_error_percent": 4.88
+  },
+  "executable_sha256": "ddf7dc1be365f0d67987bb718859362982147467c78a7a28a7df743345cc767a"
+}

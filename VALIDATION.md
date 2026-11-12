@@ -81,6 +81,7 @@ article's methods, are compared in
 | **L3-8** | Bend stiffener at a clamped hang-off (5 m tapered polyurethane) | OrcaFlex 11.6d (stiffener attachment) / planar elastica | curvature 0.45% of root; cable moment 0.01%, section moment 0.01%, deflection angle 0.0001°; local curvature 0.27% (0.1 m elements) | <1.5% / <2%, 0.05°, <0.5% | Pass |
 | **L3-H** | Holcombe static lazy-wave experiment | measured marker geometry | position RMSE 1.07–1.89% of suspended length; peak marker-curvature error 0.34–5.54% | end-restraint bracket | Pass |
 | **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.58 N; MAPE 3.11%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
+| **L3-C** | Chaplin Delta Flume riser, still-water natural frequencies | measured modes 1–7 at five tensions | mean error +1.87%, mean absolute 2.28%, largest 4.88% (34 of 35; one outlier reported) | full published table, no fitted parameter | Pass |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
 | **L4-1** | Coupled platform + mooring | synthetic reference | bit-for-bit | — | Pass |
 | **L4-1b** | VolturnUS-S coupled platform + power cable | OpenFAST v5.0.0 (CompMooring 5 vs 3) | platform DOFs <0.6% (3-seed DLC-1.1); fairlead and anchor <0.001% static | <3% platform | Pass |
@@ -300,7 +301,7 @@ initialisation.
 
 ### Physical experiments
 
-No line or load parameter is fitted to either experiment. Inputs, reduction
+No line or load parameter is fitted to any of the experiments. Inputs, reduction
 scripts, results, and source provenance are in
 [`validation/experiments`](https://github.com/SMI-Lab-Inha/CableDyn/tree/main/validation/experiments).
 
@@ -326,6 +327,16 @@ scripts, results, and source provenance are in
   the run taken as given bit for bit); at
   0.625 ms the T = 1.25 s maxima are 1.2% higher (with 0.3.0, 6.5% with every step taken as
   given), and with 0.3.0 at 1.25 ms they were 2–15% higher and varied from cycle to cycle.
+- **L3-C Delta Flume riser, still-water natural frequencies**
+  ([Chaplin et al., 2005](https://cabledyn.readthedocs.io/en/latest/references.html#ref-chaplin2005)):
+  the modal analysis of the 13.12 m pinned riser about its static state, at the five top
+  tensions of the paper's Table 2, gives the first seven frequencies 1.87% high on average
+  (mean absolute error 2.28%, largest 4.88%, the first mode of the lowest tension) over 34 of
+  the 35 measured values; the added-mass coefficient 1 is kept (1.1 would bring the mean to +0.62%).
+  The 35th, the second mode of series C, is measured at 1.423 Hz against CableDyn's 1.619 Hz;
+  its ratio to the first mode departs from that of every other series, and it is reported
+  separately. 128 elements and ten times the unpublished axial stiffness change no frequency by
+  more than 3e-6 and 1.2e-4.
 
 ## L4 coupled OpenFAST
 

@@ -1,0 +1,20 @@
+{
+  "source": "Chaplin, Bearman, Huera Huarte & Pattenden (2005), Journal of Fluids and Structures 21(1), 3-24",
+  "doi": "10.1016/j.jfluidstructs.2005.04.010",
+  "data_used": "Section 2 riser properties; Table 2 still-water top tensions and natural frequencies of modes 1-7, series A-E",
+  "CableDyn_commit": "a0e8c04 (dev, after 0.4.2)",
+  "validation_date": "2026-11-11",
+  "executable_name": "cabledyn.exe",
+  "executable_sha256": "see natural_frequencies_summary.json",
+  "compiler": "GNU Fortran 16.2.0",
+  "build_type": "Release",
+  "platform": "Windows 11 x86-64",
+  "cases": 5,
+  "segments": 64,
+  "sensitivity": {
+    "segments_128_max_relative_change": 3.0e-6,
+    "axial_stiffness_x10_max_relative_change": 1.2e-4,
+    "added_mass_1p1_mean_error_percent": 0.62,
+    "added_mass_1p2_mean_error_percent": -0.59
+  }
+}
