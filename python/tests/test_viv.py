@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from cabledyn import LineNodeHistory, VIVResponse, viv_response
+from cabledyn import LineNodeHistory, VIVResponse, current_steps, viv_response
 from cabledyn.results import TimeHistory
 
 L = 100.0
@@ -272,3 +272,80 @@ def test_methods_validate_direction_and_node():
         response.modal_amplitudes(n_modes=0)
     with pytest.raises(ValueError, match="shapes must have shape"):
         response.modal_amplitudes(shapes=np.ones((2, 3)))
+
+
+def test_current_steps_schedule_and_file(tmp_path):
+    steps = current_steps([0.1, 0.2, 0.1], hold=20.0, ramp=5.0, direction=(0.0, 2.0, 0.0))
+    np.testing.assert_allclose(steps.starts, [0.0, 25.0, 50.0])
+    assert steps.duration == pytest.approx(70.0)
+    np.testing.assert_allclose(steps.direction, [0.0, 1.0, 0.0])
+    assert steps.windows(15.0) == ((15.0, 20.0), (40.0, 45.0), (65.0, 70.0))
+    path = steps.write(tmp_path, depths=(-100.0, 0.0))
+    assert path.name == "current_profile_dynamic.txt"
+    lines = path.read_text(encoding="ascii").splitlines()
+    assert lines[4].split() == ["-100", "0"]
+    rows = np.array([[float(v) for v in line.split()] for line in lines[6:]])
+    # t ux(z1 z2) uy(z1 z2) uz(z1 z2): held, ramped over 5 s, held, and the last speed two
+    # ramps past TMax
+    np.testing.assert_allclose(rows[:, 0], [0.0, 20.0, 25.0, 45.0, 50.0, 70.0, 80.0])
+    np.testing.assert_allclose(rows[:, 3], [0.1, 0.1, 0.2, 0.2, 0.1, 0.1, 0.1])
+    assert np.all(rows[:, [1, 2, 5, 6]] == 0.0) and np.all(rows[:, 3] == rows[:, 4])
+    with pytest.raises(FileExistsError):
+        steps.write(tmp_path)
+    with pytest.raises(ValueError, match="settle"):
+        steps.windows(20.0)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"speeds": []}, "speeds must be"),
+        ({"speeds": [0.1, 0.0]}, "speeds must be"),
+        ({"ramp": 0.0}, "hold and ramp"),
+        ({"hold": 22.0}, "whole number of ramps"),
+        ({"direction": (0.0, 0.0, 0.0)}, "direction must be"),
+    ],
+)
+def test_current_steps_validation(kwargs, message):
+    arguments = {"speeds": [0.1, 0.2], "hold": 20.0, "ramp": 5.0, **kwargs}
+    with pytest.raises(ValueError, match=message):
+        current_steps(**arguments)
+
+
+def _resampled_speed(times, speeds, t):
+    # the native rule (CD_Current_Grid_Resample, CD_Current_Grid_Velocity): dt the smallest
+    # interval, floor(t_last/dt) + 1 samples at k dt, the upper index modulo the sample count
+    # and both indices the first sample over the last interval
+    dt = np.diff(times).min()
+    samples = np.interp(np.arange(int(np.floor(times[-1] / dt)) + 1) * dt, times, speeds)
+    q = t / dt
+    n = np.floor(q).astype(int)
+    upper = (n + 1) % samples.size
+    lower = np.maximum(upper - 1, 0)
+    return samples[lower] * (1.0 - (q - n)) + samples[upper] * (q - n)
+
+
+@pytest.mark.parametrize(
+    ("speeds", "hold", "ramp"),
+    [([0.5, 1.0], 0.3, 0.1), ([0.1, 0.2, 0.3], 20.0, 5.0), ([0.4], 1.2, 0.4)],
+)
+def test_current_steps_file_holds_the_last_speed_to_tmax(tmp_path, speeds, hold, ramp):
+    steps = current_steps(speeds, hold=hold, ramp=ramp)
+    lines = steps.write(tmp_path).read_text(encoding="ascii").splitlines()
+    rows = np.array([[float(v) for v in line.split()] for line in lines[6:]])
+    t = np.linspace(steps.windows(0.0)[-1][0], steps.duration, 401)
+    np.testing.assert_allclose(_resampled_speed(rows[:, 0], rows[:, 3], t), speeds[-1])
+    if speeds[0] != speeds[-1]:
+        # without the guard row the table would return to the first speed within the last hold
+        old = _resampled_speed(rows[:-1, 0], rows[:-1, 3], t)
+        assert old[-1] == pytest.approx(speeds[0])
+
+
+def test_current_steps_responses_take_each_hold():
+    steps = current_steps([0.5, 0.25], hold=15.0, ramp=5.0)
+    responses = steps.responses(_history(_standing), diameter=D, settle=5.0)
+    assert len(responses) == 2
+    assert responses[1].time[0] == pytest.approx(25.0)
+    assert np.allclose(responses[0].normal_speed, 0.5) and np.allclose(
+        responses[1].normal_speed, 0.25
+    )

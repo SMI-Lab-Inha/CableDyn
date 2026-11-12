@@ -346,6 +346,11 @@ the solver's own curvature, tension, and angle channels, where written, are auth
 .. autoclass:: cabledyn.ModalAmplitudes
    :members:
 
+.. autofunction:: cabledyn.current_steps
+
+.. autoclass:: cabledyn.CurrentSteps
+   :members:
+
 Deck editing and case generation
 --------------------------------
 
