@@ -57,7 +57,9 @@ _QUANTITIES: dict[str, tuple[str, str, str]] = {
     "curvature": ("Curv", "Curvature", "1/m"),
     "bend_moment": ("BendMom", "BendMoment", "N-m"),
 }
-_NODE_QUANTITY = re.compile(r"(Ten|Curv|BendMom)0*([1-9][0-9]{0,8})N0*([1-9][0-9]{0,8})", re.I)
+_NODE_QUANTITY = re.compile(
+    r"(Ten|CurvX|CurvY|Curv|BendMom)0*([1-9][0-9]{0,8})N0*([1-9][0-9]{0,8})", re.I
+)
 _NODE_POSITION = re.compile(r"L0*([1-9][0-9]{0,8})N0*([1-9][0-9]{0,8})p([xyz])", re.I)
 
 ArcSource = StaticProfile | Mapping[int, float] | None
