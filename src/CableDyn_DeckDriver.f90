@@ -450,7 +450,7 @@ MODULE CableDyn_DeckDriver
     ! al., Mar. Struct. 60, 2018): the in-line shedding coefficient C_vx (0 = off) and the
     ! frequency band alpha of its phase about twice the cross-flow one; has_viv_row marks a type
     ! the section names.
-    REAL(wp) :: clx = CD_ZERO, il_alpha = CD_VIV_DEFAULT_IL_ALPHA
+    REAL(wp) :: clx = CD_ZERO, il_alpha = CD_VIV_DEFAULT_IL_ALPHA, chh = CD_ZERO
     LOGICAL :: has_viv_row = .FALSE.
     ! Deck file line of the row (0 when not read from a file), for error messages.
     INTEGER :: deck_line = 0
@@ -1884,7 +1884,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: gas(:), gj(:), rho_a(:), i_rt(:), i_rn(:), w(:), nodes_ref(:, :), q0(:), q_static(:)
     REAL(wp), ALLOCATABLE :: q_sequence(:)
     REAL(wp), ALLOCATABLE :: curv(:), cdn(:), cdt(:), can(:), cat(:), catenary_pos(:)
-    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:)
+    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:), viv_hh(:)
     REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:), bb_el(:)
     REAL(wp) :: mode1_omega
     REAL(wp), ALLOCATABLE :: contact_kn(:), contact_cn(:)
@@ -3280,14 +3280,16 @@ CONTAINS
     ! property of the original element containing its reference-arc midpoint.
     ALLOCATE (cdn(SIZE(l0)), cdt(SIZE(l0)), can(SIZE(l0)), cat(SIZE(l0)))
     CALL finite_hydro_arrays(ln, sections, types, diam, cdn, cdt, can, cat)
-    ALLOCATE (viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), viv_df(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)))
-    CALL finite_viv_arrays(ln, sections, types, viv_cl, viv_cf, viv_df, viv_clx, viv_al)
+    ALLOCATE (viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), viv_df(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)), &
+              viv_hh(SIZE(l0)))
+    CALL finite_viv_arrays(ln, sections, types, viv_cl, viv_cf, viv_df, viv_clx, viv_al, viv_hh)
     IF (SIZE(l0_am) /= SIZE(l0)) THEN
       CALL remap_elem_by_reference_arc(viv_cl, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_cf, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_df, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_clx, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_al, l0, l0_am)
+      CALL remap_elem_by_reference_arc(viv_hh, l0, l0_am)
       CALL remap_elem_by_reference_arc(rho_a, l0, l0_am)
       CALL remap_elem_by_reference_arc(diam, l0, l0_am)
       CALL remap_elem_by_reference_arc(cdn, l0, l0_am)
@@ -3606,7 +3608,8 @@ CONTAINS
                                              MERGE(opts%viv_rms_window, &
                                                    REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
                                                    opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
-                                             tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, il_alpha=viv_al)
+                                             tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, il_alpha=viv_al, &
+                                             chh=viv_hh)
           ELSE
             CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
                                              MERGE(opts%viv_rms_window, &
@@ -10368,7 +10371,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: ba(:), fluid_velocity(:, :), fluid_acceleration(:, :), drag_waterline(:)
     REAL(wp), ALLOCATABLE :: hydro_diam(:), hydro_cdn(:), hydro_cdt(:), hydro_can(:), hydro_cat(:)
     REAL(wp), ALLOCATABLE :: ve_ead(:), ve_bas(:), ve_bad(:), ve_ambl(:), ve_vbet(:)
-    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:)
+    REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:), viv_hh(:)
     LOGICAL, ALLOCATABLE :: syr_el(:)
     REAL(wp) :: anchor(3), fairlead(3), mode1_omega
     REAL(wp), PARAMETER :: factors(4) = [0.25_wp, 0.5_wp, 0.75_wp, CD_ONE]
@@ -10407,12 +10410,13 @@ CONTAINS
     ALLOCATE (ba(SIZE(l0)), hydro_diam(SIZE(l0)), hydro_cdn(SIZE(l0)), hydro_cdt(SIZE(l0)), &
               hydro_can(SIZE(l0)), hydro_cat(SIZE(l0)), ve_ead(SIZE(l0)), ve_bas(SIZE(l0)), &
               ve_bad(SIZE(l0)), ve_ambl(SIZE(l0)), ve_vbet(SIZE(l0)), viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), &
-              viv_df(SIZE(l0)), syr_el(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)))
+              viv_df(SIZE(l0)), syr_el(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)), viv_hh(SIZE(l0)))
     viv_cl = CD_ZERO
     viv_cf = CD_ZERO
     viv_df = CD_ZERO
     viv_clx = CD_ZERO
     viv_al = CD_ZERO
+    viv_hh = CD_ZERO
     ve_ead = CD_ZERO
     ve_bas = CD_ZERO
     ve_bad = CD_ZERO
@@ -10473,6 +10477,7 @@ CONTAINS
         viv_df(e) = types(line_section_type(sections, ln%id, i))%viv_df
         viv_clx(e) = types(line_section_type(sections, ln%id, i))%clx
         viv_al(e) = types(line_section_type(sections, ln%id, i))%il_alpha
+        viv_hh(e) = types(line_section_type(sections, ln%id, i))%chh
         syr_el(e) = types(line_section_type(sections, ln%id, i))%is_syrope
       END DO
     END DO
@@ -10482,6 +10487,7 @@ CONTAINS
     viv_df = viv_df(SIZE(viv_df):1:-1)
     viv_clx = viv_clx(SIZE(viv_clx):1:-1)
     viv_al = viv_al(SIZE(viv_al):1:-1)
+    viv_hh = viv_hh(SIZE(viv_hh):1:-1)
     ba = ba(SIZE(ba):1:-1)
     ve_ead = ve_ead(SIZE(ve_ead):1:-1)
     ve_bas = ve_bas(SIZE(ve_bas):1:-1)
@@ -10775,7 +10781,7 @@ CONTAINS
           IF (ANY(viv_clx > CD_ZERO)) THEN
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, &
-                                  il_alpha=viv_al)
+                                  il_alpha=viv_al, chh=viv_hh)
           ELSE
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped)
@@ -11587,13 +11593,13 @@ CONTAINS
     cat = cat(SIZE(cat):1:-1)
   END SUBROUTINE finite_hydro_arrays
 
-  SUBROUTINE finite_viv_arrays(ln, sections, types, cl, cf, df, clx, il_alpha)
-    !! Expand the section VIV columns (Cl dF cF) and the VIV section's in-line ClX and alpha to
-    !! finite-EI element arrays, in the element order of finite_hydro_arrays.
+  SUBROUTINE finite_viv_arrays(ln, sections, types, cl, cf, df, clx, il_alpha, chh)
+    !! Expand the section VIV columns (Cl dF cF) and the VIV section's in-line ClX and alpha and
+    !! higher-harmonic Chh to finite-EI element arrays, in the element order of finite_hydro_arrays.
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
-    REAL(wp), INTENT(OUT) :: cl(:), cf(:), df(:), clx(:), il_alpha(:)
+    REAL(wp), INTENT(OUT) :: cl(:), cf(:), df(:), clx(:), il_alpha(:), chh(:)
     INTEGER :: i, j, e, tidx
 
     e = 0
@@ -11607,6 +11613,7 @@ CONTAINS
         df(e) = types(tidx)%viv_df
         clx(e) = types(tidx)%clx
         il_alpha(e) = types(tidx)%il_alpha
+        chh(e) = types(tidx)%chh
       END DO
     END DO
     cl = cl(SIZE(cl):1:-1)
@@ -11614,6 +11621,7 @@ CONTAINS
     df = df(SIZE(df):1:-1)
     clx = clx(SIZE(clx):1:-1)
     il_alpha = il_alpha(SIZE(il_alpha):1:-1)
+    chh = chh(SIZE(chh):1:-1)
   END SUBROUTINE finite_viv_arrays
 
   LOGICAL FUNCTION line_has_viv(ln, types, sections) RESULT(has)
@@ -17194,24 +17202,26 @@ CONTAINS
   END SUBROUTINE append_line_attachment
 
   SUBROUTINE apply_type_viv(row, types, ErrStat, ErrMsg)
-    !! One VIV row: TypeName ClX [alpha] -- the in-line VIV of a line type (Ulveseter et al. 2018):
-    !! the in-line shedding coefficient C_vx >= 0 (0 = off) and the frequency band 0 <= alpha < 1
-    !! of its phase about twice the cross-flow one (default 0.15). The in-line phase rate is
-    !! slaved to the cross-flow one, so ClX > 0 needs the type's LINE TYPES lift Cl > 0. A type
-    !! takes one row.
+    !! One VIV row: TypeName ClX [alpha [Chh]] -- the in-line VIV of a line type (Ulveseter et al.
+    !! 2018): the in-line shedding coefficient C_vx >= 0 (0 = off) and the frequency band
+    !! 0 <= alpha < 1 of its phase about twice the cross-flow one (default 0.15); and the
+    !! higher-harmonic coefficient C_hh >= 0 (Ulveseter et al. 2019; default 0), a force of the
+    !! lift's form at the cross-flow plus in-line phase. The in-line phase rate is slaved to the
+    !! cross-flow one, so ClX > 0 needs the type's LINE TYPES lift Cl > 0, and Chh > 0 needs
+    !! ClX > 0. A type takes one row.
     CHARACTER(*), INTENT(IN) :: row
     TYPE(DeckLineType), INTENT(INOUT) :: types(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     CHARACTER(DECK_RECLEN) :: tok
     INTEGER :: it, ntok
-    REAL(wp) :: clx, alpha
+    REAL(wp) :: clx, alpha, chh
     LOGICAL :: found, ok
 
     ErrStat = 0; ErrMsg = ''
     ntok = count_tokens(row)
-    IF (ntok /= 2 .AND. ntok /= 3) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV rows must be: TypeName ClX [alpha]'); RETURN
+    IF (ntok < 2 .OR. ntok > 4) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV rows must be: TypeName ClX [alpha [Chh]]'); RETURN
     END IF
     CALL get_token(row, 1, tok, found)
     it = find_type(types, TRIM(tok))
@@ -17224,15 +17234,20 @@ CONTAINS
     CALL get_token(row, 2, tok, found)
     CALL parse_real_token(tok, clx, ok)
     alpha = CD_VIV_DEFAULT_IL_ALPHA
-    IF (ok .AND. ntok == 3) THEN
+    chh = CD_ZERO
+    IF (ok .AND. ntok >= 3) THEN
       CALL get_token(row, 3, tok, found)
       CALL parse_real_token(tok, alpha, ok)
     END IF
-    IF (.NOT. ok) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV ClX and alpha must be plain numbers'); RETURN
+    IF (ok .AND. ntok == 4) THEN
+      CALL get_token(row, 4, tok, found)
+      CALL parse_real_token(tok, chh, ok)
     END IF
-    IF (.NOT. (IEEE_IS_FINITE(clx) .AND. IEEE_IS_FINITE(alpha))) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV ClX and alpha must be finite'); RETURN
+    IF (.NOT. ok) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV ClX, alpha and Chh must be plain numbers'); RETURN
+    END IF
+    IF (.NOT. (IEEE_IS_FINITE(clx) .AND. IEEE_IS_FINITE(alpha) .AND. IEEE_IS_FINITE(chh))) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV ClX, alpha and Chh must be finite'); RETURN
     END IF
     IF (clx < CD_ZERO .OR. clx > MAX_COEFFICIENT) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV in-line coefficient ClX must be non-negative (0 = in-line VIV off) and at '// &
@@ -17241,12 +17256,21 @@ CONTAINS
     IF (.NOT. (alpha >= CD_ZERO .AND. alpha < CD_ONE)) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV in-line frequency band alpha must satisfy 0 <= alpha < 1'); RETURN
     END IF
+    IF (chh < CD_ZERO .OR. chh > MAX_COEFFICIENT) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV higher-harmonic coefficient Chh must be non-negative (0 = off) and at '// &
+                'most 1e15'); RETURN
+    END IF
+    IF (chh > CD_ZERO .AND. .NOT. (clx > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV higher-harmonic force of LINE TYPE "'//TRIM(types(it)%name)//'" needs its '// &
+                'in-line VIV (ClX > 0): it runs at the cross-flow plus in-line phase'); RETURN
+    END IF
     IF (clx > CD_ZERO .AND. .NOT. (types(it)%cl > CD_ZERO)) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV in-line VIV of LINE TYPE "'//TRIM(types(it)%name)//'" needs its '// &
                 'cross-flow lift (LINE TYPES Cl > 0): the in-line phase runs at twice the cross-flow one'); RETURN
     END IF
     types(it)%clx = clx
     types(it)%il_alpha = alpha
+    types(it)%chh = chh
     types(it)%has_viv_row = .TRUE.
   END SUBROUTINE apply_type_viv
 

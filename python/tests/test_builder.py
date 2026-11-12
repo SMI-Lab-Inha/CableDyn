@@ -1037,6 +1037,36 @@ def test_inline_viv_round_trips_in_the_viv_section(
     assert (loaded.clx, loaded.il_alpha) == (clx, il_alpha)
 
 
+@pytest.mark.parametrize(("il_alpha", "written_alpha"), [(0.2, 0.2), (None, 0.15)])
+def test_higher_harmonic_viv_round_trips(
+    tmp_path: Path, il_alpha: float | None, written_alpha: float
+) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type(
+        "cable",
+        diam=0.2,
+        mass=40.0,
+        ea=5.0e8,
+        ei=1.0e4,
+        cl=0.8,
+        clx=0.85,
+        il_alpha=il_alpha,
+        chh=1.2,
+    )
+    target = model.save(tmp_path / "higher_harmonic.dat")
+    row = next(r for r in DeckFile.read(target)._rows("VIV") if r.tokens[0] == "cable")
+    assert [float(v) for v in row.tokens[1:]] == [0.85, written_alpha, 1.2]
+    loaded = next(t for t in DeckModel.load(target).line_types if t.name == "cable")
+    assert (loaded.clx, loaded.il_alpha, loaded.chh) == (0.85, written_alpha, 1.2)
+
+
+def test_higher_harmonic_needs_the_inline_coefficient(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type("cable", diam=0.2, mass=40.0, ea=5.0e8, ei=1.0e4, cl=0.8, chh=1.0)
+    with pytest.raises(ValueError, match="chh needs the in-line VIV coefficient clx"):
+        model.to_text()
+
+
 def test_inline_viv_alpha_needs_the_coefficient(tmp_path: Path) -> None:
     model = _chain_model(tmp_path)
     model.add_line_type("cable", diam=0.2, mass=40.0, ea=5.0e8, ei=1.0e4, cl=0.8, il_alpha=0.15)

@@ -214,6 +214,10 @@ class LineType:
         the in-line phase running at twice the cross-flow one) and the frequency
         band of that phase, ``0 <= il_alpha < 1``; ``None`` leaves alpha out of
         the row (the solver takes 0.15).
+    chh : float | None
+        Optional higher-harmonic coefficient of the ``VIV`` row (``Name ClX alpha
+        Chh``, Ulveseter et al. 2019; it needs ``clx``); ``None`` leaves it out
+        (0). With ``chh`` set and ``il_alpha`` ``None`` the row writes alpha 0.15.
     """
 
     name: str
@@ -235,6 +239,7 @@ class LineType:
     cf: float | None = None
     clx: float | None = None
     il_alpha: float | None = None
+    chh: float | None = None
 
 
 @dataclass(eq=False)
@@ -1653,6 +1658,7 @@ class DeckModel:
         cf: float | None = None,
         clx: float | None = None,
         il_alpha: float | None = None,
+        chh: float | None = None,
     ) -> LineType:
         """Add a ``LINE TYPES`` row; see :class:`LineType` for the fields.
 
@@ -1688,6 +1694,7 @@ class DeckModel:
             cf,
             clx,
             il_alpha,
+            chh,
         )
         self._line_types.append(item)
         return item
@@ -2949,12 +2956,16 @@ class DeckModel:
             if item.clx is None:
                 if item.il_alpha is not None:
                     raise ValueError(f"{what}: il_alpha needs the in-line VIV coefficient clx")
+                if item.chh is not None:
+                    raise ValueError(f"{what}: chh needs the in-line VIV coefficient clx")
                 continue
             row = [_text(item.name, what), _num(item.clx, what)]
-            if item.il_alpha is not None:
-                row.append(_num(item.il_alpha, what))
+            if item.il_alpha is not None or item.chh is not None:
+                row.append(_num(0.15 if item.il_alpha is None else item.il_alpha, what))
+            if item.chh is not None:
+                row.append(_num(item.chh, what))
             rows.append(row)
-        return "Name ClX alpha", "(-) (-) (-)", rows
+        return "Name ClX alpha Chh", "(-) (-) (-) (-)", rows
 
     def _syrope_table(self) -> tuple[str, str, list[list[str]]]:
         rows = [
@@ -3158,7 +3169,8 @@ class _Loader:
             t = row.tokens
             item = model.line_types[t[0]]
             item.clx = _f(t[1])
-            item.il_alpha = _f(t[2]) if len(t) == 3 else None
+            item.il_alpha = _f(t[2]) if len(t) >= 3 else None
+            item.chh = _f(t[3]) if len(t) == 4 else None
         for row in self.rows("ATTACHMENTS"):
             t = row.tokens
             arc: float | tuple[float, float, float]

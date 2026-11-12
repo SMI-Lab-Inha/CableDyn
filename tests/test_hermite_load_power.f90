@@ -12,7 +12,8 @@ PROGRAM test_hermite_load_power
   !!   L1 the free decay of the first bending mode with the bending dashpot Bb;
   !!   L2 the free decay of the first axial mode with the axial dashpot BA (its own time step);
   !!   L3 the bending decay in still water with Morison drag and no dashpots;
-  !!   L4 a cable starting straight in a 0.5 m/s current with the cross-flow and in-line VIV loads,
+  !!   L4 a cable starting straight in a 0.5 m/s current with the cross-flow, in-line and
+  !!      higher-harmonic (Chh 1) VIV loads,
   !!      the drag and the bending dashpot;
   !! each within 0.5 % of the largest work; the damping power is never positive at any node, and
   !! the VIV and drag powers are zero without those loads. L5 power arrays of the wrong size are
@@ -81,7 +82,7 @@ CONTAINS
     INTEGER, INTENT(IN) :: what
     TYPE(CD_HermiteCableDynType) :: model
     REAL(wp) :: kk, period, dt, ek, es0, e0, e1, p_prev(3), p_now(3), work(3), res, scale, pm_max
-    REAL(wp) :: cl(NE), cf(NE), df(NE), clx(NE), alx(NE)
+    REAL(wp) :: cl(NE), cf(NE), df(NE), clx(NE), alx(NE), chh(NE)
     INTEGER :: n, k, es, it
     CHARACTER(512) :: em
     LOGICAL :: zero_viv, zero_drag, ok
@@ -109,8 +110,8 @@ CONTAINS
       CALL require(es == CD_HCDYN_OK, label//': drag: '//TRIM(em))
     END IF
     IF (what == VIV) THEN
-      cl = 0.8_wp; cf = 0.18_wp; df = 0.08_wp; clx = 0.85_wp; alx = 0.15_wp
-      CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 0.25_wp, es, em, clx=clx, il_alpha=alx)
+      cl = 0.8_wp; cf = 0.18_wp; df = 0.08_wp; clx = 0.85_wp; alx = 0.15_wp; chh = 1.0_wp
+      CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 0.25_wp, es, em, clx=clx, il_alpha=alx, chh=chh)
       CALL require(es == CD_HCDYN_OK, label//': VIV: '//TRIM(em))
     END IF
     IF (es /= CD_HCDYN_OK) RETURN
