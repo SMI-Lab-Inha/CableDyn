@@ -17,7 +17,12 @@ PROGRAM test_viv_inline_deck
   !!      least triples the quarter-span in-line response at four times the cross-flow frequency
   !!      (the in-line share of the force at the cross-flow plus in-line phase), on the cable and
   !!      the EI = 0 line alike (within 5 %); Chh 0 is the row without it, to the printed digits;
-  !!      Chh on a type without in-line VIV and a negative Chh are refused.
+  !!      Chh on a type without in-line VIV and a negative Chh are refused;
+  !!   D6 the cross-flow columns after the 14-column finite-EI row (GAs GJ Irt Irn): a 17-column row
+  !!      free in torsion is the 13-column deck, to the printed digits; a 15-column row (Cl alone) is
+  !!      the 17-column one with MoorDyn's dF 0.08 and cF 0.18; and on the line restrained in
+  !!      torsion at both ends (nodal twist) the lift still locks the cable in, with the cross-flow
+  !!      amplitude and frequency of the line free in torsion.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   IMPLICIT NONE
@@ -70,11 +75,14 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_current
 
-  SUBROUTINE write_deck(path, viv_rows, tmax, ei, cl)
-    !! viv_rows: the VIV section's data rows, ';'-separated ('' for no section).
+  SUBROUTINE write_deck(path, viv_rows, tmax, ei, cl, wide, ends)
+    !! viv_rows: the VIV section's data rows, ';'-separated ('' for no section). wide: the VIV
+    !! columns written after the 14-column finite-EI row (GAs GJ Irt Irn in the CableDyn hydro
+    !! order) instead of the 10 stock-order ones; ends: restrain both ends in torsion.
     CHARACTER(*), INTENT(IN) :: path, viv_rows
     REAL(wp), INTENT(IN) :: tmax
-    CHARACTER(*), INTENT(IN), OPTIONAL :: ei, cl
+    CHARACTER(*), INTENT(IN), OPTIONAL :: ei, cl, wide
+    LOGICAL, INTENT(IN), OPTIONAL :: ends
     CHARACTER(32) :: ei_col, cl_col
     INTEGER :: u, i0, i1
     ei_col = '1.0'
@@ -85,10 +93,17 @@ CONTAINS
     WRITE (u, '(A)') '--------------------- CableDyn Input File ---------------------------------'
     WRITE (u, '(A)') 'in-line VIV deck gate: taut cable in a uniform current'
     WRITE (u, '(A)') '----------------------- LINE TYPES ------------------------------------------'
-    WRITE (u, '(A)') 'TypeName   Diam   Mass/m   EA        BA/-zeta  EI   Cd    Ca    CdAx  CaAx  Cl   dF    cF'
-    WRITE (u, '(A)') '(name)     (m)    (kg/m)   (N)       (N-s/-)   (-)  (-)   (-)   (-)   (-)   (-)  (-)   (-)'
-    WRITE (u, '(A)') 'riser      0.10   10.0     5.0e7     -0.8      '//TRIM(ei_col)//'  1.2   1.0   0.0   0.0   '// &
-      TRIM(cl_col)//'  0.08  0.18'
+    IF (PRESENT(wide)) THEN
+      ! GJ = EI/1.3, Irn = m D^2/8, Irt = m D^2/16, GAs = EA/2.6: the circular-section closure
+      WRITE (u, '(A)') 'TypeName Diam Mass/m EA BA/-zeta EI GAs GJ Irt Irn Cd_n Cd_t Ca_n Ca_t Cl [dF cF]'
+      WRITE (u, '(A)') 'riser 0.10 10.0 5.0e7 -0.8 '//TRIM(ei_col)//' 1.9230769e7 0.76923077 0.00625 0.0125 '// &
+        '1.2 0.0 1.0 0.0 '//wide
+    ELSE
+      WRITE (u, '(A)') 'TypeName   Diam   Mass/m   EA        BA/-zeta  EI   Cd    Ca    CdAx  CaAx  Cl   dF    cF'
+      WRITE (u, '(A)') '(name)     (m)    (kg/m)   (N)       (N-s/-)   (-)  (-)   (-)   (-)   (-)   (-)  (-)   (-)'
+      WRITE (u, '(A)') 'riser      0.10   10.0     5.0e7     -0.8      '//TRIM(ei_col)//'  1.2   1.0   0.0   0.0   '// &
+        TRIM(cl_col)//'  0.08  0.18'
+    END IF
     WRITE (u, '(A)') '----------------------- POINTS ----------------------------------------------'
     WRITE (u, '(A)') 'ID   Attachment   X       Y     Z      M    V     CdA   CA'
     WRITE (u, '(A)') '(#)  (-)          (m)     (m)   (m)    (kg) (m^3) (m^2) (-)'
@@ -98,6 +113,15 @@ CONTAINS
     WRITE (u, '(A)') 'ID   LineType   AttachA  AttachB  UnstrLen  NumSegs  Outputs'
     WRITE (u, '(A)') '(#)  (name)     (#)      (#)      (m)       (-)      (-)'
     WRITE (u, '(A)') '1    riser      1        2        99.900100  50       -'
+    IF (PRESENT(ends)) THEN
+      IF (ends) THEN
+        ! pinned in bending, rigid in torsion, the zero-twist normal along z
+        WRITE (u, '(A)') '----------------------- END CONNECTIONS ---------------------------------------'
+        WRITE (u, '(A)') 'LineID End Stiffness EzX EzY EzZ TorsStiffness NxX NxY NxZ Pretwist'
+        WRITE (u, '(A)') '1      A   0         1.0 0.0 0.0 Rigid         0.0 0.0 1.0 0.0'
+        WRITE (u, '(A)') '1      B   0         1.0 0.0 0.0 Rigid         0.0 0.0 1.0 0.0'
+      END IF
+    END IF
     IF (LEN_TRIM(viv_rows) > 0) THEN
       WRITE (u, '(A)') '----------------------- VIV -------------------------------------------------'
       WRITE (u, '(A)') 'TypeName   ClX    alpha'
@@ -291,7 +315,54 @@ CONTAINS
       CALL require(a4_hh >= 3.0_wp*a4_il, 'D5: Chh raises the fourth in-line harmonic at least threefold')
       CALL require(ABS(a4_e/a4_hh - 1.0_wp) <= 0.05_wp, 'D5: the EI = 0 line takes it within 5 %')
     END BLOCK
+    CALL check_wide_rows(tc, nc)
   END SUBROUTINE check_runs
+
+  SUBROUTINE check_wide_rows(tc, nc)
+    !! D6 against the cross-flow-only deck tc (the 13-column row, no VIV section).
+    REAL(wp), INTENT(IN) :: tc(:, :)
+    INTEGER, INTENT(IN) :: nc
+    REAL(wp), ALLOCATABLE :: tw(:, :), t15(:, :), t17(:, :), tr(:, :), tt(:), z(:), y(:)
+    INTEGER :: nw, n15, n17, nr
+    REAL(wp) :: az_c, fz_c, az_r, fz_r
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    CALL write_deck('vid_w13.dat', '', 100.0_wp, wide='0.8 0.08 0.18')
+    CALL run('vid_w13.dat', 'vid_w13', ok, msg)
+    CALL require(ok, 'D6: the 17-column deck runs: '//TRIM(msg))
+    CALL read_out('vid_w13.out', tw, nw)
+    CALL require(nw == nc, 'D6: the 17-column run wrote the rows of the 13-column one')
+    IF (nw /= nc) RETURN
+    CALL require(ALL(tw(:, 1:nw) == tc(:, 1:nc)), 'D6: a 17-column row free in torsion is the 13-column row')
+    CALL write_deck('vid_w15.dat', '', 30.0_wp, wide='0.8', ends=.TRUE.)
+    CALL run('vid_w15.dat', 'vid_w15', ok, msg)
+    CALL require(ok, 'D6: the 15-column deck restrained in torsion runs: '//TRIM(msg))
+    CALL write_deck('vid_w17.dat', '', 30.0_wp, wide='0.8 0.08 0.18', ends=.TRUE.)
+    CALL run('vid_w17.dat', 'vid_w17', ok, msg)
+    CALL require(ok, 'D6: the 17-column deck restrained in torsion runs: '//TRIM(msg))
+    CALL read_out('vid_w15.out', t15, n15)
+    CALL read_out('vid_w17.out', t17, n17)
+    CALL require(n15 > 100 .AND. n15 == n17, 'D6: the 15- and 17-column runs wrote matching rows')
+    IF (.NOT. (n15 > 100 .AND. n15 == n17)) RETURN
+    CALL require(ALL(t15(:, 1:n15) == t17(:, 1:n17)), 'D6: a 15-column row takes dF 0.08 and cF 0.18')
+    CALL write_deck('vid_wr.dat', '', 100.0_wp, wide='0.8 0.08 0.18', ends=.TRUE.)
+    CALL run('vid_wr.dat', 'vid_wr', ok, msg)
+    CALL require(ok, 'D6: the VIV deck restrained in torsion runs: '//TRIM(msg))
+    CALL read_out('vid_wr.out', tr, nr)
+    CALL require(nr == nc, 'D6: the run restrained in torsion wrote the same rows')
+    IF (nr /= nc) RETURN
+    CALL window(tc, nc, 50.0_wp, tt, z, y)
+    az_c = 0.5_wp*(MAXVAL(z) - MINVAL(z))
+    fz_c = peak_frequency(tt, z)
+    CALL window(tr, nr, 50.0_wp, tt, z, y)
+    az_r = 0.5_wp*(MAXVAL(z) - MINVAL(z))
+    fz_r = peak_frequency(tt, z)
+    WRITE (*, '(A,2F8.4,A,2F8.4)') 'D6: mid-span CF amplitude/D and frequency [Hz], restrained in torsion ', &
+      az_r/D, fz_r, ', free ', az_c/D, fz_c
+    CALL require(az_r > 0.3_wp*D, 'D6: the lift locks in the cable restrained in torsion')
+    CALL require(ABS(az_r/az_c - 1.0_wp) <= 0.02_wp .AND. ABS(fz_r - fz_c) <= 0.01_wp, &
+                 'D6: with the amplitude (2 %) and frequency (0.01 Hz) of the cable free in torsion')
+  END SUBROUTINE check_wide_rows
 
   REAL(wp) FUNCTION fourier_amplitude(tt, x, f) RESULT(a)
     !! The amplitude of x - mean(x) at frequency f (Hann window, so a sine of amplitude A gives A).

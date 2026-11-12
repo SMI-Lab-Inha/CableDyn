@@ -206,8 +206,9 @@ class LineType:
     cl, df, cf : float | None
         Optional cross-flow VIV columns of a type (MoorDyn's lift
         coefficient and the half-range and centre of the synchronisation band
-        in non-dimensional frequency). ``cl`` set writes the 13-column row, with
-        MoorDyn's ``df = 0.08`` and ``cf = 0.18`` where they are ``None``.
+        in non-dimensional frequency). ``cl`` set writes them after the ten or
+        fourteen columns (the 13- or 17-column row), with MoorDyn's
+        ``df = 0.08`` and ``cf = 0.18`` where they are ``None``.
     clx, il_alpha : float | None
         Optional in-line VIV of a type, a ``VIV`` section row
         ``Name ClX [alpha]``: the in-line shedding coefficient (it needs ``cl``,
@@ -2717,9 +2718,6 @@ class DeckModel:
                 raise ValueError(f"{what}: give all of gas, gj, irt, irn or none")
             row += [_num(v, what) for v in (item.cdn, item.cdt, item.can, item.cat)]
             if item.cl is not None:
-                if all(value is not None for value in extra):
-                    # a LINE TYPES row has 10, 11, 13 or 14 columns: no VIV on the wide row
-                    raise ValueError(f"{what}: cl, df and cf do not combine with gas, gj, irt, irn")
                 viv = True
                 df = 0.08 if item.df is None else item.df
                 cf = 0.18 if item.cf is None else item.cf
@@ -2730,6 +2728,9 @@ class DeckModel:
         if wide:
             header = "Name Diam Mass EA BA EI GAs GJ Irt Irn Cd_n Cd_t Ca_n Ca_t"
             units = "(-) (m) (kg/m) (N) (N-s) (N-m^2) (N) (N-m^2) (kg-m) (kg-m) (-) (-) (-) (-)"
+            if viv:
+                header += " Cl dF cF"
+                units += " (-) (-) (-)"
         elif viv:
             header = "Name Diam Mass EA BA EI Cd_n Cd_t Ca_n Ca_t Cl dF cF"
             units = "(-) (m) (kg/m) (N) (N-s) (N-m^2) (-) (-) (-) (-) (-) (-) (-)"

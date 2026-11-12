@@ -291,12 +291,13 @@ frequency `f` [Hz], `Bb = ζ EI/(π f)`, set once per line type (it does not dep
 rates).
 
 **Cross-flow VIV columns (MoorDyn v2).** A 10-column row may end with `Cl` (11 columns) or
-`Cl dF cF` (13 columns): the lift coefficient of the vortex-shedding synchronisation model and
+`Cl dF cF` (13 columns), and a 14-column row likewise (15 or 17 columns, so a line restrained in
+torsion can carry VIV): the lift coefficient of the vortex-shedding synchronisation model and
 the half-range and centre of its band in non-dimensional frequency (MoorDyn's `dF = 0.08` and
 `cF = 0.18` when only `Cl` is given). `Cl = 0` is no VIV; `Cl > 0` needs `cF > 0` and
 `0 <= dF < cF`, and the line's drag in water. It acts in the dynamics on `EI = 0` lines and
-finite-EI cables (see [Cross-flow VIV](theory.rst)); the 14-column row has no VIV columns. The
-in-line force of a type is a [VIV](#viv-optional) section row.
+finite-EI cables (see [Cross-flow VIV](theory.rst)). The in-line force of a type is a
+[VIV](#viv-optional) section row.
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:

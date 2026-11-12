@@ -185,7 +185,7 @@ def test_build_single_catenary_validates_and_saves(tmp_path: Path) -> None:
     assert model.save(target, overwrite=True) == target
 
 
-def test_viv_columns_do_not_combine_with_the_wide_finite_ei_row(tmp_path: Path) -> None:
+def test_viv_columns_follow_the_wide_finite_ei_row(tmp_path: Path) -> None:
     model = _chain_model(tmp_path)
     model.add_line_type(
         "cable",
@@ -197,10 +197,20 @@ def test_viv_columns_do_not_combine_with_the_wide_finite_ei_row(tmp_path: Path) 
         gj=1.0e3,
         irt=0.1,
         irn=0.05,
-        cl=0.0,
+        cl=0.8,
+        cf=0.17,
     )
-    with pytest.raises(ValueError, match="do not combine with gas, gj, irt, irn"):
-        model.to_text(validate=False)
+    text = model.to_text()
+    deck = DeckFile.from_text(text, path=tmp_path / "deck.dat")
+    rows = {row.tokens[0].upper(): row.tokens for row in deck.line_types}
+    # the 14 finite-EI columns, then Cl dF cF (MoorDyn's dF = 0.08 where df is None)
+    assert len(rows["CABLE"]) == 17
+    assert [float(value) for value in rows["CABLE"][14:]] == [0.8, 0.08, 0.17]
+    assert len(rows["CHAIN"]) == 10
+    loaded = DeckModel.from_text(text, path=tmp_path / "deck.dat")
+    cable = loaded.line_types["CABLE"]
+    assert (cable.gj, cable.irn, cable.cl, cable.df, cable.cf) == (1.0e3, 0.05, 0.8, 0.08, 0.17)
+    assert loaded.to_text() == text
 
 
 def test_build_spread_mooring_with_multi_section_lines() -> None:

@@ -15833,11 +15833,11 @@ CONTAINS
     INTEGER :: ios, ntok
     ErrStat = 0; ErrMsg = ''
     ntok = count_tokens(line)
-    IF (ntok /= 10 .AND. ntok /= 11 .AND. ntok /= 13 .AND. ntok /= 14) THEN
+    IF (ntok /= 10 .AND. ntok /= 11 .AND. ntok /= 13 .AND. ntok /= 14 .AND. ntok /= 15 .AND. ntok /= 17) THEN
       CALL fail(ErrStat, ErrMsg, 'LINE TYPES row needs 10 cols '// &
-                '(Name Diam MassDenInAir EA BA/-zeta EI Cd_n Cd_t Ca_n Ca_t), 11 or 13 cols (the same '// &
-                'followed by MoorDyn''s VIV columns Cl [dF cF]) or 14 cols '// &
-                '(Name Diam MassDenInAir EA BA/-zeta EI GAs GJ Irt Irn Cd_n Cd_t Ca_n Ca_t)'); RETURN
+                '(Name Diam MassDenInAir EA BA/-zeta EI Cd_n Cd_t Ca_n Ca_t) or 14 cols '// &
+                '(Name Diam MassDenInAir EA BA/-zeta EI GAs GJ Irt Irn Cd_n Cd_t Ca_n Ca_t), either '// &
+                'followed by MoorDyn''s VIV columns Cl [dF cF] (11, 13, 15 or 17 cols)'); RETURN
     END IF
     ! EA and BA read as STRINGS: MoorDyn's viscoelastic syntax carries
     ! bar-separated parts (Es|Ed[|alpha], Bs|Bd) that a numeric read cannot see.
@@ -15868,18 +15868,28 @@ CONTAINS
       END IF
     ELSE
       IF (stock_cols) THEN
-        CALL fail(ErrStat, ErrMsg, 'the 14-column LINE TYPES row is a CableDyn form (... Cd_n Cd_t '// &
-                  'Ca_n Ca_t); it does not combine with a stock-order header (Cd Ca CdAx CaAx)'); RETURN
+        CALL fail(ErrStat, ErrMsg, 'the 14-column LINE TYPES row (15 or 17 with VIV) is a CableDyn form '// &
+                  '(... Cd_n Cd_t Ca_n Ca_t); it does not combine with a stock-order header (Cd Ca CdAx CaAx)')
+        RETURN
       END IF
-      READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, ei_str, t%gas, gj_str, t%i_rt, t%i_rn, &
-        t%cdn, t%cdt, t%can, t%cat
+      ! the CableDyn finite-EI row, with MoorDyn's VIV columns Cl or Cl dF cF after it
+      IF (ntok == 14) THEN
+        READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, ei_str, t%gas, gj_str, t%i_rt, t%i_rn, &
+          t%cdn, t%cdt, t%can, t%cat
+      ELSE IF (ntok == 15) THEN
+        READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, ei_str, t%gas, gj_str, t%i_rt, t%i_rn, &
+          t%cdn, t%cdt, t%can, t%cat, t%cl
+      ELSE
+        READ (line, *, IOSTAT=ios) t%name, t%diam, t%mass, ea_str, ba_str, ei_str, t%gas, gj_str, t%i_rt, t%i_rn, &
+          t%cdn, t%cdt, t%can, t%cat, t%cl, t%viv_df, t%viv_cf
+      END IF
     END IF
     IF (ios /= 0) THEN
       CALL fail(ErrStat, ErrMsg, 'malformed LINE TYPES row'); RETURN
     END IF
     CALL parse_ei_column(ei_str, t, ErrStat, ErrMsg)
     IF (ErrStat /= 0) RETURN
-    IF (ntok == 14) THEN
+    IF (ntok >= 14) THEN
       CALL parse_gj_column(gj_str, t, ErrStat, ErrMsg)
       IF (ErrStat /= 0) RETURN
     END IF
@@ -15891,7 +15901,7 @@ CONTAINS
     END IF
     CALL parse_stiffness_columns(ea_str, ba_str, t, ErrStat, ErrMsg)
     IF (ErrStat /= 0) RETURN
-    IF (ntok == 11 .OR. ntok == 13) THEN
+    IF (ntok == 11 .OR. ntok == 13 .OR. ntok == 15 .OR. ntok == 17) THEN
       CALL check_viv_columns(t, ErrStat, ErrMsg)
       IF (ErrStat /= 0) RETURN
     END IF
