@@ -365,6 +365,10 @@ MODULE CableDyn_HermiteCableDynamic
     LOGICAL :: has_viv_amp = .FALSE.
     REAL(wp), ALLOCATABLE :: viv_amp(:, :, :)
     INTEGER, ALLOCATABLE :: viv_amp_n(:)
+    ! The diameter of the VIV model per element (Set_VIV dviv; VIV DIAMETER section): the shedding
+    ! frequency, lift scale and amplitude ratio take viv_dv(e) where it is positive, the drag
+    ! diameter diam(e) elsewhere and when it is unallocated (viv_diam).
+    REAL(wp), ALLOCATABLE :: viv_dv(:)
     REAL(wp), ALLOCATABLE :: Mgb(:, :)                           ! constant global mass (band)
     LOGICAL, ALLOCATABLE :: freemask(:), solve_mask(:)
     INTEGER, ALLOCATABLE :: fmap(:)                              ! free -> global DOF index
@@ -1123,7 +1127,7 @@ CONTAINS
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Friction_Axial
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, t_window, ErrStat, ErrMsg, phase_seed, tangent_reversed, &
-                                         clx, il_alpha, chh, wake, amp, amp_n)
+                                         clx, il_alpha, chh, wake, amp, amp_n, dviv)
     !! Install the cross-flow VIV synchronisation model (CableDyn_VIV) on a cable with drag:
     !! per element the lift coefficient cl (0: no lift) and the band df/cf, and the running-RMS
     !! averaging time t_window (s; 0 takes 500 steps of the first step). The lift acts on the
@@ -1159,6 +1163,10 @@ CONTAINS
     !! C_v >= 0 that replaces cl, and the factor > 0 of the element's normal drag coefficient, at
     !! the smoothed amplitude estimate of Thorsen et al. (2016); piecewise linear, held beyond the
     !! end rows.
+    !!
+    !! dviv (optional), per element, the diameter of the VIV model (> 0), which the shedding
+    !! frequency, the lift and in-line scales and the amplitude ratio take in place of the drag
+    !! diameter (0: the drag diameter, also after a later Set_Drag).
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: cl(:), cf(:), df(:), t_window
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1172,11 +1180,13 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: wake(:, :)
     REAL(wp), INTENT(IN), OPTIONAL :: amp(:, :, :)
     INTEGER, INTENT(IN), OPTIONAL :: amp_n(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: dviv(:)
     INTEGER :: e, k, ne, nn, es, nms
     REAL(wp) :: wsum, tw_old, rest_old
     LOGICAL :: had_viv, had_il, want_il, had_wake, want_wake, bad_band, had_amp, want_amp
     CHARACTER(LEN=1024) :: em
     REAL(wp), ALLOCATABLE :: p_amp(:, :, :)
+    REAL(wp), ALLOCATABLE :: p_dv(:)
     INTEGER, ALLOCATABLE :: p_ampn(:)
     REAL(wp), ALLOCATABLE :: a_old(:), o_cl(:), o_k(:), o_cf(:), o_df(:), o_dn(:), o_phi(:), o_phi_eval(:), &
                              o_rate(:), o_ms(:, :), o_ms_next(:, :), o_rec_phi(:), o_rec_ms(:, :), &
@@ -1306,6 +1316,19 @@ CONTAINS
                  'wake oscillator'; RETURN
       END IF
     END IF
+    IF (PRESENT(dviv)) THEN
+      IF (SIZE(dviv) /= ne) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: dviv must have one value per element'; RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(dviv)) THEN
+        ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: dviv must be finite'; RETURN
+      END IF
+      IF (ANY(dviv < CD_ZERO)) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: dviv must be non-negative (0 = the drag diameter)'; RETURN
+      END IF
+    END IF
     ! the previous configuration and state, kept for a rollback
     had_viv = model%has_viv
     had_il = model%has_viv_il
@@ -1335,6 +1358,12 @@ CONTAINS
       model%viv_amp = amp
       model%viv_amp_n = amp_n
       model%has_viv_amp = .TRUE.
+    END IF
+    IF (PRESENT(dviv)) THEN
+      IF (ANY(dviv > CD_ZERO)) THEN
+        ALLOCATE (model%viv_dv(ne))
+        model%viv_dv = dviv
+      END IF
     END IF
     model%viv_cl = cl
     model%viv_cf = CD_ZERO
@@ -1482,6 +1511,7 @@ CONTAINS
         CALL MOVE_ALLOC(w_om, model%wo_om0); CALL MOVE_ALLOC(w_rec, model%ws_recovery_wo_s)
         CALL MOVE_ALLOC(w_snap, model%snap_wo_s)
         CALL MOVE_ALLOC(p_amp, model%viv_amp); CALL MOVE_ALLOC(p_ampn, model%viv_amp_n)
+        CALL MOVE_ALLOC(p_dv, model%viv_dv)
       ELSE
         CALL MOVE_ALLOC(model%viv_cl, o_cl); CALL MOVE_ALLOC(model%viv_k, o_k)
         CALL MOVE_ALLOC(model%viv_cf, o_cf); CALL MOVE_ALLOC(model%viv_df, o_df)
@@ -1505,6 +1535,7 @@ CONTAINS
         CALL MOVE_ALLOC(model%wo_om0, w_om); CALL MOVE_ALLOC(model%ws_recovery_wo_s, w_rec)
         CALL MOVE_ALLOC(model%snap_wo_s, w_snap)
         CALL MOVE_ALLOC(model%viv_amp, p_amp); CALL MOVE_ALLOC(model%viv_amp_n, p_ampn)
+        CALL MOVE_ALLOC(model%viv_dv, p_dv)
       END IF
     END SUBROUTINE move_viv
   END SUBROUTINE CD_HermiteCable_Dyn_Set_VIV
@@ -1527,6 +1558,7 @@ CONTAINS
                                            model%wo_ydd0, model%wo_om0, model%ws_recovery_wo_s, model%snap_wo_s)
     IF (ALLOCATED(model%viv_amp)) DEALLOCATE (model%viv_amp)
     IF (ALLOCATED(model%viv_amp_n)) DEALLOCATE (model%viv_amp_n)
+    IF (ALLOCATED(model%viv_dv)) DEALLOCATE (model%viv_dv)
     model%has_viv_amp = .FALSE.
     model%has_viv = .FALSE.
     model%has_viv_il = .FALSE.
@@ -1542,9 +1574,11 @@ CONTAINS
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER :: e, k
     REAL(wp) :: wsum
-    model%viv_k = 0.5_wp*model%rho_w*model%diam*model%viv_cl
-    IF (model%has_viv_il) model%vil_k = 0.5_wp*model%rho_w*model%diam*model%vil_cx
-    IF (model%has_viv_il) model%vhh_k = 0.5_wp*model%rho_w*model%diam*model%vhh_cx
+    DO e = 1, model%ne
+      model%viv_k(e) = 0.5_wp*model%rho_w*viv_diam(model, e)*model%viv_cl(e)
+      IF (model%has_viv_il) model%vil_k(e) = 0.5_wp*model%rho_w*viv_diam(model, e)*model%vil_cx(e)
+      IF (model%has_viv_il) model%vhh_k(e) = 0.5_wp*model%rho_w*viv_diam(model, e)*model%vhh_cx(e)
+    END DO
     model%viv_dn = CD_ZERO
     DO k = 1, model%nn
       IF (.NOT. model%viv_node(k)) CYCLE
@@ -1552,11 +1586,21 @@ CONTAINS
       DO e = MAX(1, k - 1), MIN(model%ne, k)
         IF (.NOT. (model%viv_cl(e) > CD_ZERO)) CYCLE
         wsum = wsum + model%l0(e)
-        model%viv_dn(k) = model%viv_dn(k) + model%l0(e)*model%diam(e)
+        model%viv_dn(k) = model%viv_dn(k) + model%l0(e)*viv_diam(model, e)
       END DO
       model%viv_dn(k) = model%viv_dn(k)/wsum
     END DO
   END SUBROUTINE viv_drag_terms
+
+  PURE REAL(wp) FUNCTION viv_diam(model, e) RESULT(d)
+    !! The diameter of the VIV model on element e: viv_dv(e) where it is set (> 0), else the drag
+    !! diameter.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    d = model%diam(e)
+    IF (.NOT. ALLOCATED(model%viv_dv)) RETURN
+    IF (model%viv_dv(e) > CD_ZERO) d = model%viv_dv(e)
+  END FUNCTION viv_diam
 
   PURE REAL(wp) FUNCTION viv_elem_amplitude(model, e) RESULT(y0)
     !! The smoothed cross-flow amplitude of element e [m]: the mean over its VIV end nodes (zero
@@ -1585,8 +1629,8 @@ CONTAINS
     IF (.NOT. model%has_viv_amp) RETURN
     n = model%viv_amp_n(e)
     IF (n == 0) RETURN
-    k = 0.5_wp*model%rho_w*model%diam(e)*CD_VIV_Table(viv_elem_amplitude(model, e)/model%diam(e), &
-                                                      model%viv_amp(1, 1:n, e), model%viv_amp(2, 1:n, e))
+    k = 0.5_wp*model%rho_w*viv_diam(model, e)*CD_VIV_Table(viv_elem_amplitude(model, e)/viv_diam(model, e), &
+                                                           model%viv_amp(1, 1:n, e), model%viv_amp(2, 1:n, e))
   END FUNCTION elem_viv_k
 
   PURE REAL(wp) FUNCTION elem_cdn(model, e) RESULT(cdn)
@@ -1599,7 +1643,7 @@ CONTAINS
     IF (.NOT. model%has_viv_amp) RETURN
     n = model%viv_amp_n(e)
     IF (n == 0) RETURN
-    cdn = cdn*CD_VIV_Table(viv_elem_amplitude(model, e)/model%diam(e), model%viv_amp(1, 1:n, e), &
+    cdn = cdn*CD_VIV_Table(viv_elem_amplitude(model, e)/viv_diam(model, e), model%viv_amp(1, 1:n, e), &
                            model%viv_amp(3, 1:n, e))
   END FUNCTION elem_cdn
 

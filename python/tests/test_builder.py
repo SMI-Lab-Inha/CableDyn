@@ -281,6 +281,19 @@ def test_viv_amplitude_rows_are_written_with_the_values_given(tmp_path: Path) ->
         model.to_text(validate=False)
 
 
+def test_viv_diameter_rows_are_written(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type(
+        "zone", diam=0.1, mass=10.0, ea=5.0e7, cdn=1.2, can=1.0, cl=0.4, viv_diameter=0.9
+    )
+    deck = DeckFile.from_text(model.to_text(validate=False), path=tmp_path / "deck.dat")
+    rows = [row.tokens for row in deck._rows("VIV DIAMETER")]
+    assert rows == [("zone", "0.9")]
+    model.add_line_type("plain", diam=0.1, mass=10.0, ea=5.0e7, viv_diameter=0.9)
+    with pytest.raises(ValueError, match="set cl or wake_cl0"):
+        model.to_text(validate=False)
+
+
 def test_build_spread_mooring_with_multi_section_lines() -> None:
     import math
 

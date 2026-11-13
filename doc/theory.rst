@@ -1336,6 +1336,30 @@ at 0.3 holds the response at A/D 0.28; :math:`C_v = 0` with a drag factor 2 sett
 offset of ``Cd`` 2.4 to six digits; and a table with :math:`C_v` = ``Cl`` and factor 1 is the
 line without it, bit for bit.
 
+.. _theory-viv-diameter:
+
+VIV diameter
+~~~~~~~~~~~~
+
+A ``VIV DIAMETER`` row gives the VIV model of a line type a diameter :math:`D_v` of its own. The
+shedding frequency :math:`2\pi(c_F + d_F\sin(\phi_y - \phi))U/D_v` (or the wake frequency
+:math:`2\pi\,\mathrm{St}\,U_a/D_v` with the coupling :math:`A/D_v`), the VIV forces
+:math:`\tfrac12\rho D_v C U^2` and the amplitude ratio :math:`y_0^*/D_v` of a ``VIV AMPLITUDE``
+table take it, while the drag, added mass, buoyancy and contact keep the type's ``Diam``. It
+serves a section whose shedding is set by a larger outer diameter than its hydrodynamic one, as a
+buoyancy-module zone whose modules are ATTACHMENTS on the bare cable: a copy of the cable's type
+with :math:`D_v` the module diameter and its own synchronisation coefficients. The shedding of
+such a zone, where modules and bare cable alternate, has no established model; :math:`D_v` and
+the coefficients are the user's.
+
+On the taut line of the wake-oscillator gate (``Diam`` 0.1 m) the synchronisation model locks in
+near the first mode, at 0.287 Hz; with :math:`D_v` = 0.2 m its band,
+0.075-0.195 Hz, lies below the mode, where the motion lags the lift by less than a quarter period
+and the phase runs at the top of the band, 0.196 Hz, on ``EI = 0`` lines and finite-EI cables
+alike; an uncoupled wake oscillator (:math:`A` = 0) drives the cable at 0.149 Hz against
+:math:`\mathrm{St}\,U/D_v` = 0.15 Hz; and :math:`D_v` equal to ``Diam`` is the line without the row,
+bit for bit.
+
 .. _theory-dry-buoyancy:
 
 Buoyancy and wetting

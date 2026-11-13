@@ -50,6 +50,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   response inside its falling range, and a table with `Cv = Cl` and `CdAmp = 1` is the line
   without it, bit for bit. The estimate is in the step-recovery, snapshot and checkpoint state;
   the Python deck reader and builder take the section.
+- VIV diameter: an optional `VIV DIAMETER` section row `TypeName Dviv` gives the VIV model of a
+  line type (shedding frequency, wake frequency and coupling, VIV forces, amplitude ratio) a
+  diameter apart from the `Diam` its drag, added mass and buoyancy keep, for buoyancy-module zones
+  with ATTACHMENTS, on `EI = 0` lines and finite-EI cables, standalone and coupled. `Dviv` equal to
+  `Diam` is the type without it, bit for bit; the Python deck reader and builder take the section.
 - Load power channels `VIVPow<L>`, `DragPow<L>` and `DampPow<L>` [W], and `<name><L>N<J>` per
   unit length about a node [W/m]: the power the VIV loads, the drag and the structural damping
   (`BA`, `Bb`) deliver to a line at the committed state, on `EI = 0` lines and finite-EI cables,

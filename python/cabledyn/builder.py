@@ -236,6 +236,11 @@ class LineType:
         length, 2 to 32 of them in increasing amplitude ratio ``AD``: ``Cv``
         replaces ``cl`` at that amplitude (so ``cl`` must be set) and ``CdAmp``
         multiplies the normal drag coefficient ``cdn`` (1 when left out).
+    viv_diameter : float | None
+        Optional diameter of the type's VIV model, a ``VIV DIAMETER`` section row
+        ``Name Dviv``: the shedding frequency, the VIV forces and the amplitude
+        ratio take it in place of ``diam`` (which the drag, added mass and
+        buoyancy keep); it needs ``cl`` or ``wake_cl0``.
     """
 
     name: str
@@ -263,6 +268,7 @@ class LineType:
     wake_eps: float | None = None
     wake_a: float | None = None
     viv_amplitude: list[tuple[float, ...]] | None = None
+    viv_diameter: float | None = None
 
 
 @dataclass(eq=False)
@@ -1687,6 +1693,7 @@ class DeckModel:
         wake_eps: float | None = None,
         wake_a: float | None = None,
         viv_amplitude: list[tuple[float, ...]] | None = None,
+        viv_diameter: float | None = None,
     ) -> LineType:
         """Add a ``LINE TYPES`` row; see :class:`LineType` for the fields.
 
@@ -1728,6 +1735,7 @@ class DeckModel:
             wake_eps,
             wake_a,
             None if viv_amplitude is None else [tuple(row) for row in viv_amplitude],
+            viv_diameter,
         )
         self._line_types.append(item)
         return item
@@ -2621,6 +2629,7 @@ class DeckModel:
         _emit(out, "VIV", *self._viv_table())
         _emit(out, "WAKE OSCILLATOR", *self._wake_table())
         _emit(out, "VIV AMPLITUDE", *self._viv_amp_table())
+        _emit(out, "VIV DIAMETER", *self._viv_diam_table())
         _emit(out, "FAILURE", *self._failure_table())
         _emit(out, "CONTROL", *self._control_table())
         _emit(out, "EXTERNAL LOADS", *self._external_load_table())
@@ -3041,6 +3050,19 @@ class DeckModel:
                 rows.append([_text(item.name, what), *(_num(value, what) for value in row)])
         return "Name AD Cv CdAmp", "(-) (-) (-) (-)", rows
 
+    def _viv_diam_table(self) -> tuple[str, str, list[list[str]]]:
+        rows: list[list[str]] = []
+        for item in self._line_types:
+            if item.viv_diameter is None:
+                continue
+            what = f"line type {item.name!r}"
+            if item.cl is None and item.wake_cl0 is None:
+                raise ValueError(
+                    f"{what}: viv_diameter is the diameter of its VIV, set cl or wake_cl0"
+                )
+            rows.append([_text(item.name, what), _num(item.viv_diameter, what)])
+        return "Name Dviv", "(-) (m)", rows
+
     def _syrope_table(self) -> tuple[str, str, list[list[str]]]:
         rows = [
             [_line_list(row.lines), _num(row.tmax0, "SYROPE IC"), _num(row.tmean0, "SYROPE IC")]
@@ -3258,6 +3280,9 @@ class _Loader:
             if item.viv_amplitude is None:
                 item.viv_amplitude = []
             item.viv_amplitude.append(tuple(_f(token) for token in t[1:]))
+        for row in self.rows("VIV DIAMETER"):
+            t = row.tokens
+            model.line_types[t[0]].viv_diameter = _f(t[1])
         for row in self.rows("ATTACHMENTS"):
             t = row.tokens
             arc: float | tuple[float, float, float]

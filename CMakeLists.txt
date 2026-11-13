@@ -1344,6 +1344,13 @@ target_link_libraries(test_viv_amplitude_deck PRIVATE cabledyn_core)
 add_test(NAME viv_amplitude_deck COMMAND test_viv_amplitude_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(viv_amplitude_deck PROPERTIES LABELS "fortran;integration;dynamic;viv" TIMEOUT 1200)
 
+# The diameter of the VIV model on a deck (VIV DIAMETER section), both line kinds: Dviv = Diam as
+# no section, the shedding band and the uncoupled wake frequency following Dviv, and the refusals.
+add_executable(test_viv_diameter_deck tests/test_viv_diameter_deck.f90)
+target_link_libraries(test_viv_diameter_deck PRIVATE cabledyn_core)
+add_test(NAME viv_diameter_deck COMMAND test_viv_diameter_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(viv_diameter_deck PROPERTIES LABELS "fortran;integration;dynamic;viv" TIMEOUT 1200)
+
 add_executable(test_hermite_viv tests/test_hermite_viv.f90)
 target_link_libraries(test_hermite_viv PRIVATE cabledyn_core)
 add_test(NAME hermite_viv COMMAND test_hermite_viv)

@@ -467,6 +467,10 @@ MODULE CableDyn_DeckDriver
     ! token count of the type's rows (3 or 4, the drag factor 1 with 3).
     INTEGER :: amp_n = 0, amp_cols = 0
     REAL(wp) :: amp_tab(3, CD_VIV_AMP_MAXP) = CD_ZERO
+    ! The diameter of the VIV model (the optional VIV DIAMETER section, a row per type: TypeName
+    ! Dviv): 0 takes the type's Diam; has_vivd_row marks a type the section names.
+    REAL(wp) :: viv_dv = CD_ZERO
+    LOGICAL :: has_vivd_row = .FALSE.
     ! Deck file line of the row (0 when not read from a file), for error messages.
     INTEGER :: deck_line = 0
   END TYPE
@@ -1900,7 +1904,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: q_sequence(:)
     REAL(wp), ALLOCATABLE :: curv(:), cdn(:), cdt(:), can(:), cat(:), catenary_pos(:)
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:), viv_hh(:)
-    REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :)
+    REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :), viv_dva(:)
     INTEGER, ALLOCATABLE :: viv_ampn(:)
     REAL(wp), ALLOCATABLE :: wo_cl0(:), wo_st(:), wo_eps(:), wo_a(:)
     REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:), bb_el(:)
@@ -3305,8 +3309,11 @@ CONTAINS
     CALL finite_wake_arrays(ln, sections, types, wo_cl0, wo_st, wo_eps, wo_a)
     ALLOCATE (viv_tix(SIZE(l0)))
     CALL viv_amp_type_index(ln, sections, types, viv_tix)
+    ALLOCATE (viv_dva(SIZE(l0)))
+    CALL finite_viv_diameters(ln, sections, types, viv_dva)
     IF (SIZE(l0_am) /= SIZE(l0)) THEN
       CALL remap_elem_by_reference_arc(viv_tix, l0, l0_am)
+      CALL remap_elem_by_reference_arc(viv_dva, l0, l0_am)
       CALL remap_elem_by_reference_arc(wo_cl0, l0, l0_am)
       CALL remap_elem_by_reference_arc(wo_st, l0, l0_am)
       CALL remap_elem_by_reference_arc(wo_eps, l0, l0_am)
@@ -3644,20 +3651,22 @@ CONTAINS
                                                    REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
                                                    opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
                                              tangent_reversed=.NOT. ln%ends_swapped, &
-                                             wake=RESHAPE([wo_st, wo_eps, wo_a], [3, SIZE(wo_st)], ORDER=[2, 1]))
+                                             wake=RESHAPE([wo_st, wo_eps, wo_a], [3, SIZE(wo_st)], ORDER=[2, 1]), &
+                                             dviv=viv_dva)
           ELSE IF (ANY(viv_clx > CD_ZERO)) THEN
             CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
                                              MERGE(opts%viv_rms_window, &
                                                    REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
                                                    opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
                                              tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, il_alpha=viv_al, &
-                                             chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn)
+                                             chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn, dviv=viv_dva)
           ELSE
             CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
                                              MERGE(opts%viv_rms_window, &
                                                    REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
                                                    opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
-                                             tangent_reversed=.NOT. ln%ends_swapped, amp=viv_amp3, amp_n=viv_ampn)
+                                             tangent_reversed=.NOT. ln%ends_swapped, amp=viv_amp3, amp_n=viv_ampn, &
+                                             dviv=viv_dva)
           END IF
         END BLOCK
         IF (es /= CD_HCDYN_OK) THEN
@@ -10415,7 +10424,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: hydro_diam(:), hydro_cdn(:), hydro_cdt(:), hydro_can(:), hydro_cat(:)
     REAL(wp), ALLOCATABLE :: ve_ead(:), ve_bas(:), ve_bad(:), ve_ambl(:), ve_vbet(:)
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:), viv_hh(:)
-    REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :)
+    REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :), viv_dia(:)
     INTEGER, ALLOCATABLE :: viv_ampn(:)
     LOGICAL, ALLOCATABLE :: syr_el(:)
     REAL(wp) :: anchor(3), fairlead(3), mode1_omega
@@ -10456,8 +10465,9 @@ CONTAINS
               hydro_can(SIZE(l0)), hydro_cat(SIZE(l0)), ve_ead(SIZE(l0)), ve_bas(SIZE(l0)), &
               ve_bad(SIZE(l0)), ve_ambl(SIZE(l0)), ve_vbet(SIZE(l0)), viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), &
               viv_df(SIZE(l0)), syr_el(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)), viv_hh(SIZE(l0)), &
-              viv_tix(SIZE(l0)))
+              viv_tix(SIZE(l0)), viv_dia(SIZE(l0)))
     viv_tix = CD_ZERO
+    viv_dia = CD_ZERO
     viv_cl = CD_ZERO
     viv_cf = CD_ZERO
     viv_df = CD_ZERO
@@ -10531,6 +10541,9 @@ CONTAINS
         viv_hh(e) = types(line_section_type(sections, ln%id, i))%chh
         IF (types(line_section_type(sections, ln%id, i))%amp_n > 0) viv_tix(e) = REAL(line_section_type(sections, &
                                                                                                         ln%id, i), wp)
+        ! the VIV DIAMETER of the type, else its Diam
+        viv_dia(e) = MERGE(types(line_section_type(sections, ln%id, i))%viv_dv, hydro_diam(e), &
+                           types(line_section_type(sections, ln%id, i))%viv_dv > CD_ZERO)
         syr_el(e) = types(line_section_type(sections, ln%id, i))%is_syrope
       END DO
     END DO
@@ -10542,6 +10555,7 @@ CONTAINS
     viv_al = viv_al(SIZE(viv_al):1:-1)
     viv_hh = viv_hh(SIZE(viv_hh):1:-1)
     viv_tix = viv_tix(SIZE(viv_tix):1:-1)
+    viv_dia = viv_dia(SIZE(viv_dia):1:-1)
     ba = ba(SIZE(ba):1:-1)
     ve_ead = ve_ead(SIZE(ve_ead):1:-1)
     ve_bas = ve_bas(SIZE(ve_bas):1:-1)
@@ -10835,11 +10849,11 @@ CONTAINS
           CALL viv_amp_tables(types, viv_tix, viv_amp3, viv_ampn)
           ! with the in-line VIV of the VIV section where a type has ClX > 0
           IF (ANY(viv_clx > CD_ZERO)) THEN
-            CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
+            CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, viv_dia, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, &
                                   il_alpha=viv_al, chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn)
           ELSE
-            CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
+            CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, viv_dia, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, amp=viv_amp3, &
                                   amp_n=viv_ampn)
           END IF
@@ -11729,6 +11743,25 @@ CONTAINS
     END DO
     tix = tix(SIZE(tix):1:-1)
   END SUBROUTINE viv_amp_type_index
+
+  SUBROUTINE finite_viv_diameters(ln, sections, types, dv)
+    !! The VIV DIAMETER of every element's line type (0 where the type has none, the drag diameter
+    !! then), in the element order of finite_hydro_arrays (the deck order reversed).
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    REAL(wp), INTENT(OUT) :: dv(:)
+    INTEGER :: i, j, e
+    e = 0
+    DO i = 1, SIZE(sections)
+      IF (sections(i)%line_id /= ln%id) CYCLE
+      DO j = 1, sections(i)%nsegs
+        e = e + 1
+        dv(e) = types(sections(i)%ltype)%viv_dv
+      END DO
+    END DO
+    dv = dv(SIZE(dv):1:-1)
+  END SUBROUTINE finite_viv_diameters
 
   SUBROUTINE viv_amp_tables(types, tix, amp, ampn)
     !! Allocate and fill the per-element amplitude tables (CD_Set_Model_VIV and
@@ -13886,6 +13919,9 @@ CONTAINS
     CHARACTER(DECK_RECLEN), ALLOCATABLE :: vamp_rows(:)
     INTEGER, ALLOCATABLE :: vamp_lines(:)
     INTEGER :: n_vamp
+    CHARACTER(DECK_RECLEN), ALLOCATABLE :: vdia_rows(:)
+    INTEGER, ALLOCATABLE :: vdia_lines(:)
+    INTEGER :: n_vdia
     CHARACTER(2*NAMELEN), ALLOCATABLE :: channel_keys(:)
     LOGICAL :: ext_march, types_stock_cols, rodtypes_legacy_cols, turb_ok, static_finite_ok, tors_marched
     INTEGER :: unit, ios, section, nt, nb, nrt, nr, np, nlin, nsec, neq, nch, nfl, nct, nec, lineno
@@ -13903,7 +13939,7 @@ CONTAINS
                           SEC_SECTIONS = 5, SEC_OPTIONS = 6, SEC_OUTPUTS = 7, SEC_RODTYPES = 8, SEC_RODS = 9, &
                           SEC_EQUIV = 10, SEC_FAILURE = 11, SEC_CONTROL = 12, SEC_SYROPE_IC = 13, &
                           SEC_ENDCONN = 14, SEC_TURBINES = 15, SEC_EXTLOADS = 16, SEC_ATTACH = 17, &
-                          SEC_STIFF = 18, SEC_VIV = 19, SEC_WAKE = 20, SEC_VIVAMP = 21
+                          SEC_STIFF = 18, SEC_VIV = 19, SEC_WAKE = 20, SEC_VIVAMP = 21, SEC_VIVDIA = 22
 
     ErrStat = 0; ErrMsg = ''
     ext_march = .FALSE.
@@ -13930,6 +13966,8 @@ CONTAINS
     ALLOCATE (wake_rows(0), wake_lines(0))
     ALLOCATE (vamp_rows(0), vamp_lines(0))
     n_vamp = 0
+    ALLOCATE (vdia_rows(0), vdia_lines(0))
+    n_vdia = 0
     n_wake = 0
     nt = 0; nb = 0; nrt = 0; nr = 0; np = 0; nlin = 0; nsec = 0; neq = 0; nch = 0; nfl = 0; nct = 0; nec = 0
     section = SEC_NONE
@@ -14083,6 +14121,15 @@ CONTAINS
         END IF
         vamp_rows(n_vamp) = line(1:MIN(LEN(line), DECK_RECLEN))
         vamp_lines(n_vamp) = lineno
+      CASE (SEC_VIVDIA)
+        IF (.NOT. has_numeric_token(line)) CYCLE
+        n_vdia = n_vdia + 1
+        IF (n_vdia > SIZE(vdia_rows)) THEN
+          vdia_rows = [vdia_rows, [(REPEAT(' ', DECK_RECLEN), i_ch=1, 8)]]
+          vdia_lines = [vdia_lines, [(0, i_ch=1, 8)]]
+        END IF
+        vdia_rows(n_vdia) = line(1:MIN(LEN(line), DECK_RECLEN))
+        vdia_lines(n_vdia) = lineno
       CASE (SEC_OPTIONS)
         CALL apply_option(line, opts, ErrStat, ErrMsg)
       CASE (SEC_OUTPUTS)
@@ -14198,6 +14245,13 @@ CONTAINS
       CALL apply_type_viv_amp(vamp_rows(i_ch), types, ErrStat, ErrMsg)
       IF (ErrStat /= 0) THEN
         CALL add_row_context('deck', vamp_lines(i_ch), vamp_rows(i_ch), ErrMsg)
+        RETURN
+      END IF
+    END DO
+    DO i_ch = 1, n_vdia
+      CALL apply_type_viv_diam(vdia_rows(i_ch), types, ErrStat, ErrMsg)
+      IF (ErrStat /= 0) THEN
+        CALL add_row_context('deck', vdia_lines(i_ch), vdia_rows(i_ch), ErrMsg)
         RETURN
       END IF
     END DO
@@ -15877,6 +15931,8 @@ CONTAINS
       section = 19
     CASE ('VIV AMPLITUDE', 'VIV AMPLITUDES')
       section = 21
+    CASE ('VIV DIAMETER', 'VIV DIAMETERS')
+      section = 22
     CASE ('WAKE OSCILLATOR', 'WAKE OSCILLATORS', 'WAKE')
       section = 20
     CASE DEFAULT
@@ -17605,6 +17661,48 @@ CONTAINS
     types(it)%amp_cols = ntok
     types(it)%amp_tab(:, n + 1) = v
   END SUBROUTINE apply_type_viv_amp
+
+  SUBROUTINE apply_type_viv_diam(row, types, ErrStat, ErrMsg)
+    !! One VIV DIAMETER row: TypeName Dviv -- the diameter of a line type's VIV model, Dviv > 0 (at
+    !! most 1e15), which the shedding frequency, the lift and in-line forces and the amplitude ratio
+    !! take in place of the type's Diam (which the drag, added mass and buoyancy keep). The type
+    !! needs VIV (LINE TYPES Cl > 0, or a WAKE OSCILLATOR row). A type takes one row.
+    CHARACTER(*), INTENT(IN) :: row
+    TYPE(DeckLineType), INTENT(INOUT) :: types(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(DECK_RECLEN) :: tok
+    INTEGER :: it
+    REAL(wp) :: v
+    LOGICAL :: found, ok
+
+    ErrStat = 0; ErrMsg = ''
+    IF (count_tokens(row) /= 2) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV DIAMETER rows must be: TypeName Dviv'); RETURN
+    END IF
+    CALL get_token(row, 1, tok, found)
+    it = find_type(types, TRIM(tok))
+    IF (it == 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV DIAMETER row names undefined LINE TYPE "'//TRIM(tok)//'"'); RETURN
+    END IF
+    IF (types(it)%has_vivd_row) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV DIAMETER names LINE TYPE "'//TRIM(types(it)%name)//'" twice'); RETURN
+    END IF
+    CALL get_token(row, 2, tok, found)
+    CALL parse_real_token(tok, v, ok)
+    IF (.NOT. ok) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV DIAMETER Dviv must be a plain number'); RETURN
+    END IF
+    IF (.NOT. (IEEE_IS_FINITE(v) .AND. v > CD_ZERO .AND. v <= MAX_COEFFICIENT)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV DIAMETER needs Dviv > 0, at most 1e15'); RETURN
+    END IF
+    IF (.NOT. (types(it)%cl > CD_ZERO .OR. types(it)%wo_cl0 > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV DIAMETER of LINE TYPE "'//TRIM(types(it)%name)//'" sets the diameter '// &
+                'of its VIV: give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row'); RETURN
+    END IF
+    types(it)%viv_dv = v
+    types(it)%has_vivd_row = .TRUE.
+  END SUBROUTINE apply_type_viv_diam
 
   SUBROUTINE append_line_stiffener(row, lines, ErrStat, ErrMsg)
     !! One STIFFENERS row: LineID End Length RootOD TipOD InnerD E Density -- a conical segment of
