@@ -10,7 +10,9 @@ PROGRAM test_viv_wake_kernel
   !!      magnification K, half the first-harmonic amplitude of q, follows the closed form of their
   !!      Eq. 17, a one-harmonic balance, for y0 = 0.05-0.5;
   !!   K3 one call over an interval equals the same interval in two calls with the forcing split
-  !!      at its midpoint, and refining the sub-steps converges at fourth order.
+  !!      at its midpoint, and refining the sub-steps converges at fourth order;
+  !!   K4 a large eps (20, om 1) from (2, 0), whose damping rate eps om (q^2 - 1) is sixty times the
+  !!      oscillation, stays finite in 0.1 s calls and matches 0.001 s calls within 1e-6 at t = 1.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_VIV, ONLY: CD_VIV_Wake_Advance, CD_VIV_WAKE_DEFAULT_EPS, CD_VIV_WAKE_DEFAULT_A
   IMPLICIT NONE
@@ -22,6 +24,7 @@ PROGRAM test_viv_wake_kernel
   CALL check_free()
   CALL check_forced()
   CALL check_steps()
+  CALL check_stiff()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -150,5 +153,22 @@ CONTAINS
                                0.2_wp - 0.8_wp*REAL(k, wp)/REAL(n, wp), h/REAL(n, wp))
     END DO
   END FUNCTION march
+
+  SUBROUTINE check_stiff()
+    !! The sub-steps follow the damping rate as well as the oscillation (eps 20, om 1).
+    REAL(wp) :: sc(2), sf(2)
+    INTEGER :: k
+    sc = [2.0_wp, 0.0_wp]
+    sf = sc
+    DO k = 1, 10
+      CALL CD_VIV_Wake_Advance(sc, 1.0_wp, 20.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.1_wp)
+    END DO
+    DO k = 1, 1000
+      CALL CD_VIV_Wake_Advance(sf, 1.0_wp, 20.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.001_wp)
+    END DO
+    WRITE (*, '(A,2ES12.4,A,ES10.3)') 'K4: eps 20 at t = 1 s: ', sc, ', against 1 ms calls ', MAXVAL(ABS(sc - sf))
+    CALL require(ALL(ABS(sc) < 10.0_wp) .AND. MAXVAL(ABS(sc - sf)) <= 1.0e-6_wp, 'K4: a large eps stays '// &
+                 'resolved in long calls')
+  END SUBROUTINE check_stiff
 
 END PROGRAM test_viv_wake_kernel

@@ -454,26 +454,48 @@ CONTAINS
     !!
     !! s = (q, q'), om the wake frequency 2 pi St U/D, ad = A/D and the cross-flow acceleration
     !! y'' of the line, taken linear from f0 at the start of the interval to f1 at its end.
-    !! Classical Runge-Kutta in equal sub-steps of om dt <= 0.1 (at least one), so the error is
-    !! that of a resolved oscillation however long h is against the wake period. q = 2 C_L/C_L0:
-    !! the free oscillator settles on its limit cycle q = 2 cos(om t), the lift of a fixed
-    !! cylinder.
+    !! Classical Runge-Kutta in equal sub-steps of r dt <= 0.1 (at least one), r = om max(1,
+    !! eps q^2) the faster of the oscillation and the van der Pol damping rate eps om (q^2 - 1) at
+    !! the start of the interval, so the error is that of a resolved oscillation however long h is
+    !! against the wake period and however large eps is. Should the rate at a sub-step exceed
+    !! 0.2/dt (q grown on the way) or the result not be finite, the interval is redone from its
+    !! start with twice the sub-steps. q = 2 C_L/C_L0: the free oscillator settles on its limit
+    !! cycle q = 2 cos(om t), the lift of a fixed cylinder.
     REAL(wp), INTENT(INOUT) :: s(2)
     REAL(wp), INTENT(IN) :: om, eps, ad, f0, f1, h
-    INTEGER :: n, i
-    REAL(wp) :: dt, t, k1(2), k2(2), k3(2), k4(2)
+    INTEGER :: n, i, attempt
+    REAL(wp) :: dt, t, k1(2), k2(2), k3(2), k4(2), s0(2)
+    LOGICAL :: ok
     IF (.NOT. (h > CD_ZERO)) RETURN
-    n = MAX(1, CEILING(MIN(ABS(om)*h/0.1_wp, 1.0e6_wp)))
-    dt = h/REAL(n, wp)
-    DO i = 0, n - 1
-      t = REAL(i, wp)*dt
-      k1 = rhs(s, t)
-      k2 = rhs(s + 0.5_wp*dt*k1, t + 0.5_wp*dt)
-      k3 = rhs(s + 0.5_wp*dt*k2, t + 0.5_wp*dt)
-      k4 = rhs(s + dt*k3, t + dt)
-      s = s + (dt/6.0_wp)*(k1 + 2.0_wp*k2 + 2.0_wp*k3 + k4)
+    s0 = s
+    n = MAX(1, CEILING(MIN(rate(s0)*h/0.1_wp, 1.0e6_wp)))
+    DO attempt = 1, 24
+      s = s0
+      dt = h/REAL(n, wp)
+      ok = .TRUE.
+      DO i = 0, n - 1
+        IF (rate(s)*dt > 0.2_wp .AND. n < 1000000) THEN
+          ok = .FALSE.
+          EXIT
+        END IF
+        t = REAL(i, wp)*dt
+        k1 = rhs(s, t)
+        k2 = rhs(s + 0.5_wp*dt*k1, t + 0.5_wp*dt)
+        k3 = rhs(s + 0.5_wp*dt*k2, t + 0.5_wp*dt)
+        k4 = rhs(s + dt*k3, t + dt)
+        s = s + (dt/6.0_wp)*(k1 + 2.0_wp*k2 + 2.0_wp*k3 + k4)
+      END DO
+      IF (ok) ok = ABS(s(1)) <= HUGE(s(1)) .AND. ABS(s(2)) <= HUGE(s(2))
+      IF (ok .OR. n >= 1000000) EXIT
+      n = MIN(2*n, 1000000)
     END DO
   CONTAINS
+    PURE REAL(wp) FUNCTION rate(x) RESULT(r)
+      !! The faster of the oscillation and the damping rate of state x (finite or not).
+      REAL(wp), INTENT(IN) :: x(2)
+      r = ABS(om)*MAX(CD_ONE, eps*x(1)*x(1))
+      IF (.NOT. (r <= HUGE(r))) r = HUGE(r)
+    END FUNCTION rate
     PURE FUNCTION rhs(x, tau) RESULT(d)
       REAL(wp), INTENT(IN) :: x(2), tau
       REAL(wp) :: d(2)

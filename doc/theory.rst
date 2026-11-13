@@ -1272,8 +1272,11 @@ The wake state :math:`(q, \dot q)` of a node is integrated beside the cable, as 
 synchronisation model is. At the start of a step it is advanced under the step-start
 acceleration to give the :math:`q` the step's lift takes; at the converged end it is advanced
 again from the committed state with the acceleration linear between the step's ends, at the
-step-start :math:`\omega_f`, and committed. Both use classical Runge-Kutta in sub-steps of
-:math:`\omega_f\,\delta t \le 0.1`. The lift is integrated on a finite-EI cable at the Gauss
+step-start :math:`\omega_f`, and committed. Both use classical Runge-Kutta in equal sub-steps of
+:math:`r\,\delta t \le 0.1`, :math:`r = \omega_f\max(1, \varepsilon q^2)` the faster of the
+oscillation and the van der Pol damping rate at the start of the interval, so a large
+:math:`\varepsilon` stays resolved; should the rate exceed :math:`0.2/\delta t` on the way, or the
+result not be finite, the interval is redone with twice the sub-steps. The lift is integrated on a finite-EI cable at the Gauss
 points of the synchronisation lift, :math:`q` interpolated between the element's end nodes, with
 its exact position and velocity derivatives in the tangent at fixed :math:`q`. :math:`q` starts on
 its limit cycle at the node's phase seed, :math:`q = 2\cos\phi_0`, :math:`\dot q = 0`, and the
