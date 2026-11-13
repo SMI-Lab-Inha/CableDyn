@@ -10,7 +10,7 @@ PROGRAM test_viv_amplitude_kernel
   !!      halving the step cuts the error about four times (trapezoidal travel, interpolated
   !!      crossings), and the smoothed amplitude follows Eq. 9 (within 1e-9 of y0 after 400 steps);
   !!   K2 a velocity that touches zero without changing sign ends no half cycle, a velocity that
-  !!      changes sign does;
+  !!      changes sign does, also through a sample at exactly zero (the travel is signed);
   !!   K3 a growing oscillation y0(t) = a t: each half-cycle value is the mean amplitude of its half
   !!      cycle (within 0.1 % from the sixth period, the extremes then within that of a t);
   !!   K4 the table interpolates linearly and holds its end values; a one-row table is constant;
@@ -107,8 +107,39 @@ CONTAINS
     CALL CD_VIV_Amplitude_Update(st, -1.0_wp, 0.1_wp)
     ! the crossing halfway through the step: travel 0.1 + 0.025 before it, half of it the amplitude
     CALL require(ABS(st(2) - 0.0625_wp) <= 1.0e-15_wp, 'K2: a sign change ends the half cycle at the crossing')
-    CALL require(ABS(st(1) - 0.025_wp) <= 1.0e-15_wp, 'K2: the rest of the step starts the next one')
+    CALL require(ABS(st(1) + 0.025_wp) <= 1.0e-15_wp, 'K2: the rest of the step starts the next one, signed')
+    CALL check_zero_samples()
   END SUBROUTINE check_touch
+
+  SUBROUTINE check_zero_samples()
+    !! A triangular velocity sampled on its zeros, 0 1 2 1 0 -1 -2 -1 0 ... with dt 0.5: every
+    !! reversal passes through a sample at zero, and each half cycle travels 2 (exact for the
+    !! trapezoidal rule on a piecewise-linear velocity), so y0 = 1; a touch (1 0 1) ends none.
+    REAL(wp), PARAMETER :: wave(8) = [1.0_wp, 2.0_wp, 1.0_wp, 0.0_wp, -1.0_wp, -2.0_wp, -1.0_wp, 0.0_wp]
+    REAL(wp) :: st(4), s_before
+    INTEGER :: i, n_half
+    LOGICAL :: all_one
+    st = 0.0_wp
+    n_half = 0
+    all_one = .TRUE.
+    DO i = 1, 8*5
+      s_before = st(1)
+      CALL CD_VIV_Amplitude_Update(st, wave(MOD(i - 1, 8) + 1), 0.5_wp)
+      ! a half cycle ends where the signed travel changes sign
+      IF (s_before*st(1) < 0.0_wp) THEN
+        n_half = n_half + 1
+        all_one = all_one .AND. st(2) == 1.0_wp
+      END IF
+    END DO
+    CALL require(n_half == 9 .AND. all_one, 'K2: each reversal through a sample at zero ends a half cycle, y0 = 1')
+    CALL require(st(1) == -2.0_wp .AND. st(4) == 0.0_wp, 'K2: the run ends on a zero sample, its half cycle open')
+    st = [0.75_wp, 0.5_wp, 0.5_wp, 0.0_wp]
+    CALL CD_VIV_Amplitude_Update(st, 1.0_wp, 0.5_wp)
+    CALL require(st(2) == 0.5_wp .AND. st(1) == 1.0_wp, 'K2: a touch through a zero sample (+, 0, +) ends none')
+    st = [0.75_wp, 0.5_wp, 0.5_wp, 0.0_wp]
+    CALL CD_VIV_Amplitude_Update(st, -1.0_wp, 0.5_wp)
+    CALL require(st(2) == 0.375_wp .AND. st(1) == -0.25_wp, 'K2: a reversal through it (+, 0, -) ends one there')
+  END SUBROUTINE check_zero_samples
 
   SUBROUTINE check_growth()
     !! y = a t sin(om t): y' = a sin(om t) + a t om cos(om t). Between crossings of y' the travel

@@ -9,6 +9,7 @@ PROGRAM test_model
   !! at rest, prescribed fairlead motion advances through the model boundary, and
   !! End releases the model cleanly.
   USE CableDyn_Precision, ONLY: wp
+  USE CableDyn_VIV, ONLY: CD_VIV_AMP_MAXP
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Init_Bathymetry, CD_End_Bathymetry, CD_BATHY_OK
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_EI0_SUBSTEPS_OFF
   USE CableDyn_SeabedContact, ONLY: CD_SEABED_CONTACT_BLEND
@@ -1740,6 +1741,8 @@ CONTAINS
     INTEGER :: conn(2, NE), fixed(6), es, k, n_iter
     REAL(wp) :: q0(3*NN), v0(3*NN), f_ext(3*NN), pq(3*NN), pv(3*NN), pa(3*NN), fluid(3, NN), wl(NN)
     REAL(wp) :: l0(NE), ea(NE), rho_a(NE), cl(NE), dia(NE), cf(NE), df(NE), phi0(NN), w, t, phx0(NN)
+    REAL(wp) :: tab(3, CD_VIV_AMP_MAXP, NE)
+    INTEGER :: tab_n(NE), ev0
     LOGICAL :: conv, stalled, all_conv
     CHARACTER(200) :: em
 
@@ -1824,6 +1827,37 @@ CONTAINS
                    'substep-viv:in-line-restore-is-complete')
       CALL require(ALL(fb_m%vil_phi == off_m%vil_phi) .AND. ALL(fb_m%vil_ms == off_m%vil_ms), &
                    'substep-viv:in-line-fallback-is-the-plain-step')
+    END IF
+    IF (.NOT. inline) THEN
+      ! amplitude tables set after the line has stepped grow its VIV motion statistics from 2 to 6
+      ! rows per node at the same node count: the sub-step slots follow on the next sub-stepped steps
+      ! (100 more steps, to t = 3.2 s: the heave repeats the turning of the first 1.2 s)
+      tab = 0.0_wp
+      tab_n = 2
+      DO k = 1, NE
+        tab(:, 1, k) = [0.0_wp, 0.8_wp, 1.0_wp]
+        tab(:, 2, k) = [0.5_wp, 0.4_wp, 1.5_wp]
+      END DO
+      ev0 = auto_m%sub_stats%events
+      CALL CD_Set_Model_VIV(auto_m, 1025.0_wp, cl, dia, cf, df, 0.25_wp, es, em, amp=tab, amp_n=tab_n)
+      CALL require(es == CD_MODEL_OK, 'substep-viv:tables-after-stepping: '//TRIM(em))
+      all_conv = es == CD_MODEL_OK
+      DO k = NSTEP + 1, NSTEP + 100
+        t = REAL(k, wp)*DT
+        pq = q0
+        pv = 0.0_wp
+        pa = 0.0_wp
+        pq(3*NN) = q0(3*NN) + AMP*(1.0_wp - COS(w*t))
+        pv(3*NN) = AMP*w*SIN(w*t)
+        pa(3*NN) = AMP*w*w*COS(w*t)
+        CALL CD_Step_Model(auto_m, DT, conv, stalled, n_iter, es, em, prescribed_q=pq, prescribed_v=pv, prescribed_a=pa)
+        all_conv = all_conv .AND. es == CD_MODEL_OK .AND. conv
+      END DO
+      WRITE (*, '(A,I0,A,L1)') '  sub-stepped steps with tables: ', auto_m%sub_stats%events - ev0, &
+        ', converged ', all_conv
+      CALL require(all_conv .AND. auto_m%sub_stats%events > ev0, 'substep-viv:tables-after-stepping-sub-steps')
+      CALL require(SIZE(auto_m%sub_slot(1)%viv_ms, 1) == 6 .AND. SIZE(auto_m%sub_slot(2)%viv_ms, 1) == 6, &
+                   'substep-viv:slots-follow-the-statistics-rows')
     END IF
     CALL CD_End_Model(auto_m, es, em)
     CALL CD_End_Model(rep_m, es, em)

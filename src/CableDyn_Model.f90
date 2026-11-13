@@ -2284,6 +2284,7 @@ CONTAINS
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     LOGICAL, INTENT(IN) :: has_pres
     INTEGER :: istat, k
+    LOGICAL :: reuse
     ok = .FALSE.
     istat = 0
     DO k = 1, 2
@@ -2323,8 +2324,14 @@ CONTAINS
           END IF
         END IF
         IF (model%has_viv) THEN
-          IF (.NOT. sized(s%viv_phi, SIZE(model%viv_phi))) THEN
-            IF (ALLOCATED(s%viv_phi)) DEALLOCATE (s%viv_phi, s%viv_ms)
+          ! the motion statistics change rows with amplitude tables (CD_Model_VIV_NMS) on a line
+          ! whose VIV is set again after it has stepped: the slot follows both dimensions
+          reuse = sized(s%viv_phi, SIZE(model%viv_phi))
+          IF (reuse) reuse = ALLOCATED(s%viv_ms)
+          IF (reuse) reuse = SIZE(s%viv_ms, 1) == SIZE(model%viv_ms, 1) .AND. SIZE(s%viv_ms, 2) == SIZE(model%viv_ms, 2)
+          IF (.NOT. reuse) THEN
+            IF (ALLOCATED(s%viv_phi)) DEALLOCATE (s%viv_phi)
+            IF (ALLOCATED(s%viv_ms)) DEALLOCATE (s%viv_ms)
             ALLOCATE (s%viv_phi(SIZE(model%viv_phi)), s%viv_ms(SIZE(model%viv_ms, 1), SIZE(model%viv_phi)), STAT=istat)
             IF (istat /= 0) RETURN
           END IF
@@ -4262,13 +4269,14 @@ CONTAINS
   SUBROUTINE CD_Set_Model_VIV_State(model, phi, ms, t_window, ErrStat, ErrMsg, phi_x, ms_x)
     !! Overwrite the committed VIV state from a checkpoint (see CD_Get_Model_VIV_State).
     !! Fails closed on a model without VIV, a shape mismatch, non-finite values, a negative
-    !! mean square or averaging time. A model with in-line VIV needs phi_x and ms_x, one without
-    !! refuses them.
+    !! mean square, amplitude or averaging time. A model with in-line VIV needs phi_x and ms_x,
+    !! one without refuses them.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: phi(:), ms(:, :), t_window
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: phi_x(:), ms_x(:, :)
+    LOGICAL :: neg
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
     IF (.NOT. model%initialized) THEN
@@ -4288,7 +4296,11 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'VIV state mirror must be finite')
       RETURN
     END IF
-    IF (ANY(ms(1:MIN(5, SIZE(ms, 1)), :) < CD_ZERO) .OR. t_window < CD_ZERO) THEN
+    ! the mean squares (rows 1:2) and the amplitudes y0, y0s (rows 4:5) cannot be negative; the
+    ! travel and the last cross-flow velocity of the amplitude estimate (rows 3, 6) are signed
+    neg = ANY(ms(1:2, :) < CD_ZERO)
+    IF (SIZE(ms, 1) >= 5) neg = neg .OR. ANY(ms(4:5, :) < CD_ZERO)
+    IF (neg .OR. t_window < CD_ZERO) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV mean squares, amplitudes and averaging time must be non-negative')
       RETURN
     END IF

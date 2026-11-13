@@ -1317,8 +1317,10 @@ cross-flow axis of the phase, across the relative flow, turns with the node's ow
 at a response velocity comparable to the flow would shorten the projected velocity by
 :math:`U/|\mathbf v_n|` (16 % at the A/D of 0.68 of the gate below). The travel is integrated by
 the trapezoidal rule over each step, with a crossing inside a step placed by linear interpolation;
-the error is that of the rule, :math:`(\omega\Delta t)^2/12` relative for a harmonic response, and
-a velocity that touches zero without a sign change ends no half cycle.
+the error is that of the rule, :math:`(\omega\Delta t)^2/12` relative for a harmonic response.
+The travel is carried signed, :math:`\int\dot y\,\mathrm{d}t` since the last crossing, whose sign
+is that of the half cycle: a velocity that reverses through a sample at zero ends the half cycle
+there, and one that touches zero without a sign change ends none.
 
 An element takes the mean :math:`y_0^*` of its free nodes (the VIV nodes; a fixed end node has
 none) over its diameter as :math:`A/D` and reads its table there: :math:`C_v` in place of ``Cl`` in the lift, and a factor of ``Cd`` in the

@@ -2435,14 +2435,18 @@ CONTAINS
       END IF
     END IF
     ! and the VIV block's mean squares, amplitudes and averaging time, which cannot be negative
-    ! (per node the rows of the motion statistics; the last cross-flow velocity of the amplitude
-    ! estimate, row 6, is signed)
+    ! (per node the rows of the motion statistics: the mean squares, rows 1:2, and the amplitudes
+    ! y0, y0s of the amplitude estimate, rows 4:5; its travel and last cross-flow velocity, rows
+    ! 3 and 6, are signed)
     IF (self%line%has_viv) THEN
       nv = SIZE(self%line%viv_ms, 1)
       kb = SIZE(buf) - CD_HFMF_TorsionMirrorSize(self) - CD_HFMF_VIVMirrorSize(self) + self%line%nn
       bad_viv = buf(kb + nv*self%line%nn + 1) < CD_ZERO
       DO i = 1, self%line%nn
-        IF (ANY(buf(kb + (i - 1)*nv + 1:kb + (i - 1)*nv + MIN(nv, 5)) < CD_ZERO)) bad_viv = .TRUE.
+        IF (ANY(buf(kb + (i - 1)*nv + 1:kb + (i - 1)*nv + 2) < CD_ZERO)) bad_viv = .TRUE.
+        IF (nv >= 5) THEN
+          IF (ANY(buf(kb + (i - 1)*nv + 4:kb + (i - 1)*nv + 5) < CD_ZERO)) bad_viv = .TRUE.
+        END IF
       END DO
       IF (bad_viv) THEN
         ErrStat = CD_HFMF_BADINPUT

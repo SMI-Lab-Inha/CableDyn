@@ -522,27 +522,34 @@ CONTAINS
     !! (J. Fluids Struct. 61, 2016, Eq. 8 and 9) at a node, with the cross-flow velocity yd at the
     !! end of the step. st = (s, y0, y0s, yd_last):
     !!
-    !!   s       the travel int |y'| dt since the last zero crossing of y' (trapezoidal)
-    !!   y0      the amplitude s/2 of the last half cycle, set at each zero crossing of y' (the
+    !!   s       the travel since the last zero crossing of y', signed: int y' dt (trapezoidal),
+    !!           which is +-int |y'| dt as y' keeps its sign between crossings, and whose sign
+    !!           is that of the half cycle
+    !!   y0      the amplitude |s|/2 of the last half cycle, set at each zero crossing of y' (the
     !!           node travels 2 y0 between two crossings of a narrow-band response, Eq. 8)
     !!   y0s     the smoothed amplitude, y0s + k_a dt (y0 - y0s) per step (Eq. 9, k_a = 0.1/dt)
     !!   yd_last y' at the start of the step
     !!
-    !! A crossing inside the step is placed by linear interpolation of y', and the travel splits
-    !! there between the half cycle it ends and the next. A step that starts or ends at y' = 0
-    !! is not a crossing (the sign must change).
+    !! A crossing is a change of sign of y' from that of the running half cycle: of yd_last, or
+    !! after samples at y' = 0 the sign of s, so a reversal through a sample at zero (+1, 0, -1)
+    !! ends the half cycle there and a touch (+1, 0, +1) does not. A crossing inside the step is
+    !! placed by linear interpolation of y', and the travel splits there between the half cycle
+    !! it ends and the next.
     REAL(wp), INTENT(INOUT) :: st(4)
     REAL(wp), INTENT(IN) :: yd, dt
-    REAL(wp) :: y_old, theta
+    REAL(wp) :: y_old, theta, p
     IF (.NOT. (dt > CD_ZERO)) RETURN
     y_old = st(4)
-    IF ((y_old > CD_ZERO .AND. yd < CD_ZERO) .OR. (y_old < CD_ZERO .AND. yd > CD_ZERO)) THEN
+    p = y_old
+    IF (.NOT. (p /= CD_ZERO)) p = st(1)
+    IF ((p > CD_ZERO .AND. yd < CD_ZERO) .OR. (p < CD_ZERO .AND. yd > CD_ZERO)) THEN
+      ! theta = 0 when the step starts on the sample at zero that ends the half cycle
       theta = y_old/(y_old - yd)
-      st(1) = st(1) + 0.5_wp*ABS(y_old)*theta*dt
-      st(2) = 0.5_wp*st(1)
-      st(1) = 0.5_wp*ABS(yd)*(CD_ONE - theta)*dt
+      st(1) = st(1) + 0.5_wp*y_old*theta*dt
+      st(2) = 0.5_wp*ABS(st(1))
+      st(1) = 0.5_wp*yd*(CD_ONE - theta)*dt
     ELSE
-      st(1) = st(1) + 0.5_wp*(ABS(y_old) + ABS(yd))*dt
+      st(1) = st(1) + 0.5_wp*(y_old + yd)*dt
     END IF
     st(3) = st(3) + CD_VIV_AMP_KDT*(st(2) - st(3))
     st(4) = yd
