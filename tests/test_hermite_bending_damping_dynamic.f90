@@ -16,6 +16,12 @@ PROGRAM test_hermite_bending_damping_dynamic
   !!   B5 a straight cable moving in its first bending mode with zero acceleration has no elastic
   !!      curvature: the node recovery reports none although the bending damping acts (its viscous
   !!      moment is not EI kappa), while the end force carries the damping.
+  !!   B6 the residual's round-off floor: a soft line (EA 4e5 N, as a tensioner in series) with a
+  !!      stiff bending damping (Bb 1e4 N m^2 s) at dt 1e-4 s. The damping takes the curvature
+  !!      rate from the Newmark velocity, whose rounding is gamma/(beta dt) times the coordinates',
+  !!      so its force rounds at about Bb gamma/(beta dt) eps |r|/l0^3, far above the axial floor
+  !!      EA eps |r|/l0 the tolerance scale allowed: every step stagnated just above the
+  !!      tolerance and failed. Every step converges and the motion stays bounded.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
                                           CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Set_Bending_Damping, &
@@ -32,6 +38,7 @@ PROGRAM test_hermite_bending_damping_dynamic
   CALL decay_case('B3 undamped', 1.0e4_wp, 0.0_wp)
   CALL check_refusals()
   CALL check_recovery()
+  CALL check_roundoff_floor()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -155,5 +162,35 @@ CONTAINS
     WRITE (*, '(A,ES11.3,A)') 'B5: the bending damping changes the end force by ', NORM2(f_damped - f_plain), ' N'
     CALL require(NORM2(f_damped - f_plain) > 0.0_wp, 'B5: the end force carries the damping')
   END SUBROUTINE check_recovery
+
+  SUBROUTINE check_roundoff_floor()
+    TYPE(CD_HermiteCableDynType) :: model
+    REAL(wp), PARAMETER :: EA_SOFT = 4.0e5_wp, TENS = 6.0e3_wp, A0 = 1.0e-3_wp, BB = 1.0e4_wp, DT = 1.0e-4_wp
+    REAL(wp) :: l0(NE), ea_(NE), ei_(NE), rho(NE), w(NE), q(NDOF), eps, lt, x, res, zmax
+    INTEGER :: k, n, es, it
+    CHARACTER(512) :: em
+    eps = TENS/EA_SOFT; lt = (1.0_wp + eps)*LL
+    l0 = LL/REAL(NE, wp); ea_ = EA_SOFT; ei_ = EI; rho = RHOA; w = 0.0_wp
+    DO k = 1, NN
+      x = lt*REAL(k - 1, wp)/REAL(NE, wp)
+      q(6*k - 5:6*k) = [x, 0.0_wp, A0*SIN(PI*x/lt), (1.0_wp + eps), 0.0_wp, (1.0_wp + eps)*A0*PI/lt*COS(PI*x/lt)]
+    END DO
+    CALL CD_HermiteCable_Dyn_Init(model, l0, ea_, ei_, rho, w, q, [1, 2, 3, 6*NE + 1, 6*NE + 2, 6*NE + 3], &
+                                  -1.0e4_wp, 0.0_wp, 1.0_wp, es, em)
+    CALL require(es == CD_HCDYN_OK, 'B6 init: '//TRIM(em))
+    CALL CD_HermiteCable_Dyn_Set_Bending_Damping(model, [(BB, k=1, NE)], es, em)
+    CALL require(es == CD_HCDYN_OK, 'B6 set damping: '//TRIM(em))
+    zmax = 0.0_wp
+    DO n = 1, 200
+      CALL CD_HermiteCable_Dyn_Step(model, DT, 50, 1.0e-8_wp, es, em, it, res)
+      IF (es /= CD_HCDYN_OK) THEN
+        CALL require(.FALSE., 'B6 round-off floor: step failed: '//TRIM(em)); RETURN
+      END IF
+      zmax = MAX(zmax, ABS(model%q(6*(MID - 1) + 3)))
+    END DO
+    WRITE (*, '(A,ES11.4,A,ES11.4)') 'B6 round-off floor: 200 steps converged, last residual ', res, &
+      ', largest midspan deflection ', zmax
+    CALL require(zmax <= A0*(1.0_wp + 1.0e-6_wp), 'B6 round-off floor: the damped motion stays bounded')
+  END SUBROUTINE check_roundoff_floor
 
 END PROGRAM test_hermite_bending_damping_dynamic

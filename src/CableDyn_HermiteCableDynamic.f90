@@ -5746,7 +5746,7 @@ CONTAINS
       REAL(wp), POINTER :: Gout(:)
       INTEGER :: ii, nd
       INTEGER(INT64) :: ec0, ec1
-      REAL(wp) :: xref, xd, xc, ea_r, ka, kt, tw_round
+      REAL(wp) :: xref, xd, xc, ea_r, ka, kb, kt, tw_round
       REAL(wp), PARAMETER :: RESID_ROUNDOFF = 16.0_wp
       REAL(wp), PARAMETER :: STATE_DIVERGED = 1.0e12_wp
       ec0 = 0_INT64      ! defined even with profiling off (see the step-entry note)
@@ -5873,6 +5873,14 @@ CONTAINS
         ! held line damped near its first axial mode (BA = 2 zeta EA/omega_1, which at small dt
         ! puts the damping term well above EA) stagnated at a residual of a few times the
         ! tolerance and failed its step.
+        ! Bending takes the curvature from the same coordinate differences over l0^2, and its nodal
+        ! forces are the moment over l0, so an element's bending rounding is about eps*|r|/l0^3
+        ! times EI, plus Bb gamma/(beta dt) for the bending damping (the curvature rate from the
+        ! Newmark velocity). Where EA/l0 is small (a soft tensioner in series with the line, a
+        ! fine mesh) this term is the larger: without it a 20 m riser on a 20 kN/m tensioner
+        ! (EA_eff 4e5 N, 80 elements, Bb 500 N m^2 s, dt 1e-3 s) stagnated at 1.06 times the
+        ! tolerance and failed its step, and the step recovery's smaller steps only raised the
+        ! damping term further.
         xref = MAXVAL(model%l0)
         DO ii = 1, ndof
           IF (MOD(ii - 1, 6) < 3) xref = MAX(xref, ABS(qcur(ii)))
@@ -5884,6 +5892,9 @@ CONTAINS
             ka = ka + model%torsion%couple(ii)**2*model%torsion%gj(ii)
           IF (model%has_axial_damping) ka = ka + ABS(model%BA(ii))*gm/(bt*dt)
           ea_r = MAX(ea_r, ka/model%l0(ii))
+          kb = ABS(model%EI(ii))
+          IF (model%has_bend_damping) kb = kb + ABS(model%Bb(ii))*gm/(bt*dt)
+          ea_r = MAX(ea_r, kb/model%l0(ii)**3)
         END DO
         fscale = MAX(fscale, RESID_ROUNDOFF*EPSILON(CD_ONE)*ea_r*xref/tol)
         ! Nodal twist: the torque scale of the angle rows, frozen with fscale and formed like it

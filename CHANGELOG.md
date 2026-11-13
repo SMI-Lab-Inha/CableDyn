@@ -163,6 +163,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- A finite-EI dynamic step with bending damping (`EI|Bb`) could fail to converge on a soft line:
+  the Newton residual stagnated just above the tolerance (1.06 times it on a 20 m riser on a
+  20 kN/m tensioner, EA_eff 4e5 N, 80 elements, Bb 500 N m^2 s, dt 1e-3 s, in VIV), and the
+  step recovery's smaller steps only made it worse. The bending damping takes the curvature rate
+  from the Newmark velocity, so its forces round at about `Bb gamma/(beta dt) eps |r|/l0^3`,
+  which the tolerance's round-off floor (the axial forces' `(EA + BA gamma/(beta dt)) eps
+  |r|/l0`) did not cover. The floor now takes the bending forces, `(EI + Bb gamma/(beta dt))
+  eps |r|/l0^3`, as well; it binds only where that term is the larger.
 - Finite-EI node tension, curvature and bend moment next to the touchdown point: the floor
   reaction of the first grounded node was spread over its grounded half-element alone, wherever
   the touchdown point lay in the touchdown element. The local tension error there fell only at
