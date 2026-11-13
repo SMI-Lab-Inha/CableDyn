@@ -294,6 +294,29 @@ def test_viv_diameter_rows_are_written(tmp_path: Path) -> None:
         model.to_text(validate=False)
 
 
+def test_viv_damping_rows_are_written(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type(
+        "riser",
+        diam=0.1,
+        mass=10.0,
+        ea=5.0e7,
+        cl=0.8,
+        viv_amplitude=[(0.0, 0.8, 1.0), (1.0, 0.4, 2.0)],
+        viv_damping=(0.0, 0.0, 1.0),
+    )
+    deck = DeckFile.from_text(model.to_text(validate=False), path=tmp_path / "deck.dat")
+    rows = [row.tokens for row in deck._rows("VIV DAMPING")]
+    assert rows == [("riser", "0.0", "0.0", "1.0")]
+    model.line_types["riser"].viv_damping = (0.31,)
+    with pytest.raises(ValueError, match=r"viv_damping is \(a, b\) or \(a, b, c\)"):
+        model.to_text(validate=False)
+    model.line_types["riser"].viv_damping = (0.31, 0.89)
+    model.line_types["riser"].viv_amplitude = None
+    with pytest.raises(ValueError, match="takes its amplitude from viv_amplitude"):
+        model.to_text(validate=False)
+
+
 def test_build_spread_mooring_with_multi_section_lines() -> None:
     import math
 

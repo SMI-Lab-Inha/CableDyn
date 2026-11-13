@@ -23,6 +23,7 @@ MODULE CableDyn_Hydro
   PUBLIC :: CD_Split_Normal_Tangential
   PUBLIC :: CD_Morison_Drag_Per_Length
   PUBLIC :: CD_Morison_Drag_Per_Length_Jac
+  PUBLIC :: CD_Morison_Drag_Split_Per_Length_Jac
   PUBLIC :: CD_Morison_Added_Mass_Per_Length
   PUBLIC :: CD_Froude_Krylov_Per_Length
   PUBLIC :: CD_Solve_Dispersion_Wavenumber
@@ -1458,6 +1459,167 @@ CONTAINS
       END IF
     END IF
   END SUBROUTINE CD_Morison_Drag_Per_Length_Jac
+
+  SUBROUTINE CD_Morison_Drag_Split_Per_Length_Jac(rel_velocity, ambient, tangent, rho, diameter, cdn, cdy, cdt, &
+                                                  u_ref, force, jac_rel, jac_tan, ErrStat, ErrMsg, scalars_validated, &
+                                                  cdy_lin)
+    !! Drag per unit length [N/m] with the cross-flow part of Thorsen, Saevik and Larsen (J. Fluids
+    !! Struct. 61, 2016, Eq. 1): in the frame of the AMBIENT normal flow u_n = P u (P = I - t t^T),
+    !! e_x = u_n/|u_n| in line and e_y = t x e_x across, the relative normal velocity w = P rel splits
+    !! into w_x = w . e_x and w_y = w . e_y, and the normal drag
+    !!
+    !!   f_s = 1/2 rho D [cdn |w| w_x e_x + cdy |w_y| w_y e_y]
+    !!
+    !! keeps Morison's in-line part and replaces its cross-flow part by the quadratic cross-flow
+    !! damping cdy |w_y| w_y (w_y = -y', the node's cross-flow velocity reversed). Where the ambient
+    !! normal flow vanishes the axes are undefined, so the normal drag blends to Morison's,
+    !! f_n = beta f_s + (1 - beta) f_M, f_M = 1/2 rho D cdn |w| w, beta = U^2/(U^2 + u_ref^2) with
+    !! U = |u_n|; below U = 1e-9 u_ref (beta < 1e-18) the result is CD_Morison_Drag_Per_Length_Jac's
+    !! own, bit for bit. The tangential drag is CD_Morison_Drag_Per_Length_Jac's. ambient is the
+    !! undisturbed fluid velocity at the point (rel_velocity = ambient - structure velocity). Jacobians as in
+    !! CD_Morison_Drag_Per_Length_Jac: jac_rel = d force/d rel_velocity at fixed ambient, jac_tan =
+    !! d force/d tangent (the input vector, normalised inside), both exact; OPTIONAL as a pair, the
+    !! force identical with or without them. cdy >= 0 and u_ref > 0 are checked with the scalars.
+    !! cdy_lin (optional, >= 0, default 0) adds a Morison-form cross-flow term 1/2 rho D cdy_lin |w| w_y
+    !! e_y: with cdy = 0 and cdy_lin the unamplified Morison coefficient, a drag amplification passed
+    !! in cdn acts on the in-line drag alone while the cross-flow drag stays Morison's.
+    REAL(wp), INTENT(IN) :: rel_velocity(3), ambient(3), tangent(3), rho, diameter, cdn, cdy, cdt, u_ref
+    REAL(wp), INTENT(OUT) :: force(3)
+    REAL(wp), INTENT(OUT), OPTIONAL :: jac_rel(3, 3), jac_tan(3, 3)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: scalars_validated
+    REAL(wp), INTENT(IN), OPTIONAL :: cdy_lin
+    REAL(wp) :: tnorm, tu(3), pm(3, 3), w(3), wm, un(3), ua, ex(3), ey(3), wx, wy, fm(3), fs(3), beta, cn, cy, cl
+    REAL(wp) :: dfm(3, 3), dfs(3, 3), dt(3), dw(3), dun(3), dua, dex(3), dey(3), dwx, dwy, dwm, dfmv(3), dfsv(3)
+    REAL(wp) :: dbeta, ft(3), jrt(3, 3), jtt(3, 3)
+    INTEGER :: k
+    LOGICAL :: want_jac, check_scalars, split
+
+    want_jac = PRESENT(jac_rel)
+    force = CD_ZERO
+    IF (want_jac .NEQV. PRESENT(jac_tan)) THEN
+      CALL fail(ErrStat, ErrMsg, 'jac_rel and jac_tan must be supplied together (or neither)')
+      RETURN
+    END IF
+    IF (want_jac) THEN
+      jac_rel = CD_ZERO; jac_tan = CD_ZERO
+    END IF
+    ErrStat = CD_HYDRO_OK; ErrMsg = ''
+    check_scalars = .TRUE.
+    IF (PRESENT(scalars_validated)) check_scalars = .NOT. scalars_validated
+    IF (check_scalars) THEN
+      IF (.NOT. (CD_Is_Finite(cdy) .AND. cdy >= CD_ZERO .AND. CD_Is_Finite(u_ref) .AND. u_ref > CD_ZERO .AND. &
+                 CD_Is_Finite(cdn) .AND. cdn >= CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'the drag coefficients must be finite and non-negative and u_ref positive')
+        RETURN
+      END IF
+    END IF
+    IF (.NOT. CD_All_Finite(ambient)) THEN
+      CALL fail(ErrStat, ErrMsg, 'the ambient fluid velocity must be finite')
+      RETURN
+    END IF
+    ! tangential drag (and every other input check) from the Morison primitive with cdn = 0
+    IF (want_jac) THEN
+      CALL CD_Morison_Drag_Per_Length_Jac(rel_velocity, tangent, rho, diameter, CD_ZERO, cdt, ft, jrt, jtt, &
+                                          ErrStat, ErrMsg, scalars_validated)
+    ELSE
+      CALL CD_Morison_Drag_Per_Length_Jac(rel_velocity, tangent, rho, diameter, CD_ZERO, cdt, ft, ErrStat=ErrStat, &
+                                          ErrMsg=ErrMsg, scalars_validated=scalars_validated)
+    END IF
+    IF (ErrStat /= CD_HYDRO_OK) RETURN
+    tnorm = SQRT(DOT_PRODUCT(tangent, tangent))
+    tu = tangent/tnorm
+    pm = identity3() - outer3(tu, tu)
+    cn = 0.5_wp*rho*diameter*cdn
+    cy = 0.5_wp*rho*diameter*cdy
+    cl = CD_ZERO
+    IF (PRESENT(cdy_lin)) THEN
+      IF (.NOT. (CD_Is_Finite(cdy_lin) .AND. cdy_lin >= CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'the linear cross-flow drag coefficient must be finite and non-negative')
+        RETURN
+      END IF
+      cl = 0.5_wp*rho*diameter*cdy_lin
+    END IF
+    un = MATMUL(pm, ambient)
+    ua = SQRT(DOT_PRODUCT(un, un))
+    split = ua > 1.0e-9_wp*u_ref
+    IF (.NOT. split) THEN
+      ! no ambient normal flow: Morison's drag, from its own primitive (bit for bit)
+      IF (want_jac) THEN
+        CALL CD_Morison_Drag_Per_Length_Jac(rel_velocity, tangent, rho, diameter, cdn, cdt, force, jac_rel, jac_tan, &
+                                            ErrStat, ErrMsg, scalars_validated)
+      ELSE
+        CALL CD_Morison_Drag_Per_Length_Jac(rel_velocity, tangent, rho, diameter, cdn, cdt, force, ErrStat=ErrStat, &
+                                            ErrMsg=ErrMsg, scalars_validated=scalars_validated)
+      END IF
+      RETURN
+    END IF
+    w = MATMUL(pm, rel_velocity)
+    wm = SQRT(DOT_PRODUCT(w, w))
+    fm = cn*wm*w
+    beta = CD_ZERO
+    fs = fm
+    ex = CD_ZERO; ey = CD_ZERO; wx = CD_ZERO; wy = CD_ZERO
+    IF (split) THEN
+      ex = un/ua
+      ey = cross3(tu, ex)
+      wx = DOT_PRODUCT(w, ex)
+      wy = DOT_PRODUCT(w, ey)
+      fs = cn*wm*wx*ex + cy*ABS(wy)*wy*ey + cl*wm*wy*ey
+      beta = ua*ua/(ua*ua + u_ref*u_ref)
+    END IF
+    force = ft + beta*fs + (CD_ONE - beta)*fm
+    IF (want_jac) THEN
+      ! d/d rel at fixed ambient and tangent: d w/d rel = P
+      dfm = CD_ZERO
+      dfs = CD_ZERO
+      IF (wm > MIN_TANGENT_NORM) THEN
+        dfm = cn*(wm*identity3() + outer3(w, w)/wm)
+        IF (split) dfs = cn*outer3(ex, wx*w/wm + wm*ex) + cl*outer3(ey, wy*w/wm + wm*ey)
+      END IF
+      IF (split) dfs = dfs + cy*2.0_wp*ABS(wy)*outer3(ey, ey)
+      jac_rel = jrt + MATMUL(beta*dfs + (CD_ONE - beta)*dfm, pm)
+      ! d/d tangent: directional derivatives along dt = P e_k/|tangent| (the unit-tangent change of
+      ! the input vector's k-th component), through P (so w and u_n), e_x, e_y and beta
+      jac_tan = jtt
+      DO k = 1, 3
+        dt = pm(:, k)/tnorm
+        dw = -(dt*DOT_PRODUCT(tu, rel_velocity) + tu*DOT_PRODUCT(dt, rel_velocity))
+        dwm = CD_ZERO
+        IF (wm > MIN_TANGENT_NORM) dwm = DOT_PRODUCT(w, dw)/wm
+        dfmv = cn*(dwm*w + wm*dw)
+        dfsv = dfmv
+        dbeta = CD_ZERO
+        IF (split) THEN
+          dun = -(dt*DOT_PRODUCT(tu, ambient) + tu*DOT_PRODUCT(dt, ambient))
+          dua = DOT_PRODUCT(ex, dun)
+          dex = (dun - ex*dua)/ua
+          dey = cross3(dt, ex) + cross3(tu, dex)
+          dwx = DOT_PRODUCT(dw, ex) + DOT_PRODUCT(w, dex)
+          dwy = DOT_PRODUCT(dw, ey) + DOT_PRODUCT(w, dey)
+          dfsv = cn*(dwm*wx*ex + wm*dwx*ex + wm*wx*dex) + cy*(2.0_wp*ABS(wy)*dwy*ey + ABS(wy)*wy*dey) + &
+                 cl*(dwm*wy*ey + wm*dwy*ey + wm*wy*dey)
+          dbeta = 2.0_wp*ua*dua*u_ref*u_ref/(ua*ua + u_ref*u_ref)**2
+        END IF
+        jac_tan(:, k) = jac_tan(:, k) + dbeta*(fs - fm) + beta*dfsv + (CD_ONE - beta)*dfmv
+      END DO
+    END IF
+    IF (.NOT. CD_All_Finite(force)) THEN
+      force = CD_ZERO
+      IF (want_jac) THEN
+        jac_rel = CD_ZERO; jac_tan = CD_ZERO
+      END IF
+      CALL fail(ErrStat, ErrMsg, 'split drag result or Jacobian overflowed')
+      RETURN
+    END IF
+    IF (want_jac) THEN
+      IF (.NOT. CD_All_Finite(jac_rel) .OR. .NOT. CD_All_Finite(jac_tan)) THEN
+        force = CD_ZERO; jac_rel = CD_ZERO; jac_tan = CD_ZERO
+        CALL fail(ErrStat, ErrMsg, 'split drag result or Jacobian overflowed')
+      END IF
+    END IF
+  END SUBROUTINE CD_Morison_Drag_Split_Per_Length_Jac
 
   SUBROUTINE CD_Morison_Added_Mass_Per_Length(tangent, rho, diameter, can, cat, M_a, ErrStat, ErrMsg)
     !! Morison added-mass matrix per unit length [kg/m]:
@@ -3452,6 +3614,12 @@ CONTAINS
       END DO
     END DO
   END FUNCTION outer3
+
+  PURE FUNCTION cross3(a, b) RESULT(c)
+    REAL(wp), INTENT(IN) :: a(3), b(3)
+    REAL(wp) :: c(3)
+    c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
+  END FUNCTION cross3
 
   PURE REAL(wp) FUNCTION deterministic_phase(i) RESULT(phase)
     INTEGER, INTENT(IN) :: i
