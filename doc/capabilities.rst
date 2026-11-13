@@ -165,6 +165,13 @@ Line and constitutive capability
      - Standalone and coupled
      - a diameter of the VIV model apart from the hydrodynamic one, for buoyancy-module zones and
        other sections shedding at a larger outer diameter (:ref:`theory-viv-diameter`)
+   * - Cross-flow damping (``VIV DAMPING`` section ``a``, ``b``, ``c``)
+     - Standalone and coupled
+     - the drag split into its in-line and cross-flow parts about the ambient flow, the
+       cross-flow part ``C_dy = a + b y0/D`` of Thorsen et al. (2016) read at the amplitude
+       estimate plus a Morison-form term ``c``; ``0 0 1`` keeps Morison's drag and lets the
+       ``VIV AMPLITUDE`` drag factor act on the in-line part alone; finite-EI cables
+       (:ref:`theory-viv-cf-damping`)
 
 Loads and environment
 ---------------------

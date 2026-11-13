@@ -1336,6 +1336,19 @@ target_link_libraries(test_viv_amplitude_kernel PRIVATE cabledyn_core)
 add_test(NAME viv_amplitude_kernel COMMAND test_viv_amplitude_kernel)
 set_tests_properties(viv_amplitude_kernel PROPERTIES LABELS "fortran;unit;dynamic;viv")
 
+# The split cross-flow drag of Thorsen et al. (2016) per unit length: Morison at rest, the
+# quadratic cross-flow damping across the flow, Morison without ambient flow, exact Jacobians.
+add_executable(test_viv_cf_damping_kernel tests/test_viv_cf_damping_kernel.f90)
+target_link_libraries(test_viv_cf_damping_kernel PRIVATE cabledyn_core)
+add_test(NAME viv_cf_damping_kernel COMMAND test_viv_cf_damping_kernel)
+set_tests_properties(viv_cf_damping_kernel PROPERTIES LABELS "fortran;unit;dynamic;viv")
+# The split drag on a deck (VIV DAMPING section): Morison recombined, the in-line drag alone
+# amplified, Thorsen's quadratic cross-flow damping, the energy ledger and the refusals.
+add_executable(test_viv_cf_damping_deck tests/test_viv_cf_damping_deck.f90)
+target_link_libraries(test_viv_cf_damping_deck PRIVATE cabledyn_core)
+add_test(NAME viv_cf_damping_deck COMMAND test_viv_cf_damping_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(viv_cf_damping_deck PROPERTIES LABELS "fortran;integration;dynamic;viv;driver")
+
 # Amplitude-dependent VIV coefficients on a deck (VIV AMPLITUDE section), both line kinds: the
 # identity table, the amplitude channel against the response, self-limiting, drag amplification
 # and the refusals.

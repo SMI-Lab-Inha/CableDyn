@@ -345,6 +345,34 @@ _DIA_PARITY = [
 _AMP_PARITY += _DIA_PARITY
 
 
+def _damp_rows(*rows: str) -> tuple[str, str]:
+    """The edit that puts a VIV DAMPING section with ``rows`` before OPTIONS."""
+    block = "--------------------- VIV DAMPING -----\n" + "".join(f"{row}\n" for row in rows)
+    return _AMP_OPTIONS, block + _AMP_OPTIONS
+
+
+_DAMP_TABLE = _amp_table("riser 0.0 0.8 1.0", "riser 0.5 0.4 1.5")
+_DAMP_PARITY = [
+    ("damp-accepted", [_DAMP_TABLE, _damp_rows("riser 0.31 0.89")], True),
+    ("damp-inline-only", [_DAMP_TABLE, _damp_rows("riser 0 0 1")], True),
+    ("damp-no-table", [_damp_rows("riser 0.31 0.89")], False),
+    ("damp-negative", [_DAMP_TABLE, _damp_rows("riser 0.31 -0.89")], False),
+    ("damp-one-value", [_DAMP_TABLE, _damp_rows("riser 0.31")], False),
+    ("damp-repeated", [_DAMP_TABLE, _damp_rows("riser 0.31 0.89", "riser 0 0 1")], False),
+    (
+        "damp-ei0-line",
+        [
+            ("-0.8       1.0      1.2", "-0.8       0.0      1.2"),
+            _DAMP_TABLE,
+            _damp_rows("riser 0.31 0.89"),
+        ],
+        False,
+    ),
+]
+
+_AMP_PARITY += _DAMP_PARITY
+
+
 @pytest.mark.parametrize(
     ("label", "edits", "accepted"), _AMP_PARITY, ids=[item[0] for item in _AMP_PARITY]
 )

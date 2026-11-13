@@ -471,6 +471,9 @@ MODULE CableDyn_DeckDriver
     ! Dviv): 0 takes the type's Diam; has_vivd_row marks a type the section names.
     REAL(wp) :: viv_dv = CD_ZERO
     LOGICAL :: has_vivd_row = .FALSE.
+    ! The cross-flow hydrodynamic damping of Thorsen et al. (2016) (the optional VIV DAMPING section,
+    ! a row per type: TypeName a b [c]), C_dy = a + b y0/D; cdy_a < 0 without a row.
+    REAL(wp) :: cdy_a = -1.0_wp, cdy_b = CD_ZERO, cdy_c = CD_ZERO
     ! Deck file line of the row (0 when not read from a file), for error messages.
     INTEGER :: deck_line = 0
   END TYPE
@@ -1904,7 +1907,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: q_sequence(:)
     REAL(wp), ALLOCATABLE :: curv(:), cdn(:), cdt(:), can(:), cat(:), catenary_pos(:)
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:), viv_hh(:)
-    REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :), viv_dva(:)
+    REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :), viv_dva(:), cdy_a(:), cdy_b(:), cdy_c(:)
     INTEGER, ALLOCATABLE :: viv_ampn(:)
     REAL(wp), ALLOCATABLE :: wo_cl0(:), wo_st(:), wo_eps(:), wo_a(:)
     REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:), bb_el(:)
@@ -3311,9 +3314,14 @@ CONTAINS
     CALL viv_amp_type_index(ln, sections, types, viv_tix)
     ALLOCATE (viv_dva(SIZE(l0)))
     CALL finite_viv_diameters(ln, sections, types, viv_dva)
+    ALLOCATE (cdy_a(SIZE(l0)), cdy_b(SIZE(l0)), cdy_c(SIZE(l0)))
+    CALL finite_viv_cdy(ln, sections, types, cdy_a, cdy_b, cdy_c)
     IF (SIZE(l0_am) /= SIZE(l0)) THEN
       CALL remap_elem_by_reference_arc(viv_tix, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_dva, l0, l0_am)
+      CALL remap_elem_by_reference_arc(cdy_a, l0, l0_am)
+      CALL remap_elem_by_reference_arc(cdy_b, l0, l0_am)
+      CALL remap_elem_by_reference_arc(cdy_c, l0, l0_am)
       CALL remap_elem_by_reference_arc(wo_cl0, l0, l0_am)
       CALL remap_elem_by_reference_arc(wo_st, l0, l0_am)
       CALL remap_elem_by_reference_arc(wo_eps, l0, l0_am)
@@ -3659,14 +3667,16 @@ CONTAINS
                                                    REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
                                                    opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
                                              tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, il_alpha=viv_al, &
-                                             chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn, dviv=viv_dva)
+                                             chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn, dviv=viv_dva, &
+                                             cdy=RESHAPE([cdy_a, cdy_b, cdy_c], [3, SIZE(cdy_a)], ORDER=[2, 1]))
           ELSE
             CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
                                              MERGE(opts%viv_rms_window, &
                                                    REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
                                                    opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
                                              tangent_reversed=.NOT. ln%ends_swapped, amp=viv_amp3, amp_n=viv_ampn, &
-                                             dviv=viv_dva)
+                                             dviv=viv_dva, &
+                                             cdy=RESHAPE([cdy_a, cdy_b, cdy_c], [3, SIZE(cdy_a)], ORDER=[2, 1]))
           END IF
         END BLOCK
         IF (es /= CD_HCDYN_OK) THEN
@@ -10534,6 +10544,10 @@ CONTAINS
           CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(ln%id))//': the wake oscillator (WAKE '// &
                     'OSCILLATOR section) acts on finite-EI cables (EI > 0) only'); RETURN
         END IF
+        IF (types(line_section_type(sections, ln%id, i))%cdy_a >= CD_ZERO) THEN
+          CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(ln%id))//': the cross-flow damping (VIV '// &
+                    'DAMPING section) acts on finite-EI cables (EI > 0) only'); RETURN
+        END IF
         viv_cf(e) = types(line_section_type(sections, ln%id, i))%viv_cf
         viv_df(e) = types(line_section_type(sections, ln%id, i))%viv_df
         viv_clx(e) = types(line_section_type(sections, ln%id, i))%clx
@@ -11743,6 +11757,29 @@ CONTAINS
     END DO
     tix = tix(SIZE(tix):1:-1)
   END SUBROUTINE viv_amp_type_index
+
+  SUBROUTINE finite_viv_cdy(ln, sections, types, ca, cb, cc)
+    !! The VIV DAMPING (a, b, c) of every element's line type (a = -1 where the type has none), in the
+    !! element order of finite_hydro_arrays (the deck order reversed).
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    REAL(wp), INTENT(OUT) :: ca(:), cb(:), cc(:)
+    INTEGER :: i, j, e
+    e = 0
+    DO i = 1, SIZE(sections)
+      IF (sections(i)%line_id /= ln%id) CYCLE
+      DO j = 1, sections(i)%nsegs
+        e = e + 1
+        ca(e) = types(sections(i)%ltype)%cdy_a
+        cb(e) = types(sections(i)%ltype)%cdy_b
+        cc(e) = types(sections(i)%ltype)%cdy_c
+      END DO
+    END DO
+    ca = ca(SIZE(ca):1:-1)
+    cb = cb(SIZE(cb):1:-1)
+    cc = cc(SIZE(cc):1:-1)
+  END SUBROUTINE finite_viv_cdy
 
   SUBROUTINE finite_viv_diameters(ln, sections, types, dv)
     !! The VIV DIAMETER of every element's line type (0 where the type has none, the drag diameter
@@ -13920,6 +13957,9 @@ CONTAINS
     INTEGER, ALLOCATABLE :: vamp_lines(:)
     INTEGER :: n_vamp
     CHARACTER(DECK_RECLEN), ALLOCATABLE :: vdia_rows(:)
+    CHARACTER(DECK_RECLEN), ALLOCATABLE :: vdmp_rows(:)
+    INTEGER, ALLOCATABLE :: vdmp_lines(:)
+    INTEGER :: n_vdmp
     INTEGER, ALLOCATABLE :: vdia_lines(:)
     INTEGER :: n_vdia
     CHARACTER(2*NAMELEN), ALLOCATABLE :: channel_keys(:)
@@ -13939,7 +13979,8 @@ CONTAINS
                           SEC_SECTIONS = 5, SEC_OPTIONS = 6, SEC_OUTPUTS = 7, SEC_RODTYPES = 8, SEC_RODS = 9, &
                           SEC_EQUIV = 10, SEC_FAILURE = 11, SEC_CONTROL = 12, SEC_SYROPE_IC = 13, &
                           SEC_ENDCONN = 14, SEC_TURBINES = 15, SEC_EXTLOADS = 16, SEC_ATTACH = 17, &
-                          SEC_STIFF = 18, SEC_VIV = 19, SEC_WAKE = 20, SEC_VIVAMP = 21, SEC_VIVDIA = 22
+                          SEC_STIFF = 18, SEC_VIV = 19, SEC_WAKE = 20, SEC_VIVAMP = 21, SEC_VIVDIA = 22, &
+                          SEC_VIVDAMP = 23
 
     ErrStat = 0; ErrMsg = ''
     ext_march = .FALSE.
@@ -13967,6 +14008,8 @@ CONTAINS
     ALLOCATE (vamp_rows(0), vamp_lines(0))
     n_vamp = 0
     ALLOCATE (vdia_rows(0), vdia_lines(0))
+    ALLOCATE (vdmp_rows(0), vdmp_lines(0))
+    n_vdmp = 0
     n_vdia = 0
     n_wake = 0
     nt = 0; nb = 0; nrt = 0; nr = 0; np = 0; nlin = 0; nsec = 0; neq = 0; nch = 0; nfl = 0; nct = 0; nec = 0
@@ -14121,6 +14164,15 @@ CONTAINS
         END IF
         vamp_rows(n_vamp) = line(1:MIN(LEN(line), DECK_RECLEN))
         vamp_lines(n_vamp) = lineno
+      CASE (SEC_VIVDAMP)
+        IF (.NOT. has_numeric_token(line)) CYCLE
+        n_vdmp = n_vdmp + 1
+        IF (n_vdmp > SIZE(vdmp_rows)) THEN
+          vdmp_rows = [vdmp_rows, [(REPEAT(' ', DECK_RECLEN), i_ch=1, 8)]]
+          vdmp_lines = [vdmp_lines, [(0, i_ch=1, 8)]]
+        END IF
+        vdmp_rows(n_vdmp) = line(1:MIN(LEN(line), DECK_RECLEN))
+        vdmp_lines(n_vdmp) = lineno
       CASE (SEC_VIVDIA)
         IF (.NOT. has_numeric_token(line)) CYCLE
         n_vdia = n_vdia + 1
@@ -14252,6 +14304,13 @@ CONTAINS
       CALL apply_type_viv_diam(vdia_rows(i_ch), types, ErrStat, ErrMsg)
       IF (ErrStat /= 0) THEN
         CALL add_row_context('deck', vdia_lines(i_ch), vdia_rows(i_ch), ErrMsg)
+        RETURN
+      END IF
+    END DO
+    DO i_ch = 1, n_vdmp
+      CALL apply_type_viv_damp(vdmp_rows(i_ch), types, ErrStat, ErrMsg)
+      IF (ErrStat /= 0) THEN
+        CALL add_row_context('deck', vdmp_lines(i_ch), vdmp_rows(i_ch), ErrMsg)
         RETURN
       END IF
     END DO
@@ -15933,6 +15992,8 @@ CONTAINS
       section = 21
     CASE ('VIV DIAMETER', 'VIV DIAMETERS')
       section = 22
+    CASE ('VIV DAMPING')
+      section = 23
     CASE ('WAKE OSCILLATOR', 'WAKE OSCILLATORS', 'WAKE')
       section = 20
     CASE DEFAULT
@@ -17661,6 +17722,56 @@ CONTAINS
     types(it)%amp_cols = ntok
     types(it)%amp_tab(:, n + 1) = v
   END SUBROUTINE apply_type_viv_amp
+
+  SUBROUTINE apply_type_viv_damp(row, types, ErrStat, ErrMsg)
+    !! One VIV DAMPING row: TypeName a b [c] -- the cross-flow hydrodynamic damping of a line type,
+    !! C_dy = a + b y0/D (Thorsen et al. 2016, Eq. 1: a = 0.31 and b = 0.89, their fit to the
+    !! still-water decays of Vikestad et al. 2000), which replaces the cross-flow part of the type's
+    !! Morison drag while the in-line part stays. y0 is the amplitude estimate of the type's VIV
+    !! AMPLITUDE table, so the type needs one (and so the synchronisation lift, Cl > 0). c adds a
+    !! Morison-form cross-flow term c Cdn |w| w_y (default 0): (0, 0, 1) amplifies the in-line drag
+    !! alone. a, b, c >= 0, at most 1e15. A type takes one row.
+    CHARACTER(*), INTENT(IN) :: row
+    TYPE(DeckLineType), INTENT(INOUT) :: types(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(DECK_RECLEN) :: tok
+    INTEGER :: it, n, k
+    REAL(wp) :: v(3)
+    LOGICAL :: found, ok
+
+    ErrStat = 0; ErrMsg = ''
+    n = count_tokens(row)
+    IF (n < 3 .OR. n > 4) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV DAMPING rows must be: TypeName a b [c]'); RETURN
+    END IF
+    CALL get_token(row, 1, tok, found)
+    it = find_type(types, TRIM(tok))
+    IF (it == 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV DAMPING row names undefined LINE TYPE "'//TRIM(tok)//'"'); RETURN
+    END IF
+    IF (types(it)%cdy_a >= CD_ZERO) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV DAMPING names LINE TYPE "'//TRIM(types(it)%name)//'" twice'); RETURN
+    END IF
+    v = CD_ZERO
+    DO k = 2, n
+      CALL get_token(row, k, tok, found)
+      CALL parse_real_token(tok, v(k - 1), ok)
+      IF (.NOT. ok) THEN
+        CALL fail(ErrStat, ErrMsg, 'VIV DAMPING a, b and c must be plain numbers'); RETURN
+      END IF
+    END DO
+    IF (.NOT. (ALL(IEEE_IS_FINITE(v)) .AND. ALL(v >= CD_ZERO) .AND. ALL(v <= MAX_COEFFICIENT))) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV DAMPING needs a, b and c >= 0, at most 1e15'); RETURN
+    END IF
+    IF (.NOT. (types(it)%cl > CD_ZERO) .OR. types(it)%amp_n <= 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV DAMPING of LINE TYPE "'//TRIM(types(it)%name)//'" takes the amplitude '// &
+                'estimate of its VIV AMPLITUDE table: give the type Cl > 0 and a VIV AMPLITUDE table'); RETURN
+    END IF
+    types(it)%cdy_a = v(1)
+    types(it)%cdy_b = v(2)
+    types(it)%cdy_c = v(3)
+  END SUBROUTINE apply_type_viv_damp
 
   SUBROUTINE apply_type_viv_diam(row, types, ErrStat, ErrMsg)
     !! One VIV DIAMETER row: TypeName Dviv -- the diameter of a line type's VIV model, Dviv > 0 (at

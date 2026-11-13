@@ -86,6 +86,7 @@ _SECTION_ALIASES = {
     "VIV AMPLITUDES": "VIV AMPLITUDE",
     "VIV DIAMETER": "VIV DIAMETER",
     "VIV DIAMETERS": "VIV DIAMETER",
+    "VIV DAMPING": "VIV DAMPING",
 }
 # Table sections whose rows the native reader takes through a Fortran
 # list-directed READ. Their descriptive and units rows are recognized by the
@@ -118,6 +119,7 @@ _WHITESPACE_TABLE_SECTIONS = frozenset(
         "WAKE OSCILLATOR",
         "VIV AMPLITUDE",
         "VIV DIAMETER",
+        "VIV DAMPING",
     }
 )
 _TABLE_SECTIONS = _LIST_DIRECTED_SECTIONS | _WHITESPACE_TABLE_SECTIONS
@@ -3382,6 +3384,45 @@ class DeckFile:
                     "VIV: give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row"
                 )
 
+    def _check_viv_damp_section(self, amp_type_names: set[str]) -> set[str]:
+        """Native ``apply_type_viv_damp`` for the VIV DAMPING section; the types it names.
+
+        A row ``TypeName a b [c]`` gives a line type the cross-flow hydrodynamic damping
+        ``C_dy = a + b y0/D`` of Thorsen et al. (2016) in place of the cross-flow part of its
+        Morison drag, plus a Morison-form term ``c Cdn |w| w_y`` (default 0); ``a, b, c >= 0``,
+        each at most 1e15. ``y0`` is the amplitude estimate of the type's VIV AMPLITUDE table,
+        so the type needs one. A type takes one row.
+        """
+        types = {row.tokens[0].lower(): row.tokens[0] for row in self.line_types}
+        named: set[str] = set()
+        for row in self._rows("VIV DAMPING"):
+            where = self._at(row)
+            if len(row.tokens) not in (3, 4):
+                raise DeckFormatError(f"{where}: VIV DAMPING rows must be: TypeName a b [c]")
+            name = row.tokens[0].lower()
+            if name not in types:
+                raise DeckFormatError(
+                    f'{where}: VIV DAMPING row names undefined LINE TYPE "{row.tokens[0]}"'
+                )
+            if name in named:
+                raise DeckFormatError(f'{where}: VIV DAMPING names LINE TYPE "{types[name]}" twice')
+            try:
+                values = [_native_float(token) for token in row.tokens[1:]]
+            except ValueError as exc:
+                raise DeckFormatError(
+                    f"{where}: VIV DAMPING a, b and c must be plain numbers"
+                ) from exc
+            if not all(math.isfinite(v) and 0.0 <= v <= _NATIVE_MAX_COEFFICIENT for v in values):
+                raise DeckFormatError(f"{where}: VIV DAMPING needs a, b and c >= 0, at most 1e15")
+            if name not in amp_type_names:
+                raise DeckFormatError(
+                    f'{where}: VIV DAMPING of LINE TYPE "{types[name]}" takes the amplitude '
+                    "estimate of its VIV AMPLITUDE table: give the type Cl > 0 and a VIV "
+                    "AMPLITUDE table"
+                )
+            named.add(name)
+        return named
+
     def _check_viv_amp_section(self, lift_type_names: set[str]) -> set[str]:
         """Native ``apply_type_viv_amp`` for the VIV AMPLITUDE section; the types with a table.
 
@@ -4637,15 +4678,21 @@ class DeckFile:
         wake_type_names = self._check_wake_section(viv_type_names)
         amp_type_names = self._check_viv_amp_section(viv_type_names)
         self._check_viv_diam_section(viv_type_names | wake_type_names)
+        damp_type_names = self._check_viv_damp_section(amp_type_names)
         amp_lines = {
             line_id
             for line_id, section_types in section_types_by_line.items()
             if {line_type.lower() for line_type in section_types} & amp_type_names
         }
-        # native build_one_hermite_cable and the EI = 0 line wiring: the wake oscillator acts
-        # on finite-EI cables only, and a cable takes one VIV model
+        # native build_one_hermite_cable and the EI = 0 line wiring: the wake oscillator and the
+        # cross-flow damping act on finite-EI cables only, and a cable takes one VIV model
         for line_id, section_types in section_types_by_line.items():
             types_used = {line_type.lower() for line_type in section_types}
+            if types_used & damp_type_names and line_id not in finite_line_ids:
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id}: the cross-flow damping (VIV DAMPING "
+                    "section) acts on finite-EI cables (EI > 0) only"
+                )
             if not types_used & wake_type_names:
                 continue
             if line_id not in finite_line_ids:

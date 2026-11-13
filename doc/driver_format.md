@@ -133,8 +133,8 @@ except that `SYROPE IC` must come **after** `LINES`, because its rows name lines
 exist. A conventional layout is:
 
 LINE TYPES → BODIES → EXTERNAL LOADS → ROD TYPES → RODS → POINTS → TURBINES → LINES → SYROPE IC →
-SECTIONS → END CONNECTIONS / EQUIVALENT BUOYANCY / ATTACHMENTS / STIFFENERS / VIV / FAILURE /
-CONTROL → OPTIONS → OUTPUTS
+SECTIONS → END CONNECTIONS / EQUIVALENT BUOYANCY / ATTACHMENTS / STIFFENERS / VIV / WAKE OSCILLATOR /
+VIV AMPLITUDE / VIV DIAMETER / VIV DAMPING / FAILURE / CONTROL → OPTIONS → OUTPUTS
 
 Within LINE TYPES, the header row must precede the data rows because it selects their column
 order.
@@ -211,6 +211,10 @@ are collapsed. It must match one of the spellings below; any other name fails wi
 | ATTACHMENTS | `ATTACHMENTS`, `LINE ATTACHMENTS`, `CLUMPS` |
 | STIFFENERS | `STIFFENERS`, `STIFFENER`, `BEND STIFFENERS`, `BEND STIFFENER` |
 | VIV | `VIV`, `VORTEX-INDUCED VIBRATION`, `VORTEX INDUCED VIBRATION` |
+| WAKE OSCILLATOR | `WAKE OSCILLATOR`, `WAKE OSCILLATORS`, `WAKE` |
+| VIV AMPLITUDE | `VIV AMPLITUDE`, `VIV AMPLITUDES` |
+| VIV DIAMETER | `VIV DIAMETER`, `VIV DIAMETERS` |
+| VIV DAMPING | `VIV DAMPING` |
 | FAILURE | `FAILURE`, `FAILURES` |
 | CONTROL | `CONTROL`, `CONTROLS` |
 | TURBINES | `TURBINES`, `TURBINE` |
@@ -299,8 +303,9 @@ the half-range and centre of its band in non-dimensional frequency (MoorDyn's `d
 finite-EI cables (see [Cross-flow VIV](theory.rst)). The in-line force of a type is a
 [VIV](#viv-optional) section row; a [WAKE OSCILLATOR](#wake-oscillator-optional) row replaces the
 lift by a wake oscillator, a [VIV AMPLITUDE](#viv-amplitude-optional) table makes `Cl` (and
-`Cd`) depend on the cross-flow amplitude, and a [VIV DIAMETER](#viv-diameter-optional) row gives
-the VIV a diameter of its own.
+`Cd`) depend on the cross-flow amplitude, a [VIV DIAMETER](#viv-diameter-optional) row gives
+the VIV a diameter of its own, and a [VIV DAMPING](#viv-damping-optional-finite-ei-lines) row splits
+the drag into an in-line and a cross-flow part with its own law.
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:
@@ -1323,6 +1328,49 @@ Behaviour:
 - A row with `Dviv` equal to `Diam` runs as the type without it. It acts on `EI = 0` lines and
   finite-EI cables, standalone and coupled. A row fails if it is not `TypeName Dviv`, names an
   undefined or already named type or one without VIV, or holds a value out of range.
+
+### VIV DAMPING (optional, finite-EI lines)
+
+Splits the normal Morison drag of a line type into an in-line and a cross-flow part in the frame
+of the ambient flow, and gives the cross-flow part its own law: the quadratic damping of
+Thorsen et al. (2016) and, optionally, a Morison-form term (see
+[Cross-flow damping](theory.rst)).
+
+```text
+--------------------- VIV DAMPING --------------------------------------
+TypeName   a      b      c
+(-)        (-)    (-)    (-)
+riser      0      0      1
+```
+
+| Column | Meaning |
+|--------|---------|
+| `TypeName` | an existing LINE TYPES name (case-insensitive) with a [VIV AMPLITUDE](#viv-amplitude-optional) table, at most one row each |
+| `a`, `b` | the cross-flow damping coefficient `C_dy = a + b y0/D` >= 0, `y0/D` the type's amplitude estimate; Thorsen et al. (2016, Eq. 1) give `0.31 0.89` |
+| `c` | optional factor >= 0 of a Morison-form cross-flow term `c Cdn \|w\| w_y`, `Cdn` the type's own (unamplified) normal drag coefficient (default 0) |
+
+Behaviour:
+
+- At each point of the line, with `e_x` along the ambient flow normal to the line and `e_y`
+  across it, the relative normal velocity `w` splits into `w_x` and `w_y`. The normal drag per
+  unit length becomes `1/2 rho D [Cdn CdAmp |w| w_x e_x + (C_dy |w_y| + c Cdn |w|) w_y e_y]`:
+  Morison's in-line part, with the drag factor `CdAmp` of the type's amplitude table, and the
+  cross-flow law of the row. Where the ambient normal flow falls below 0.01 m/s the axes are
+  undefined and the drag blends smoothly back to Morison's.
+- **`0 0 1` amplifies the in-line drag alone.** With an amplitude table's `CdAmp` (for example
+  Chaplin et al. 2005, Eq. 4), the mean in-line drag of a vibrating cable rises while its
+  cross-flow drag stays Morison's. A `CdAmp` without this row multiplies the whole normal drag,
+  the cross-flow damping included.
+- **`0.31 0.89` is the published cross-flow-only model** of Thorsen et al. (2016), fitted to
+  still-water decay tests for `y0/D` up to about 0.6. It removes the linear part of Morison's
+  cross-flow damping (`1/2 rho D Cdn U y'`), so use it without in-line VIV: with a `VIV` section
+  row the in-line force turns with the relative flow and can drive a low-frequency cross-flow
+  motion that nothing damps.
+- `0 0 1` with `CdAmp` 1 is Morison's drag (to round-off). The split acts in the dynamics; the
+  static solve keeps Morison's drag, which is the same at rest. `DragPow` reports the split drag.
+- Finite-EI cables only, standalone and coupled; an `EI = 0` line with the row is refused by name.
+  A row fails if it is not `TypeName a b [c]`, names an undefined or already named type or one
+  without an amplitude table, or holds a value out of range.
 
 ### FAILURE (optional, EI = 0 decks)
 

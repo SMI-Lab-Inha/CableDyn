@@ -50,6 +50,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   response inside its falling range, and a table with `Cv = Cl` and `CdAmp = 1` is the line
   without it, bit for bit. The estimate is in the step-recovery, snapshot and checkpoint state;
   the Python deck reader and builder take the section.
+- Cross-flow damping: an optional `VIV DAMPING` section row `TypeName a b [c]` splits the drag
+  of a finite-EI line type about the ambient normal flow: Morison's drag in line, and across it
+  the hydrodynamic damping `C_dy = a + b y0/D` of Thorsen et al. (2016) (Eq. 1, `0.31 0.89`) at
+  the `VIV AMPLITUDE` estimate `y0`, plus a Morison-form term `c Cdn |w| w_y`, blended to
+  Morison's drag in still water, with exact Jacobians. `0 0 1` is Morison's drag
+  with the `CdAmp` drag factor on the in-line part alone (the cross-flow VIV motion is not
+  damped twice); the quadratic form of Thorsen et al. suits cross-flow-only VIV models. Needs a
+  `VIV AMPLITUDE` table; `EI = 0` lines refused; the Python deck reader and builder take the
+  section.
 - VIV diameter: an optional `VIV DIAMETER` section row `TypeName Dviv` gives the VIV model of a
   line type (shedding frequency, wake frequency and coupling, VIV forces, amplitude ratio) a
   diameter apart from the `Diam` its drag, added mass and buoyancy keep, for buoyancy-module zones

@@ -4991,6 +4991,58 @@ def test_viv_diameter_takes_a_wake_oscillator_type():
     DeckFile.from_text(_with_section(text, "VIV DIAMETER", "chain 0.9"))
 
 
+_DAMP_BASE = _with_section(
+    _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8")),
+    "VIV AMPLITUDE",
+    "chain 0.0 0.8",
+    "chain 1.0 0.4",
+)
+
+
+@pytest.mark.parametrize(
+    "rows, expected",
+    [
+        (("chain 0.31 0.89",), (0.31, 0.89)),
+        (("TypeName a b c", "chain 0 0 1"), (0.0, 0.0, 1.0)),
+    ],
+)
+def test_viv_damping_rows_are_read_and_kept(tmp_path, rows, expected):
+    from cabledyn import DeckModel
+
+    text = _with_section(_DAMP_BASE, "VIV DAMPING", *rows)
+    DeckFile.from_text(text)
+    path = tmp_path / "damp.dat"
+    path.write_text(text, encoding="utf-8")
+    assert DeckModel.load(path).line_types["chain"].viv_damping == expected
+    saved = tmp_path / "saved.dat"
+    DeckModel.load(path).save(saved)
+    assert DeckModel.load(saved).line_types["chain"].viv_damping == expected
+
+
+@pytest.mark.parametrize(
+    "base, rows, message",
+    [
+        (None, ("chain 0.31",), "rows must be: TypeName a b [c]"),
+        (None, ("chain 0.31 0.89 0.0 1.0",), "rows must be: TypeName a b [c]"),
+        (None, ("chain 0.31 x",), "a, b and c must be plain numbers"),
+        (None, ("cable 0.31 0.89",), 'undefined LINE TYPE "cable"'),
+        (None, ("chain 0.31 0.89", "chain 0 0 1"), 'names LINE TYPE "chain" twice'),
+        (None, ("chain -0.1 0.89",), "a, b and c >= 0, at most 1e15"),
+        (None, ("chain 0.31 0.89 -1",), "a, b and c >= 0, at most 1e15"),
+        ("no-table", ("chain 0.31 0.89",), "give the type Cl > 0 and a VIV AMPLITUDE table"),
+        ("ei0", ("chain 0.31 0.89",), "acts on finite-EI cables (EI > 0) only"),
+    ],
+)
+def test_viv_damping_rows_follow_the_native_checks(base, rows, message):
+    text = _DAMP_BASE
+    if base == "no-table":
+        text = _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8"))
+    elif base == "ei0":
+        text = _edit(text, ("1.674e9 -1.0 1.0e4 1.37", "1.674e9 -1.0 0.0 1.37"))
+    with pytest.raises(DeckFormatError, match=re.escape(message)):
+        DeckFile.from_text(_with_section(text, "VIV DAMPING", *rows))
+
+
 def test_viv_amplitude_channel_needs_a_table():
     text = _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8"))
     text = _edit(text, ("FairTen1\n", "FairTen1\nVIVAmp1N2\n"))

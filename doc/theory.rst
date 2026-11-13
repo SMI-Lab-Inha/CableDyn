@@ -1360,6 +1360,47 @@ alike; an uncoupled wake oscillator (:math:`A` = 0) drives the cable at 0.149 Hz
 :math:`\mathrm{St}\,U/D_v` = 0.15 Hz; and :math:`D_v` equal to ``Diam`` is the line without the row,
 bit for bit.
 
+.. _theory-viv-cf-damping:
+
+Cross-flow damping
+~~~~~~~~~~~~~~~~~~
+
+A ``VIV DAMPING`` row splits the normal Morison drag of a finite-EI line type in the frame of the
+ambient flow. With :math:`\mathbf t` the tangent, :math:`\mathbf u_n` the ambient flow normal to
+it, :math:`\mathbf e_x = \mathbf u_n/|\mathbf u_n|` and :math:`\mathbf e_y = \mathbf t\times\mathbf e_x`,
+the relative normal velocity :math:`\mathbf w` splits into :math:`w_x` and :math:`w_y`, and
+
+.. math::
+
+   \mathbf f_n = \tfrac12\rho D\left[C_{dn}A_d\,|\mathbf w|\,w_x\,\mathbf e_x
+   + \left(C_{dy}|w_y| + c\,C_{dn}|\mathbf w|\right)w_y\,\mathbf e_y\right],\qquad
+   C_{dy} = a + b\,\frac{y_0^*}{D},
+
+with :math:`A_d` the drag factor of the type's amplitude table and :math:`y_0^*` its amplitude
+estimate (:ref:`theory-viv-amplitude`). The quadratic term is the cross-flow hydrodynamic damping of
+:ref:`Thorsen et al. (2016) <ref-thorsen2016>` (their Eq. 1, :math:`a = 0.31`, :math:`b = 0.89`
+from the still-water decay tests of Vikestad et al. 2000, valid for :math:`y_0/D` up to about
+0.6). The :math:`c` term is Morison's own cross-flow drag. Where :math:`|\mathbf u_n|` falls below
+:math:`u_{ref} = 0.01` m/s the axes are undefined, and :math:`\mathbf f_n` blends to Morison's as
+:math:`\beta\,\mathbf f_s + (1-\beta)\,\mathbf f_M` with :math:`\beta = U^2/(U^2 + u_{ref}^2)`.
+The force and its Jacobians in the relative velocity and in the tangent are exact, and the
+tangential drag is unchanged.
+
+The row serves two uses:
+
+- With :math:`(0, 0, 1)` and the drag factor of :ref:`Chaplin et al. (2005) <ref-chaplin2005>`,
+  the amplification acts on the mean in-line drag alone, as measured, while the cross-flow drag
+  stays Morison's.
+- :math:`(0.31, 0.89, 0)` is Thorsen's cross-flow model. It drops the linear part
+  :math:`\tfrac12\rho D C_{dn}U\dot y` of Morison's cross-flow damping, so it is consistent with
+  cross-flow VIV alone. An in-line force that turns with the relative flow can then drive an
+  undamped low-frequency cross-flow motion.
+
+On the taut gate line, :math:`(0, 0, 1)` with factor 1 is the line without the row to round-off;
+with :math:`C_v = 0` and factor 2 the line settles at the static in-line offset of ``Cd`` 2.4 to the
+printed digits; Thorsen's form raises the steady cross-flow amplitude from :math:`A/D` 0.68 to 1.02;
+and the drag, damping and VIV powers balance within 0.2 %.
+
 .. _theory-dry-buoyancy:
 
 Buoyancy and wetting
