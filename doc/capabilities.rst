@@ -161,6 +161,10 @@ Line and constitutive capability
        factor, read at the amplitude estimate of Thorsen et al. (2016) (``VIVAmp`` channel), on
        ``EI = 0`` lines and finite-EI cables (:ref:`theory-viv-amplitude`), its state in the
        checkpoint
+   * - VIV diameter (``VIV DIAMETER`` section ``Dviv``)
+     - Standalone and coupled
+     - a diameter of the VIV model apart from the hydrodynamic one, for buoyancy-module zones and
+       other sections shedding at a larger outer diameter (:ref:`theory-viv-diameter`)
 
 Loads and environment
 ---------------------

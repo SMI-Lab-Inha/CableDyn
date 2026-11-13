@@ -298,8 +298,9 @@ the half-range and centre of its band in non-dimensional frequency (MoorDyn's `d
 `0 <= dF < cF`, and the line's drag in water. It acts in the dynamics on `EI = 0` lines and
 finite-EI cables (see [Cross-flow VIV](theory.rst)). The in-line force of a type is a
 [VIV](#viv-optional) section row; a [WAKE OSCILLATOR](#wake-oscillator-optional) row replaces the
-lift by a wake oscillator, and a [VIV AMPLITUDE](#viv-amplitude-optional) table makes `Cl` (and
-`Cd`) depend on the cross-flow amplitude.
+lift by a wake oscillator, a [VIV AMPLITUDE](#viv-amplitude-optional) table makes `Cl` (and
+`Cd`) depend on the cross-flow amplitude, and a [VIV DIAMETER](#viv-diameter-optional) row gives
+the VIV a diameter of its own.
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:
@@ -1288,6 +1289,40 @@ Behaviour:
   `TypeName AD Cv [CdAmp]`, names an undefined type or one without the synchronisation lift
   (`Cl = 0`, as a wake-oscillator type), holds a value out of range, does not increase in `AD`,
   or has other columns than the type's earlier rows; a type takes 2 to 32 rows.
+
+### VIV DIAMETER (optional)
+
+The diameter of the VIV model of a line type, apart from the hydrodynamic diameter `Diam` that
+its drag, added mass and buoyancy keep (see [VIV diameter](theory.rst)).
+
+```text
+--------------------- VIV DIAMETER -------------------------------------
+TypeName   Dviv
+(-)        (m)
+zone       0.9
+```
+
+| Column | Meaning |
+|--------|---------|
+| `TypeName` | an existing LINE TYPES name (case-insensitive) with VIV (`Cl > 0`, or a WAKE OSCILLATOR row), at most one row each |
+| `Dviv` | diameter > 0 of its VIV model [m], at most 1e15 |
+
+Behaviour:
+
+- The VIV of the type takes `Dviv` wherever it takes the diameter: the shedding frequency
+  `cF U/Dviv` and its band (or the wake frequency `2 pi St U/Dviv` and the coupling `A/Dviv`), the
+  lift, in-line and higher-harmonic forces `1/2 rho Dviv C U^2`, and the amplitude ratio of a
+  [VIV AMPLITUDE](#viv-amplitude-optional) table. The drag, added mass, buoyancy and seabed
+  contact keep `Diam`; so do the stiffener and attachment loads.
+- A buoyancy-module zone of a cable whose modules are ATTACHMENTS rows can be given its own VIV:
+  split the line into SECTIONS at the zone, give the zone a copy of the cable's line type with
+  `Dviv` the module diameter and its own `Cl`, `dF` and `cF` (or `Cl 0` for no VIV there), and
+  keep the modules' mass, volume and drag in ATTACHMENTS. CableDyn models no shedding
+  interaction between modules and bare cable; the coefficients of such a zone are the user's
+  choice.
+- A row with `Dviv` equal to `Diam` runs as the type without it. It acts on `EI = 0` lines and
+  finite-EI cables, standalone and coupled. A row fails if it is not `TypeName Dviv`, names an
+  undefined or already named type or one without VIV, or holds a value out of range.
 
 ### FAILURE (optional, EI = 0 decks)
 

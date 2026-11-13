@@ -4951,6 +4951,46 @@ def test_viv_amplitude_rows_follow_the_native_checks(lift, rows, message):
         DeckFile.from_text(_with_section(text, "VIV AMPLITUDE", *rows))
 
 
+def test_viv_diameter_rows_are_read_and_kept(tmp_path):
+    from cabledyn import DeckModel
+
+    text = _with_section(
+        _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8")),
+        "VIV DIAMETER",
+        "TypeName Dviv",
+        "chain 0.9",
+    )
+    DeckFile.from_text(text)
+    path = tmp_path / "dia.dat"
+    path.write_text(text, encoding="utf-8")
+    assert DeckModel.load(path).line_types["chain"].viv_diameter == 0.9
+    saved = tmp_path / "saved.dat"
+    DeckModel.load(path).save(saved)
+    assert DeckModel.load(saved).line_types["chain"].viv_diameter == 0.9
+
+
+@pytest.mark.parametrize(
+    "lift, rows, message",
+    [
+        (True, ("chain 0.9 1.0",), "rows must be: TypeName Dviv"),
+        (True, ("cable 0.9",), 'undefined LINE TYPE "cable"'),
+        (True, ("chain 0.9", "chain 0.8"), 'names LINE TYPE "chain" twice'),
+        (True, ("chain 0.0",), "Dviv > 0, at most 1e15"),
+        (True, ("chain -0.9",), "Dviv > 0, at most 1e15"),
+        (False, ("chain 0.9",), "give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row"),
+    ],
+)
+def test_viv_diameter_rows_follow_the_native_checks(lift, rows, message):
+    text = _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8")) if lift else _DYNAMIC
+    with pytest.raises(DeckFormatError, match=re.escape(message)):
+        DeckFile.from_text(_with_section(text, "VIV DIAMETER", *rows))
+
+
+def test_viv_diameter_takes_a_wake_oscillator_type():
+    text = _with_section(_DYNAMIC, "WAKE OSCILLATOR", "chain 0.3")
+    DeckFile.from_text(_with_section(text, "VIV DIAMETER", "chain 0.9"))
+
+
 def test_viv_amplitude_channel_needs_a_table():
     text = _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8"))
     text = _edit(text, ("FairTen1\n", "FairTen1\nVIVAmp1N2\n"))

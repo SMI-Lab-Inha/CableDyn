@@ -84,6 +84,8 @@ _SECTION_ALIASES = {
     "WAKE": "WAKE OSCILLATOR",
     "VIV AMPLITUDE": "VIV AMPLITUDE",
     "VIV AMPLITUDES": "VIV AMPLITUDE",
+    "VIV DIAMETER": "VIV DIAMETER",
+    "VIV DIAMETERS": "VIV DIAMETER",
 }
 # Table sections whose rows the native reader takes through a Fortran
 # list-directed READ. Their descriptive and units rows are recognized by the
@@ -115,6 +117,7 @@ _WHITESPACE_TABLE_SECTIONS = frozenset(
         "VIV",
         "WAKE OSCILLATOR",
         "VIV AMPLITUDE",
+        "VIV DIAMETER",
     }
 )
 _TABLE_SECTIONS = _LIST_DIRECTED_SECTIONS | _WHITESPACE_TABLE_SECTIONS
@@ -3344,6 +3347,41 @@ class DeckFile:
                 wake.add(name)
         return wake
 
+    def _check_viv_diam_section(self, viv_type_names: set[str]) -> None:
+        """Native ``apply_type_viv_diam`` for the VIV DIAMETER section.
+
+        A row ``TypeName Dviv`` sets the diameter of a line type's VIV model, ``Dviv > 0`` (at
+        most 1e15). The type needs VIV (LINE TYPES ``Cl > 0`` or a WAKE OSCILLATOR row with
+        ``CL0 > 0``); a type takes one row.
+        """
+        types = {row.tokens[0].lower(): row.tokens[0] for row in self.line_types}
+        named: set[str] = set()
+        for row in self._rows("VIV DIAMETER"):
+            where = self._at(row)
+            if len(row.tokens) != 2:
+                raise DeckFormatError(f"{where}: VIV DIAMETER rows must be: TypeName Dviv")
+            name = row.tokens[0].lower()
+            if name not in types:
+                raise DeckFormatError(
+                    f'{where}: VIV DIAMETER row names undefined LINE TYPE "{row.tokens[0]}"'
+                )
+            if name in named:
+                raise DeckFormatError(
+                    f'{where}: VIV DIAMETER names LINE TYPE "{types[name]}" twice'
+                )
+            named.add(name)
+            try:
+                value = _native_float(row.tokens[1])
+            except ValueError as exc:
+                raise DeckFormatError(f"{where}: VIV DIAMETER Dviv must be a plain number") from exc
+            if not (math.isfinite(value) and 0.0 < value <= _NATIVE_MAX_COEFFICIENT):
+                raise DeckFormatError(f"{where}: VIV DIAMETER needs Dviv > 0, at most 1e15")
+            if name not in viv_type_names:
+                raise DeckFormatError(
+                    f'{where}: VIV DIAMETER of LINE TYPE "{types[name]}" sets the diameter of its '
+                    "VIV: give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row"
+                )
+
     def _check_viv_amp_section(self, lift_type_names: set[str]) -> set[str]:
         """Native ``apply_type_viv_amp`` for the VIV AMPLITUDE section; the types with a table.
 
@@ -4598,6 +4636,7 @@ class DeckFile:
         self._check_viv_section(line_type_meta, viv_type_names)
         wake_type_names = self._check_wake_section(viv_type_names)
         amp_type_names = self._check_viv_amp_section(viv_type_names)
+        self._check_viv_diam_section(viv_type_names | wake_type_names)
         amp_lines = {
             line_id
             for line_id, section_types in section_types_by_line.items()

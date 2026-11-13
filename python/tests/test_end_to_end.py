@@ -314,6 +314,37 @@ _AMP_PARITY = [
 ]
 
 
+def _dia_rows(*rows: str) -> tuple[str, str]:
+    """The edit that puts a VIV DIAMETER section with ``rows`` before OPTIONS."""
+    block = "--------------------- VIV DIAMETER -----\n" + "".join(f"{row}\n" for row in rows)
+    return _AMP_OPTIONS, block + _AMP_OPTIONS
+
+
+_DIA_PARITY = [
+    ("dia-accepted", [_dia_rows("riser 0.3")], True),
+    ("dia-zero", [_dia_rows("riser 0.0")], False),
+    ("dia-repeated", [_dia_rows("riser 0.3", "riser 0.2")], False),
+    ("dia-three-columns", [_dia_rows("riser 0.3 1.0")], False),
+    (
+        "dia-wake-type",
+        [
+            _WAKE_LIFT,
+            _WAKE_SECTION,
+            ("riser      0.85   0.15", "riser 0.3"),
+            _dia_rows("riser 0.3"),
+        ],
+        True,
+    ),
+    (
+        "dia-no-viv",
+        [_WAKE_LIFT, ("riser      0.85   0.15", ""), _dia_rows("riser 0.3")],
+        False,
+    ),
+]
+
+_AMP_PARITY += _DIA_PARITY
+
+
 @pytest.mark.parametrize(
     ("label", "edits", "accepted"), _AMP_PARITY, ids=[item[0] for item in _AMP_PARITY]
 )
