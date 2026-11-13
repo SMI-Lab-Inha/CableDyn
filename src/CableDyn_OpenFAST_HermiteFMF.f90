@@ -2252,12 +2252,14 @@ CONTAINS
     !! Mirror slots of the VIV state, before the torsion block: the cross-flow shedding phase
     !! per node, the running mean squares of the cross-flow velocity and acceleration per node
     !! (interleaved) and the averaging time (3 nn + 1 values); with in-line VIV then the in-line
-    !! phase and mean squares (3 nn more); zero without VIV.
+    !! phase and mean squares (3 nn more); with the wake oscillator its state (q, dq/dt) per node
+    !! (2 nn more); zero without VIV.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
     n = 0
     IF (.NOT. self%initialized) RETURN
     IF (self%line%has_viv) n = 3*self%line%nn + 1
     IF (self%line%has_viv_il) n = n + 3*self%line%nn
+    IF (self%line%viv_wake) n = n + 2*self%line%nn
   END FUNCTION CD_HFMF_VIVMirrorSize
 
   INTEGER FUNCTION CD_HFMF_FrictionMirrorSize(self) RESULT(n)
@@ -2344,6 +2346,10 @@ CONTAINS
       buf(k + 1:k + self%line%nn) = self%line%vil_phi
       buf(k + self%line%nn + 1:k + 3*self%line%nn) = RESHAPE(self%line%vil_ms, [2*self%line%nn])
       k = k + 3*self%line%nn
+    END IF
+    IF (self%line%viv_wake) THEN
+      buf(k + 1:k + 2*self%line%nn) = RESHAPE(self%line%wo_s, [2*self%line%nn])
+      k = k + 2*self%line%nn
     END IF
     IF (self%line%torsion%active) THEN
       buf(k + 1) = self%line%torsion%theta
@@ -2520,6 +2526,12 @@ CONTAINS
       self%line%ws_recovery_vil_phi = self%line%vil_phi
       self%line%ws_recovery_vil_ms = self%line%vil_ms
       k = k + 3*self%line%nn
+    END IF
+    IF (self%line%viv_wake) THEN
+      self%line%wo_s = RESHAPE(buf(k + 1:k + 2*self%line%nn), [2, self%line%nn])
+      self%line%wo_q_eval = self%line%wo_s(1, :)
+      self%line%ws_recovery_wo_s = self%line%wo_s
+      k = k + 2*self%line%nn
     END IF
     IF (self%line%torsion%active) THEN
       self%line%torsion%theta = buf(k + 1)

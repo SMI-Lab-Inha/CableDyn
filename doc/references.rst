@@ -223,6 +223,18 @@ Verification and validation references
   the IEA Wind 15-Megawatt Offshore Reference Wind Turbine.* Technical Report
   NREL/TP-5000-76773, National Renewable Energy Laboratory. https://doi.org/10.2172/1660012
 
+.. _ref-facchinetti2004:
+
+- **Facchinetti, M. L., de Langre, E. & Biolley, F. (2004).** Coupling of structure and wake
+  oscillators in vortex-induced vibrations. *Journal of Fluids and Structures* **19**\ (2),
+  123–140. https://doi.org/10.1016/j.jfluidstructs.2003.12.004
+
+.. _ref-violette2010:
+
+- **Violette, R., de Langre, E. & Szydlowski, J. (2010).** A linear stability approach to
+  vortex-induced vibrations and waves. *Journal of Fluids and Structures* **26**\ (3), 442–466.
+  https://doi.org/10.1016/j.jfluidstructs.2010.01.002
+
 .. _ref-holcombe2025:
 
 - **Holcombe, A., Hann, M., Brown, S., et al. (2025).** Experimental–numerical model

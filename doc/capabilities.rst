@@ -150,6 +150,11 @@ Line and constitutive capability
        the optional higher-harmonic force of Ulveseter et al. (2019) (``Chh``), on
        ``EI = 0`` lines and finite-EI cables wherever the cross-flow lift runs
        (:ref:`theory-viv-inline`), its state in the checkpoint
+   * - Wake-oscillator VIV (``WAKE OSCILLATOR`` section ``CL0``, ``St``, ``eps``, ``A``)
+     - Standalone and coupled
+     - the van der Pol wake oscillator of Facchinetti et al. (2004) with acceleration coupling,
+       distributed along finite-EI cables in place of the synchronisation model
+       (:ref:`theory-viv-wake`), its state in the checkpoint
 
 Loads and environment
 ---------------------

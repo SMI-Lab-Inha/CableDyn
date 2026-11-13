@@ -257,6 +257,60 @@ _PARITY = [
 ]
 
 
+# The in-line VIV example with its type's lift Cl 0.8 and its VIV section turned into a WAKE
+# OSCILLATOR section (its row riser 0.85 0.15 then reads CL0 0.85, St 0.15).
+_WAKE_LIFT = ("1.0   0.0   0.8   0.08   0.18", "1.0   0.0   0.0   0.08   0.18")
+_WAKE_SECTION = (
+    "--------------------- VIV -----",
+    "--------------------- WAKE OSCILLATOR -----",
+)
+_WAKE_PARITY = [
+    ("wake-accepted", [_WAKE_LIFT, _WAKE_SECTION], True),
+    ("wake-keeps-lift", [_WAKE_SECTION], False),
+    (
+        "wake-st-zero",
+        [_WAKE_LIFT, _WAKE_SECTION, ("riser      0.85   0.15", "riser 0.85 0.0")],
+        False,
+    ),
+    (
+        "wake-row-too-long",
+        [_WAKE_LIFT, _WAKE_SECTION, ("riser      0.85   0.15", "riser 0.3 0.2 0.3 12 1")],
+        False,
+    ),
+    (
+        "wake-ei0-line",
+        [_WAKE_LIFT, _WAKE_SECTION, ("-0.8       1.0      1.2", "-0.8       0.0      1.2")],
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "edits", "accepted"), _WAKE_PARITY, ids=[item[0] for item in _WAKE_PARITY]
+)
+def test_wake_oscillator_validator_agrees_with_the_native_reader(
+    driver, tmp_path, label, edits, accepted
+):
+    text = (EXAMPLES / "viv_taut_cable_inline.dat").read_text(encoding="utf-8")
+    for old, new in edits:
+        assert old in text, old
+        text = text.replace(old, new, 1)
+    deck = tmp_path / f"{label}.dat"
+    deck.write_text(text.replace("90.0      TMax", "2.0       TMax"), encoding="utf-8")
+    try:
+        DeckFile.read(deck)
+        python_accepts = True
+    except DeckFormatError:
+        python_accepts = False
+    try:
+        driver.run(deck, label, timeout=300)
+        native_accepts = True
+    except DriverExecutionError as exc:
+        assert exc.returncode == 1, exc.stderr  # a deck error, not a solve failure
+        native_accepts = False
+    assert python_accepts == native_accepts == accepted
+
+
 @pytest.mark.parametrize(
     ("label", "example", "old", "new", "accepted"), _PARITY, ids=[item[0] for item in _PARITY]
 )

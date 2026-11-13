@@ -1232,6 +1232,66 @@ at the phase sum, and its derivatives enter the tangent with the lift's. Ulveset
 in-line example with ``Chh`` 1.0 the quarter-span in-line response at four times the cross-flow
 frequency grows from A/D 0.002 to 0.007, the same on an ``EI = 0`` line.
 
+.. _theory-viv-wake:
+
+Wake oscillator
+~~~~~~~~~~~~~~~
+
+A ``WAKE OSCILLATOR`` row ``TypeName CL0 [St [eps [A]]]`` replaces the synchronisation model of a
+line type by the wake oscillator of :ref:`Facchinetti et al. (2004) <ref-facchinetti2004>`,
+distributed along the line as in :ref:`Violette et al. (2010) <ref-violette2010>`. At each node a
+van der Pol oscillator in the reduced lift coefficient :math:`q = 2C_L/C_{L0}` stands for the
+near wake, forced by the node's cross-flow acceleration :math:`\ddot y` (the acceleration
+coupling Facchinetti et al. found to reproduce lock-in, the Griffin plot and the effective added
+mass):
+
+.. math::
+
+   \ddot q + \varepsilon\,\omega_f\,(q^2 - 1)\,\dot q + \omega_f^2\,q = \frac{A}{D}\,\ddot y,
+   \qquad \omega_f = 2\pi\,\mathrm{St}\,\frac{U_a}{D},
+
+with :math:`U_a` the speed of the ambient flow (current and host field) normal to the line, the
+free stream of the paper, so that the cable's own cross-flow velocity does not modulate the wake
+frequency, and :math:`\ddot y` along the cross-flow axis :math:`\mathbf t\times\mathbf v_n/U` of
+the synchronisation model. The lift per unit length acts across the relative normal flow
+:math:`\mathbf v_n` of speed :math:`U`, as the synchronisation lift does:
+
+.. math::
+
+   \mathbf f = \tfrac{1}{4}\rho\,D\,C_{L0}\,q\;U\,(\mathbf t\times\mathbf v_n) ,
+
+the synchronisation lift with :math:`C_L\cos\phi` replaced by :math:`C_{L0}q/2`: a free wake
+settles on the limit cycle :math:`q = 2\cos\omega_f t`, the lift :math:`C_{L0}` of a fixed
+cylinder. The defaults St 0.2, :math:`\varepsilon` 0.3 and :math:`A` 12 are theirs, fixed from
+forced-wake data with :math:`C_{L0}` 0.3, which the row gives. Their
+fluid-added damping :math:`\gamma\,\omega_f\,\rho D^2\dot y` with
+:math:`\gamma = C_D/(4\pi\mathrm{St})` is the linearised Morison drag, which CableDyn applies
+in full, and their inviscid added mass is the Morison :math:`C_a`; the wake adds the lift only.
+
+The wake state :math:`(q, \dot q)` of a node is integrated beside the cable, as the phase of the
+synchronisation model is. At the start of a step it is advanced under the step-start
+acceleration to give the :math:`q` the step's lift takes; at the converged end it is advanced
+again from the committed state with the acceleration linear between the step's ends, at the
+step-start :math:`\omega_f`, and committed. Both use classical Runge-Kutta in equal sub-steps of
+:math:`r\,\delta t \le 0.1`, :math:`r = \omega_f\max(1, \varepsilon q^2)` the faster of the
+oscillation and the van der Pol damping rate at the start of the interval, so a large
+:math:`\varepsilon` stays resolved; should the rate exceed :math:`0.2/\delta t` on the way, or the
+result not be finite, the interval is redone with twice the sub-steps. The lift is integrated on a finite-EI cable at the Gauss
+points of the synchronisation lift, :math:`q` interpolated between the element's end nodes, with
+its exact position and velocity derivatives in the tangent at fixed :math:`q`. :math:`q` starts on
+its limit cycle at the node's phase seed, :math:`q = 2\cos\phi_0`, :math:`\dot q = 0`, and the
+state is part of the step-recovery, snapshot and checkpoint state.
+
+The kernel reproduces the limit cycle (amplitude 2.001, the van der Pol period shift of
+:math:`\varepsilon^2/16`), and forced at its own frequency by a cylinder moving as
+:math:`y_0 D\cos\omega_f t` it follows the lift magnification of their Eq. 17 within 0.2 % at
+:math:`y_0 = 0.05` and 1.9 % at :math:`y_0 = 0.5`, the gap growing with the third harmonic their
+one-harmonic balance leaves out. On the taut cable of ``viv_taut_cable_inline.dat`` with
+``Cl`` 0 and ``CL0`` 0.3 the cable locks in at 0.282 Hz, below the wake's own 0.30 Hz, at a
+steady mid-span A/D of 0.58; with :math:`A` = 0 the uncoupled wake drives it at 0.298 Hz at A/D
+0.10, and over the lock-in the drag and damping take out the wake lift's power within 0.3 %. The
+wake oscillator acts on finite-EI cables, cross-flow only.
+
 .. _theory-dry-buoyancy:
 
 Buoyancy and wetting
