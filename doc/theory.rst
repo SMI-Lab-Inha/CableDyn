@@ -2671,10 +2671,12 @@ residual decreases; its convergence norm divides each translational residual by 
 frozen at the predictor and each tangent-DOF residual additionally by the nodal tributary
 length. The force scale is the largest inertial or residual entry, bounded below by 1 N, by the
 peak element weight, and by the round-off floor
-:math:`16\,\epsilon\,\max\big((EA + BA\,\gamma/(\beta\,\Delta t))/L_0\big)\,x_\text{ref}/\text{tol}`
-of the axial forces (:math:`x_\text{ref}` the largest coordinate magnitude or element length;
-the axial damping takes the strain rate from the Newmark velocity, whose rounding is
-:math:`\gamma/(\beta\,\Delta t)` times that of the coordinates). The
+:math:`16\,\epsilon\,\max\big((EA + BA\,\gamma/(\beta\,\Delta t))/L_0,\ (EI + B_b\,\gamma/(\beta\,\Delta t))/L_0^3\big)\,x_\text{ref}/\text{tol}`
+of the axial and bending forces (:math:`x_\text{ref}` the largest coordinate magnitude or element
+length; the axial and bending damping take the strain and curvature rates from the Newmark
+velocity, whose rounding is :math:`\gamma/(\beta\,\Delta t)` times that of the coordinates). The
+bending term is the larger on a soft line (a tensioner in series, a fine mesh) with bending
+damping at a small time step. The
 deck defaults are relative tolerance :math:`10^{-8}`, absolute tolerance :math:`10^{-14}`, 30
 iterations, and 12 backtracks (option ``dynamic_solver``). Option ``modified_newton`` reuses the
 factorised tangent within a step while each iterate reduces the residual to at most a quarter
