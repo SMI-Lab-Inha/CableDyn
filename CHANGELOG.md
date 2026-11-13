@@ -41,6 +41,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the cable in at its first mode (A/D 0.58 against 0.10 uncoupled) and the drag and damping take
   out the wake lift's power within 0.3 %. Its state is in the step-recovery, snapshot and
   checkpoint state; the Python deck reader and builder take the section.
+- Amplitude-dependent VIV coefficients: an optional `VIV AMPLITUDE` section, rows
+  `TypeName AD Cv [CdAmp]`, gives a line type a table over the cross-flow amplitude ratio of the
+  coefficient `Cv` that replaces its `Cl` and a factor `CdAmp` of its normal drag coefficient, read
+  at the amplitude estimate of Thorsen et al. (2016, Eq. 8 and 9) of each node, on `EI = 0` lines
+  and finite-EI cables, standalone and coupled. `VIVAmp<L>N<J>` writes the estimate. On the taut
+  example line it follows the steady response amplitude within 0.03 %, a falling `Cv` limits the
+  response inside its falling range, and a table with `Cv = Cl` and `CdAmp = 1` is the line
+  without it, bit for bit. The estimate is in the step-recovery, snapshot and checkpoint state;
+  the Python deck reader and builder take the section.
 - Load power channels `VIVPow<L>`, `DragPow<L>` and `DampPow<L>` [W], and `<name><L>N<J>` per
   unit length about a node [W/m]: the power the VIV loads, the drag and the structural damping
   (`BA`, `Bb`) deliver to a line at the committed state, on `EI = 0` lines and finite-EI cables,

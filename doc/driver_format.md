@@ -298,7 +298,8 @@ the half-range and centre of its band in non-dimensional frequency (MoorDyn's `d
 `0 <= dF < cF`, and the line's drag in water. It acts in the dynamics on `EI = 0` lines and
 finite-EI cables (see [Cross-flow VIV](theory.rst)). The in-line force of a type is a
 [VIV](#viv-optional) section row; a [WAKE OSCILLATOR](#wake-oscillator-optional) row replaces the
-lift by a wake oscillator.
+lift by a wake oscillator, and a [VIV AMPLITUDE](#viv-amplitude-optional) table makes `Cl` (and
+`Cd`) depend on the cross-flow amplitude.
 
 **Viscoelastic axial stiffness (MoorDyn `ElasticMod`).** The EA and BA columns accept
 bar-separated parts:
@@ -1239,6 +1240,55 @@ Behaviour:
   type, or holds a value out of range; `CL0 > 0` fails on a type with `Cl > 0`. A line whose types
   mix the two models fails, and so does an `EI = 0` line with the wake oscillator.
 
+### VIV AMPLITUDE (optional)
+
+Amplitude-dependent coefficients of the synchronisation model of a line type (Thorsen et al.
+2016): a table over the cross-flow amplitude ratio A/D of the coefficient `Cv` that replaces the
+type's LINE TYPES `Cl`, and of a factor `CdAmp` of its normal drag coefficient `Cd` (see
+[Amplitude-dependent coefficients](theory.rst)). The rows of one type follow each other in
+increasing A/D.
+
+```text
+--------------------- VIV AMPLITUDE ------------------------------------
+TypeName   AD     Cv     CdAmp
+(-)        (-)    (-)    (-)
+riser      0.0    0.8    1.0
+riser      0.3    0.9    1.5
+riser      0.6    0.0    2.0
+```
+
+| Column | Meaning |
+|--------|---------|
+| `TypeName` | an existing LINE TYPES name (case-insensitive) whose `Cl > 0` |
+| `AD` | amplitude ratio A/D >= 0 of the row, strictly increasing over the type's rows |
+| `Cv` | cross-flow coefficient >= 0 at that amplitude, in place of `Cl` |
+| `CdAmp` | optional factor > 0 of the type's normal drag coefficient at that amplitude (default 1) |
+
+Behaviour:
+
+- Each node estimates its cross-flow amplitude as Thorsen et al. do (their Eq. 8 and 9): half the
+  travel of the node across the ambient flow between two zero crossings of its cross-flow
+  velocity, smoothed by a tenth of the difference at every time step. An element takes the mean of
+  its free nodes over its diameter as A/D (the one free node next to a fixed end or anchor), and
+  from its table `Cv` (for the lift) and `CdAmp`
+  (times `Cd`, for the normal Morison drag), linear between rows and held beyond the first and
+  last. The coefficients of a step use the estimate of the committed state. The estimate starts
+  at 0, and the static equilibrium takes the type's own `Cd`, so a table whose `CdAmp` at A/D 0
+  is not 1 starts the run off that equilibrium.
+- `VIVAmp<L>N<J>` (OUTPUTS) is the smoothed amplitude of node J [m].
+- A table whose `Cv` falls to zero above some A/D limits the response there (Thorsen et al. fit
+  such a curve to riser tests, their Fig. 7). `CdAmp` gives the drag amplification of a vibrating
+  cylinder, for example Chaplin et al. (2005, Eq. 4), `Cd/Cd0 = 1 + 2.3 s + 1.7 s^2` with the
+  r.m.s. cross-flow displacement `s = (A/D)/sqrt(2)` of a harmonic response.
+- The estimate assumes a narrow-band response, as theirs does. With the in-line VIV of a `VIV`
+  section row, `ClX` and `Chh` stay constant. The estimate is part of the step-recovery, snapshot
+  and checkpoint state. A table with `Cv = Cl` and `CdAmp = 1` throughout runs as the type
+  without it.
+- It acts on `EI = 0` lines and finite-EI cables, standalone and coupled. A row fails if it is not
+  `TypeName AD Cv [CdAmp]`, names an undefined type or one without the synchronisation lift
+  (`Cl = 0`, as a wake-oscillator type), holds a value out of range, does not increase in `AD`,
+  or has other columns than the type's earlier rows; a type takes 2 to 32 rows.
+
 ### FAILURE (optional, EI = 0 decks)
 
 A FAILURE row detaches line ends from a point during a dynamic run, with MoorDyn's trigger rules.
@@ -1713,6 +1763,7 @@ bending moment. None of these channels is mandatory.
 | `DragPow<L>` | line L power of the Morison drag (and, on a finite-EI line, its ATTACHMENTS' drag) | W |
 | `DampPow<L>` | line L power of the structural damping (`BA`, and `EI|Bb` on a finite-EI line); never positive | W |
 | `VIVPow<L>N<J>`, `DragPow<L>N<J>`, `DampPow<L>N<J>` | the same per unit unstretched length about node J (node J's share: half of each of its elements' power and its own node loads', over half their unstretched length) | W/m |
+| `VIVAmp<L>N<J>` | line L smoothed cross-flow amplitude estimate at node J (Thorsen et al. 2016, Eq. 9), which a [VIV AMPLITUDE](#viv-amplitude-optional) table reads; only on a line with such a table; 0 at a node without VIV | m |
 
 - `<L>`/`<P>` are deck LINE/POINT **ids**, not array positions. A channel that matches no
   supported form, names an unknown id, or carries trailing text (for example `Point2px_raw`) is a

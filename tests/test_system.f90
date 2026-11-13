@@ -9,7 +9,8 @@ PROGRAM test_system
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig
   USE CableDyn_Model, ONLY: CD_ModelType, CD_Init_Model, CD_End_Model, CD_MODEL_OK, &
-                            CD_Get_Model_EndNodeMassDiag
+                            CD_Get_Model_EndNodeMassDiag, CD_Set_Model_VIV, CD_Model_VIV_NMS
+  USE CableDyn_VIV, ONLY: CD_VIV_AMP_MAXP
   USE CableDyn_System, ONLY: CD_SystemType, CD_SystemPointType, CD_LineEndpointBinding, &
                              CD_Init_System_From_Models, CD_Init_System_From_Points, CD_End_System, &
                              CD_System_NLines, CD_System_NCoupledDOF, CD_System_Line_NDOF, &
@@ -47,6 +48,7 @@ PROGRAM test_system
   CALL case_dynamic_free_point_zero_density_no_hydro()
   CALL case_zero_coupled_map()
   CALL case_system_fail_closed()
+  CALL case_viv_layout_snapshot()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -1112,6 +1114,77 @@ CONTAINS
     CALL CD_End_System(system, es, em)
     CALL require(es == CD_SYSTEM_OK, 'fail:end')
   END SUBROUTINE case_system_fail_closed
+
+  SUBROUTINE case_viv_layout_snapshot()
+    !! The packed VIV state of a line grows with amplitude tables (CD_Model_VIV_NMS rows per
+    !! node): a snapshot taken after a line gains them follows the new size, and a restore of a
+    !! snapshot taken before is refused, with nothing restored.
+    INTEGER, PARAMETER :: NN = 5, NE = 4
+    TYPE(CD_ModelType) :: models(1)
+    TYPE(CD_SystemType) :: system
+    TYPE(GenAlphaConfig) :: cfg
+    INTEGER :: conn(2, NE), fixed(6), es, k, amp_n(NE)
+    REAL(wp) :: q0(3*NN), v0(3*NN), f_ext(3*NN), fluid(3, NN), wl(NN), q_moved(3*NN)
+    REAL(wp) :: l0(NE), ea(NE), rho_a(NE), cl(NE), dia(NE), cf(NE), df(NE), amp(3, CD_VIV_AMP_MAXP, NE)
+    CHARACTER(240) :: em
+
+    DO k = 1, NE
+      conn(:, k) = [k, k + 1]
+    END DO
+    q0 = 0.0_wp
+    DO k = 1, NN
+      q0(3*k - 2) = REAL(k - 1, wp)
+      q0(3*k) = -5.0_wp
+    END DO
+    v0 = 0.0_wp
+    f_ext = 0.0_wp
+    fixed = [1, 2, 3, 3*NN - 2, 3*NN - 1, 3*NN]
+    l0 = 0.99_wp
+    ea = 1.0e6_wp
+    rho_a = 10.0_wp
+    fluid = 0.0_wp
+    fluid(2, :) = 0.5_wp
+    wl = 0.0_wp
+    cl = 0.8_wp
+    dia = 0.1_wp
+    cf = 0.18_wp
+    df = 0.08_wp
+    amp = 0.0_wp
+    amp_n = 2
+    DO k = 1, NE
+      amp(:, 1, k) = [0.0_wp, 0.8_wp, 1.0_wp]
+      amp(:, 2, k) = [0.5_wp, 0.4_wp, 1.5_wp]
+    END DO
+    CALL CD_Init_Model(models(1), q0, v0, conn, l0, ea, rho_a, .TRUE., f_ext, fixed, cfg, es, em, &
+                       fluid_velocity=fluid, drag_waterline_z=wl, drag_rho=1025.0_wp, &
+                       drag_diameter=0.1_wp, drag_cdn=1.2_wp, drag_cdt=0.0_wp)
+    CALL require(es == CD_MODEL_OK, 'viv-layout:init-line: '//TRIM(em))
+    CALL CD_Set_Model_VIV(models(1), 1025.0_wp, cl, dia, cf, df, 0.25_wp, es, em)
+    CALL require(es == CD_MODEL_OK, 'viv-layout:viv: '//TRIM(em))
+    CALL CD_Init_System_From_Models(system, models, es, em)
+    CALL require(es == CD_SYSTEM_OK, 'viv-layout:init-system: '//TRIM(em))
+    CALL CD_End_Model(models(1), es, em)
+    IF (.NOT. CD_System_Is_Initialized(system)) RETURN
+
+    CALL CD_System_Snapshot(system, es, em)
+    CALL require(es == CD_SYSTEM_OK, 'viv-layout:snapshot-without-tables: '//TRIM(em))
+    CALL CD_Set_Model_VIV(system%lines(1), 1025.0_wp, cl, dia, cf, df, 0.25_wp, es, em, amp=amp, amp_n=amp_n)
+    CALL require(es == CD_MODEL_OK .AND. CD_Model_VIV_NMS(system%lines(1)) == 6, 'viv-layout:tables: '//TRIM(em))
+    q_moved = system%lines(1)%q
+    q_moved(8) = q_moved(8) + 0.01_wp
+    system%lines(1)%q = q_moved
+    CALL CD_System_Restore(system, es, em)
+    CALL require(es == CD_SYSTEM_BADINPUT .AND. INDEX(em, 'VIV configuration') > 0, &
+                 'viv-layout:restore-across-layouts-refused: '//TRIM(em))
+    CALL require(ALL(system%lines(1)%q == q_moved), 'viv-layout:nothing-restored')
+    CALL CD_System_Snapshot(system, es, em)
+    CALL require(es == CD_SYSTEM_OK .AND. SIZE(system%snap_viv) == 7*NN, 'viv-layout:snapshot-resized: '//TRIM(em))
+    system%lines(1)%viv_ms(5, 3) = 0.25_wp
+    CALL CD_System_Restore(system, es, em)
+    CALL require(es == CD_SYSTEM_OK .AND. system%lines(1)%viv_ms(5, 3) == 0.0_wp, &
+                 'viv-layout:restore-with-tables: '//TRIM(em))
+    CALL CD_End_System(system, es, em)
+  END SUBROUTINE case_viv_layout_snapshot
 
   SUBROUTINE require(cond, label)
     LOGICAL, INTENT(IN) :: cond

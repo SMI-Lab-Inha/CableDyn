@@ -918,6 +918,15 @@ three balance within 0.5 % of the VIV power, the line's loss of energy over the 
 response settles, and as an ``EI = 0`` line the same. Integrating a channel over the output times gives the work of its
 load, :math:`W = \int P\,dt`; a static run reports 0.
 
+VIV amplitude channel
+~~~~~~~~~~~~~~~~~~~~~
+
+``VIVAmp<L>N<J>`` [m] is the smoothed cross-flow amplitude estimate of node ``J`` of line ``L``,
+the amplitude at which a ``VIV AMPLITUDE`` table reads the coefficients of the node's elements
+(:ref:`theory-viv-amplitude`): half the node's travel across the ambient flow between two zero
+crossings of its cross-flow velocity, smoothed over about ten time steps. It is requested only on
+a line with such a table, and is 0 at a node without VIV and in a static run.
+
 Point channels
 ~~~~~~~~~~~~~~
 

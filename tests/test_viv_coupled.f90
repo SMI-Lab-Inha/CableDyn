@@ -33,7 +33,11 @@ PROGRAM test_viv_coupled
   !! * wake oscillator (a WAKE OSCILLATOR row, C_L0 0.3, on the cable, whose type has Cl 0; the
   !!   EI = 0 riser keeps its synchronisation lift): the cable's checkpoint block grows by the wake
   !!   state (2 per node), the restarted run continues bit for bit with it, a rebuild without the
-  !!   VIV state does not, and a rewound step repeats.
+  !!   VIV state does not, and a rewound step repeats;
+  !! * amplitude tables (a VIV AMPLITUDE table on both types, Cv falling from 0.8 at A/D 0 to 0.4 at
+  !!   1, CdAmp from 1 to 1.5): both checkpoint blocks grow by the amplitude estimate (4 per node),
+  !!   the restarted run continues bit for bit with it, a rebuild without the VIV state does not,
+  !!   and a rewound step repeats.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_End, CD_AGG_OK, &
                                          CD_AGG_NMovingPoints, CD_AGG_GetMovingPointMesh, CD_AGG_Step_Moving, &
@@ -53,13 +57,14 @@ PROGRAM test_viv_coupled
   INTEGER :: nfail
   ! the deck of the restart and rewind cases, and whether its lines carry in-line VIV
   CHARACTER(32) :: deck_name = 'viv_coupled.dat'
-  LOGICAL :: il_case = .FALSE., wake_case = .FALSE.
+  LOGICAL :: il_case = .FALSE., wake_case = .FALSE., amp_case = .FALSE.
 
   nfail = 0
   CALL write_deck('viv_coupled.dat', 0.8_wp)
   CALL write_deck('viv_coupled_nolift.dat', 0.0_wp)
   CALL write_deck('viv_coupled_il.dat', 0.8_wp, inline=.TRUE.)
   CALL write_deck('viv_coupled_wake.dat', 0.8_wp, wake=.TRUE.)
+  CALL write_deck('viv_coupled_amp.dat', 0.8_wp, amp=.TRUE.)
   CALL case_lockin()
   CALL case_restart()
   CALL case_rewind()
@@ -72,6 +77,11 @@ PROGRAM test_viv_coupled
   deck_name = 'viv_coupled_wake.dat'
   il_case = .FALSE.
   wake_case = .TRUE.
+  CALL case_restart()
+  CALL case_rewind()
+  deck_name = 'viv_coupled_amp.dat'
+  wake_case = .FALSE.
+  amp_case = .TRUE.
   CALL case_restart()
   CALL case_rewind()
   IF (nfail > 0) THEN
@@ -361,7 +371,7 @@ CONTAINS
                                                 a_interior=aL(4:ndof - 3))
       ok = ok .AND. es == CD_SYSTEM_OK
       nv = CD_System_Line_VIV_MirrorSize(a%sys%fast%system, il)
-      ok = ok .AND. nv == MERGE(6, 3, il_case)*(ndof/3) + 1
+      ok = ok .AND. nv == (MERGE(6, 3, il_case) + MERGE(4, 0, amp_case))*(ndof/3) + 1
       IF (with_viv .AND. nv > 0) THEN
         ALLOCATE (buf(nv))
         CALL CD_Get_System_Line_VIV_State(a%sys%fast%system, il, buf, es, em)
@@ -374,7 +384,8 @@ CONTAINS
     ALLOCATE (buf(CD_HFMF_MirrorSize(a%cables(1))), fresh(CD_HFMF_MirrorSize(b%cables(1))))
     CALL CD_HFMF_PackMirror(a%cables(1), buf, es, em)
     nvc = CD_HFMF_VIVMirrorSize(a%cables(1))
-    ok = ok .AND. nvc == (MERGE(6, 3, il_case) + MERGE(2, 0, wake_case))*a%cables(1)%line%nn + 1
+    ok = ok .AND. nvc == (MERGE(6, 3, il_case) + MERGE(2, 0, wake_case) + MERGE(4, 0, amp_case))* &
+         a%cables(1)%line%nn + 1
     IF (.NOT. with_viv) THEN
       ! the cable's VIV block as the fresh build has it (the torsion-free cable ends with it)
       CALL CD_HFMF_PackMirror(b%cables(1), fresh, es, em)
@@ -394,6 +405,13 @@ CONTAINS
            MAXVAL(ABS(a%cables(1)%line%viv_phi - b%cables(1)%line%viv_phi)) <= 0.0_wp
     IF (same .AND. wake_case) same = a%cables(1)%line%viv_wake .AND. &
                                      MAXVAL(ABS(a%cables(1)%line%wo_s - b%cables(1)%line%wo_s)) <= 0.0_wp
+    IF (same .AND. amp_case) THEN
+      ! the motion statistics with the amplitude estimate (rows 3-6) on both lines
+      same = a%sys%fast%system%lines(1)%has_viv_amp .AND. a%cables(1)%line%has_viv_amp .AND. &
+             SIZE(a%cables(1)%line%viv_ms, 1) == 6 .AND. &
+             MAXVAL(ABS(a%sys%fast%system%lines(1)%viv_ms - b%sys%fast%system%lines(1)%viv_ms)) <= 0.0_wp .AND. &
+             MAXVAL(ABS(a%cables(1)%line%viv_ms - b%cables(1)%line%viv_ms)) <= 0.0_wp
+    END IF
     IF (.NOT. (same .AND. il_case)) RETURN
     same = a%sys%fast%system%lines(1)%has_viv_il .AND. a%cables(1)%line%has_viv_il .AND. &
            MAXVAL(ABS(a%sys%fast%system%lines(1)%vil_phi - b%sys%fast%system%lines(1)%vil_phi)) <= 0.0_wp .AND. &
@@ -422,15 +440,16 @@ CONTAINS
     IF (n > 1) f = REAL(n - 1, wp)/(t1 - t0)
   END SUBROUTINE response
 
-  SUBROUTINE write_deck(path, cl, window, dtm, anchor_first, inline, wake)
+  SUBROUTINE write_deck(path, cl, window, dtm, anchor_first, inline, wake, amp)
     !! The EI = 0 riser (line 1) and the finite-EI cable (line 2), 20 m apart across the current;
     !! VIVrmsWindow 0.25 s unless window is given (0: none), and a deck dtM when dtm is given;
     !! inline adds the in-line VIV of both types (a VIV section, ClX 0.85); wake gives the cable
-    !! the wake oscillator instead of its lift (Cl 0 and a WAKE OSCILLATOR row, C_L0 0.3).
+    !! the wake oscillator instead of its lift (Cl 0 and a WAKE OSCILLATOR row, C_L0 0.3); amp a VIV
+    !! AMPLITUDE table on both types.
     CHARACTER(*), INTENT(IN) :: path
     REAL(wp), INTENT(IN) :: cl
     REAL(wp), INTENT(IN), OPTIONAL :: window, dtm
-    LOGICAL, INTENT(IN), OPTIONAL :: anchor_first, inline, wake
+    LOGICAL, INTENT(IN), OPTIONAL :: anchor_first, inline, wake, amp
     INTEGER :: u
     LOGICAL :: stock, wo
     REAL(wp) :: tw
@@ -482,6 +501,16 @@ CONTAINS
       WRITE (u, '(A)') '--------------------- WAKE OSCILLATOR ---'
       WRITE (u, '(A)') 'TypeName CL0 St eps A'
       WRITE (u, '(A)') 'cable 0.3 0.2 0.3 12'
+    END IF
+    IF (PRESENT(amp)) THEN
+      IF (amp) THEN
+        WRITE (u, '(A)') '--------------------- VIV AMPLITUDE ---'
+        WRITE (u, '(A)') 'TypeName AD Cv CdAmp'
+        WRITE (u, '(A)') 'riser 0.0 0.8 1.0'
+        WRITE (u, '(A)') 'riser 1.0 0.4 1.5'
+        WRITE (u, '(A)') 'cable 0.0 0.8 1.0'
+        WRITE (u, '(A)') 'cable 1.0 0.4 1.5'
+      END IF
     END IF
     WRITE (u, '(A)') '--------------------- OPTIONS ---'
     WRITE (u, '(A)') '100.0 WtrDpth'

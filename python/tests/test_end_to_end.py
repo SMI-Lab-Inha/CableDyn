@@ -285,6 +285,61 @@ _WAKE_PARITY = [
 ]
 
 
+_AMP_OPTIONS = "--------------------- OPTIONS -----"
+_AMP_CHANNEL = ('"DampPow1"', '"DampPow1"\n"VIVAmp1N26"')
+
+
+def _amp_table(*rows: str) -> tuple[str, str]:
+    """The edit that puts a VIV AMPLITUDE section with ``rows`` before OPTIONS."""
+    block = "--------------------- VIV AMPLITUDE -----\n" + "".join(f"{row}\n" for row in rows)
+    return _AMP_OPTIONS, block + _AMP_OPTIONS
+
+
+_AMP_PARITY = [
+    ("amp-accepted", [_amp_table("riser 0.0 0.8 1.0", "riser 0.5 0.4 1.5")], True),
+    ("amp-channel", [_amp_table("riser 0.0 0.8", "riser 0.5 0.4"), _AMP_CHANNEL], True),
+    ("amp-channel-no-table", [_AMP_CHANNEL], False),
+    ("amp-one-row", [_amp_table("riser 0.0 0.8")], False),
+    ("amp-not-increasing", [_amp_table("riser 0.5 0.8", "riser 0.5 0.4")], False),
+    (
+        "amp-no-lift",
+        [
+            _WAKE_LIFT,
+            _WAKE_SECTION,
+            ("riser      0.85   0.15", "riser 0.3"),
+            _amp_table("riser 0.0 0.8", "riser 0.5 0.4"),
+        ],
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "edits", "accepted"), _AMP_PARITY, ids=[item[0] for item in _AMP_PARITY]
+)
+def test_viv_amplitude_validator_agrees_with_the_native_reader(
+    driver, tmp_path, label, edits, accepted
+):
+    text = (EXAMPLES / "viv_taut_cable_inline.dat").read_text(encoding="utf-8")
+    for old, new in edits:
+        assert old in text, old
+        text = text.replace(old, new, 1)
+    deck = tmp_path / f"{label}.dat"
+    deck.write_text(text.replace("90.0      TMax", "2.0       TMax"), encoding="utf-8")
+    try:
+        DeckFile.read(deck)
+        python_accepts = True
+    except DeckFormatError:
+        python_accepts = False
+    try:
+        driver.run(deck, label, timeout=300)
+        native_accepts = True
+    except DriverExecutionError as exc:
+        assert exc.returncode == 1, exc.stderr  # a deck error, not a solve failure
+        native_accepts = False
+    assert python_accepts == native_accepts == accepted
+
+
 @pytest.mark.parametrize(
     ("label", "edits", "accepted"), _WAKE_PARITY, ids=[item[0] for item in _WAKE_PARITY]
 )

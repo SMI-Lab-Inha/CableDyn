@@ -239,6 +239,48 @@ def test_wake_oscillator_rows_are_written_with_the_values_given(tmp_path: Path) 
         model.to_text(validate=False)
 
 
+def test_viv_amplitude_rows_are_written_with_the_values_given(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type(
+        "cable",
+        diam=0.1,
+        mass=10.0,
+        ea=5.0e7,
+        ei=1.0,
+        cdn=1.2,
+        can=1.0,
+        cl=0.8,
+        viv_amplitude=[(0.0, 0.8), (0.3, 0.0)],
+    )
+    model.add_line_type(
+        "riser",
+        diam=0.1,
+        mass=10.0,
+        ea=5.0e7,
+        cdn=1.2,
+        can=1.0,
+        cl=0.8,
+        viv_amplitude=[(0.0, 0.8, 1.0), (0.5, 0.9, 1.6), (1.0, 0.0, 2.0)],
+    )
+    deck = DeckFile.from_text(model.to_text(validate=False), path=tmp_path / "deck.dat")
+    rows = [row.tokens for row in deck._rows("VIV AMPLITUDE")]
+    assert [row[0] for row in rows] == ["cable", "cable", "riser", "riser", "riser"]
+    assert [[float(value) for value in row[1:]] for row in rows[2:]] == [
+        [0.0, 0.8, 1.0],
+        [0.5, 0.9, 1.6],
+        [1.0, 0.0, 2.0],
+    ]
+    model.add_line_type(
+        "mixed", diam=0.1, mass=10.0, ea=5.0e7, cl=0.8, viv_amplitude=[(0.0, 0.8, 1.0), (1.0, 0.8)]
+    )
+    with pytest.raises(ValueError, match="all of one length"):
+        model.to_text(validate=False)
+    model.line_types["mixed"].viv_amplitude = [(0.0, 0.8), (1.0, 0.8)]
+    model.line_types["mixed"].cl = None
+    with pytest.raises(ValueError, match="set cl"):
+        model.to_text(validate=False)
+
+
 def test_build_spread_mooring_with_multi_section_lines() -> None:
     import math
 

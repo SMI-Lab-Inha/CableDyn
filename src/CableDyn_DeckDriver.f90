@@ -59,7 +59,8 @@ MODULE CableDyn_DeckDriver
                             CD_Get_Model_EndForces, &
                             CD_Update_Model_CoupledMotion, CD_Update_Model_Hydro_Fields, &
                             CD_Recompute_Model_Acceleration, CD_Step_Model, CD_Step_Model_Recovering, CD_MODEL_OK, &
-                            CD_Audit_Model_Step, CD_Set_Model_VIV, CD_Get_Model_VIV_Lift, CD_Get_Model_Load_Power
+                            CD_Audit_Model_Step, CD_Set_Model_VIV, CD_Get_Model_VIV_Lift, CD_Get_Model_Load_Power, &
+                            CD_Get_Model_VIV_Amplitude
   USE CableDyn_System, ONLY: CD_SystemType, CD_SystemPointType, CD_LineEndpointBinding, &
                              CD_Init_System_From_Points, CD_End_System, CD_System_Line_NDOF, &
                              CD_System_Line_NElem, CD_Get_System_Point_State, CD_Get_System_Line_State, &
@@ -97,6 +98,7 @@ MODULE CableDyn_DeckDriver
                                          CD_HC_COMPRESSION_STRICT
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HCDYN_OK, CD_HCDYN_TENSILE_OFF, CD_HCDYN_TENSILE_WARN, &
                                           CD_HCDYN_TENSILE_ERROR, CD_HermiteCable_Dyn_Load_Power, &
+                                          CD_HermiteCable_Dyn_VIV_Amplitude, &
                                           CD_HermiteCable_Axial_Damping_Resultant, &
                                           CD_HermiteCable_Axial_Damping_Element, CD_HermiteCable_Dyn_End_Force, &
                                           CD_HermiteCable_Dyn_Node_Values, CD_HermiteCable_Dyn_Node_Recovery, &
@@ -137,7 +139,7 @@ MODULE CableDyn_DeckDriver
                                           CD_HFMF_Set_Moving_End_B, CD_HFMF_GetEndBKinematics, &
                                           CD_HFMF_End, CD_HFMF_OK
   USE CableDyn_VIV, ONLY: CD_VIV_DEFAULT_DF, CD_VIV_DEFAULT_CF, CD_VIV_NM, CD_VIV_DEFAULT_IL_ALPHA, &
-                          CD_VIV_WAKE_DEFAULT_ST, CD_VIV_WAKE_DEFAULT_EPS, CD_VIV_WAKE_DEFAULT_A
+                          CD_VIV_WAKE_DEFAULT_ST, CD_VIV_WAKE_DEFAULT_EPS, CD_VIV_WAKE_DEFAULT_A, CD_VIV_AMP_MAXP
   USE CableDyn_Hydro, ONLY: CD_Airy_Wave_Kinematics_Precomputed, CD_Component_Wave_Kinematics, &
                             CD_Current_Profile_Velocity, CD_CurrentGridType, CD_Current_Grid_Resample, &
                             CD_Current_Grid_Velocity, &
@@ -460,6 +462,11 @@ MODULE CableDyn_DeckDriver
     REAL(wp) :: wo_cl0 = CD_ZERO, wo_st = CD_VIV_WAKE_DEFAULT_ST, wo_eps = CD_VIV_WAKE_DEFAULT_EPS
     REAL(wp) :: wo_a = CD_VIV_WAKE_DEFAULT_A
     LOGICAL :: has_wake_row = .FALSE.
+    ! Amplitude-dependent VIV coefficients (the optional VIV AMPLITUDE section, rows TypeName AD Cv
+    ! [CdAmp]): amp_n rows of (A/D, C_v, drag factor) in amp_tab, A/D increasing; amp_cols the
+    ! token count of the type's rows (3 or 4, the drag factor 1 with 3).
+    INTEGER :: amp_n = 0, amp_cols = 0
+    REAL(wp) :: amp_tab(3, CD_VIV_AMP_MAXP) = CD_ZERO
     ! Deck file line of the row (0 when not read from a file), for error messages.
     INTEGER :: deck_line = 0
   END TYPE
@@ -1893,6 +1900,8 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: q_sequence(:)
     REAL(wp), ALLOCATABLE :: curv(:), cdn(:), cdt(:), can(:), cat(:), catenary_pos(:)
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:), viv_hh(:)
+    REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :)
+    INTEGER, ALLOCATABLE :: viv_ampn(:)
     REAL(wp), ALLOCATABLE :: wo_cl0(:), wo_st(:), wo_eps(:), wo_a(:)
     REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:), bb_el(:)
     REAL(wp) :: mode1_omega
@@ -3294,7 +3303,10 @@ CONTAINS
     CALL finite_viv_arrays(ln, sections, types, viv_cl, viv_cf, viv_df, viv_clx, viv_al, viv_hh)
     ALLOCATE (wo_cl0(SIZE(l0)), wo_st(SIZE(l0)), wo_eps(SIZE(l0)), wo_a(SIZE(l0)))
     CALL finite_wake_arrays(ln, sections, types, wo_cl0, wo_st, wo_eps, wo_a)
+    ALLOCATE (viv_tix(SIZE(l0)))
+    CALL viv_amp_type_index(ln, sections, types, viv_tix)
     IF (SIZE(l0_am) /= SIZE(l0)) THEN
+      CALL remap_elem_by_reference_arc(viv_tix, l0, l0_am)
       CALL remap_elem_by_reference_arc(wo_cl0, l0, l0_am)
       CALL remap_elem_by_reference_arc(wo_st, l0, l0_am)
       CALL remap_elem_by_reference_arc(wo_eps, l0, l0_am)
@@ -3622,6 +3634,8 @@ CONTAINS
           ELSE
             CALL CD_Deck_VIV_Phase_Seed(cable%line%l0, ln%ends_swapped, seed, zero=opts%viv_phase_zero)
           END IF
+          ! the VIV AMPLITUDE tables, left unallocated (absent below) on a line without one
+          CALL viv_amp_tables(types, viv_tix, viv_amp3, viv_ampn)
           ! with the in-line VIV of the VIV section where a type has ClX > 0
           IF (ANY(wo_cl0 > CD_ZERO)) THEN
             ! the wake oscillator: cl is C_L0, the band unused
@@ -3637,13 +3651,13 @@ CONTAINS
                                                    REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
                                                    opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
                                              tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, il_alpha=viv_al, &
-                                             chh=viv_hh)
+                                             chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn)
           ELSE
             CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
                                              MERGE(opts%viv_rms_window, &
                                                    REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
                                                    opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
-                                             tangent_reversed=.NOT. ln%ends_swapped)
+                                             tangent_reversed=.NOT. ln%ends_swapped, amp=viv_amp3, amp_n=viv_ampn)
           END IF
         END BLOCK
         IF (es /= CD_HCDYN_OK) THEN
@@ -10401,6 +10415,8 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: hydro_diam(:), hydro_cdn(:), hydro_cdt(:), hydro_can(:), hydro_cat(:)
     REAL(wp), ALLOCATABLE :: ve_ead(:), ve_bas(:), ve_bad(:), ve_ambl(:), ve_vbet(:)
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:), viv_hh(:)
+    REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :)
+    INTEGER, ALLOCATABLE :: viv_ampn(:)
     LOGICAL, ALLOCATABLE :: syr_el(:)
     REAL(wp) :: anchor(3), fairlead(3), mode1_omega
     REAL(wp), PARAMETER :: factors(4) = [0.25_wp, 0.5_wp, 0.75_wp, CD_ONE]
@@ -10439,7 +10455,9 @@ CONTAINS
     ALLOCATE (ba(SIZE(l0)), hydro_diam(SIZE(l0)), hydro_cdn(SIZE(l0)), hydro_cdt(SIZE(l0)), &
               hydro_can(SIZE(l0)), hydro_cat(SIZE(l0)), ve_ead(SIZE(l0)), ve_bas(SIZE(l0)), &
               ve_bad(SIZE(l0)), ve_ambl(SIZE(l0)), ve_vbet(SIZE(l0)), viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), &
-              viv_df(SIZE(l0)), syr_el(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)), viv_hh(SIZE(l0)))
+              viv_df(SIZE(l0)), syr_el(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)), viv_hh(SIZE(l0)), &
+              viv_tix(SIZE(l0)))
+    viv_tix = CD_ZERO
     viv_cl = CD_ZERO
     viv_cf = CD_ZERO
     viv_df = CD_ZERO
@@ -10511,6 +10529,8 @@ CONTAINS
         viv_clx(e) = types(line_section_type(sections, ln%id, i))%clx
         viv_al(e) = types(line_section_type(sections, ln%id, i))%il_alpha
         viv_hh(e) = types(line_section_type(sections, ln%id, i))%chh
+        IF (types(line_section_type(sections, ln%id, i))%amp_n > 0) viv_tix(e) = REAL(line_section_type(sections, &
+                                                                                                        ln%id, i), wp)
         syr_el(e) = types(line_section_type(sections, ln%id, i))%is_syrope
       END DO
     END DO
@@ -10521,6 +10541,7 @@ CONTAINS
     viv_clx = viv_clx(SIZE(viv_clx):1:-1)
     viv_al = viv_al(SIZE(viv_al):1:-1)
     viv_hh = viv_hh(SIZE(viv_hh):1:-1)
+    viv_tix = viv_tix(SIZE(viv_tix):1:-1)
     ba = ba(SIZE(ba):1:-1)
     ve_ead = ve_ead(SIZE(ve_ead):1:-1)
     ve_bas = ve_bas(SIZE(ve_bas):1:-1)
@@ -10810,14 +10831,17 @@ CONTAINS
         BLOCK
           REAL(wp) :: seed(model%n_dof/3)
           CALL CD_Deck_VIV_Phase_Seed(model%l0, ln%ends_swapped, seed, zero=opts%viv_phase_zero)
+          ! the VIV AMPLITUDE tables, left unallocated (absent below) on a line without one
+          CALL viv_amp_tables(types, viv_tix, viv_amp3, viv_ampn)
           ! with the in-line VIV of the VIV section where a type has ClX > 0
           IF (ANY(viv_clx > CD_ZERO)) THEN
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, &
-                                  il_alpha=viv_al, chh=viv_hh)
+                                  il_alpha=viv_al, chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn)
           ELSE
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, hydro_diam, viv_cf, viv_df, tw, es, em, &
-                                  phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped)
+                                  phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, amp=viv_amp3, &
+                                  amp_n=viv_ampn)
           END IF
         END BLOCK
         IF (es == CD_MODEL_OK) CALL CD_Recompute_Model_Acceleration(model, es, em)
@@ -11683,6 +11707,63 @@ CONTAINS
     eps = eps(SIZE(eps):1:-1)
     a = a(SIZE(a):1:-1)
   END SUBROUTINE finite_wake_arrays
+
+  SUBROUTINE viv_amp_type_index(ln, sections, types, tix)
+    !! The LINE TYPES index of every element of a line whose type has a VIV AMPLITUDE table (0
+    !! elsewhere), as a real per-element field for remap_elem_by_reference_arc, in the element order
+    !! of finite_hydro_arrays (the deck order reversed).
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    REAL(wp), INTENT(OUT) :: tix(:)
+    INTEGER :: i, j, e, tidx
+    e = 0
+    DO i = 1, SIZE(sections)
+      IF (sections(i)%line_id /= ln%id) CYCLE
+      tidx = sections(i)%ltype
+      DO j = 1, sections(i)%nsegs
+        e = e + 1
+        tix(e) = CD_ZERO
+        IF (types(tidx)%amp_n > 0) tix(e) = REAL(tidx, wp)
+      END DO
+    END DO
+    tix = tix(SIZE(tix):1:-1)
+  END SUBROUTINE viv_amp_type_index
+
+  SUBROUTINE viv_amp_tables(types, tix, amp, ampn)
+    !! Allocate and fill the per-element amplitude tables (CD_Set_Model_VIV and
+    !! CD_HermiteCable_Dyn_Set_VIV amp, amp_n) from the element type indices of
+    !! viv_amp_type_index; left unallocated (so absent in those calls) when no element has one.
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    REAL(wp), INTENT(IN) :: tix(:)
+    REAL(wp), ALLOCATABLE, INTENT(OUT) :: amp(:, :, :)
+    INTEGER, ALLOCATABLE, INTENT(OUT) :: ampn(:)
+    INTEGER :: e, t
+    IF (.NOT. ANY(tix > 0.5_wp)) RETURN
+    ALLOCATE (amp(3, CD_VIV_AMP_MAXP, SIZE(tix)), ampn(SIZE(tix)))
+    amp = CD_ZERO
+    ampn = 0
+    DO e = 1, SIZE(tix)
+      t = NINT(tix(e))
+      IF (t < 1) CYCLE
+      ampn(e) = types(t)%amp_n
+      amp(:, :, e) = types(t)%amp_tab
+    END DO
+  END SUBROUTINE viv_amp_tables
+
+  LOGICAL FUNCTION line_has_viv_amp(ln, types, sections) RESULT(has)
+    !! Whether a section of the line uses a line type with a VIV AMPLITUDE table.
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    INTEGER :: j
+    has = .FALSE.
+    DO j = 1, SIZE(sections)
+      IF (sections(j)%line_id /= ln%id) CYCLE
+      IF (sections(j)%ltype < 1 .OR. sections(j)%ltype > SIZE(types)) CYCLE
+      IF (types(sections(j)%ltype)%amp_n > 0) has = .TRUE.
+    END DO
+  END FUNCTION line_has_viv_amp
 
   LOGICAL FUNCTION line_has_viv(ln, types, sections) RESULT(has)
     !! Whether a section of the line uses a line type with a VIV lift coefficient Cl > 0.
@@ -13802,6 +13883,9 @@ CONTAINS
     CHARACTER(DECK_RECLEN), ALLOCATABLE :: wake_rows(:)
     INTEGER, ALLOCATABLE :: wake_lines(:)
     INTEGER :: n_wake
+    CHARACTER(DECK_RECLEN), ALLOCATABLE :: vamp_rows(:)
+    INTEGER, ALLOCATABLE :: vamp_lines(:)
+    INTEGER :: n_vamp
     CHARACTER(2*NAMELEN), ALLOCATABLE :: channel_keys(:)
     LOGICAL :: ext_march, types_stock_cols, rodtypes_legacy_cols, turb_ok, static_finite_ok, tors_marched
     INTEGER :: unit, ios, section, nt, nb, nrt, nr, np, nlin, nsec, neq, nch, nfl, nct, nec, lineno
@@ -13819,7 +13903,7 @@ CONTAINS
                           SEC_SECTIONS = 5, SEC_OPTIONS = 6, SEC_OUTPUTS = 7, SEC_RODTYPES = 8, SEC_RODS = 9, &
                           SEC_EQUIV = 10, SEC_FAILURE = 11, SEC_CONTROL = 12, SEC_SYROPE_IC = 13, &
                           SEC_ENDCONN = 14, SEC_TURBINES = 15, SEC_EXTLOADS = 16, SEC_ATTACH = 17, &
-                          SEC_STIFF = 18, SEC_VIV = 19, SEC_WAKE = 20
+                          SEC_STIFF = 18, SEC_VIV = 19, SEC_WAKE = 20, SEC_VIVAMP = 21
 
     ErrStat = 0; ErrMsg = ''
     ext_march = .FALSE.
@@ -13844,6 +13928,8 @@ CONTAINS
     ALLOCATE (viv_rows(0), viv_lines(0))
     n_viv = 0
     ALLOCATE (wake_rows(0), wake_lines(0))
+    ALLOCATE (vamp_rows(0), vamp_lines(0))
+    n_vamp = 0
     n_wake = 0
     nt = 0; nb = 0; nrt = 0; nr = 0; np = 0; nlin = 0; nsec = 0; neq = 0; nch = 0; nfl = 0; nct = 0; nec = 0
     section = SEC_NONE
@@ -13988,6 +14074,15 @@ CONTAINS
         END IF
         wake_rows(n_wake) = line(1:MIN(LEN(line), DECK_RECLEN))
         wake_lines(n_wake) = lineno
+      CASE (SEC_VIVAMP)
+        IF (.NOT. has_numeric_token(line)) CYCLE
+        n_vamp = n_vamp + 1
+        IF (n_vamp > SIZE(vamp_rows)) THEN
+          vamp_rows = [vamp_rows, [(REPEAT(' ', DECK_RECLEN), i_ch=1, 8)]]
+          vamp_lines = [vamp_lines, [(0, i_ch=1, 8)]]
+        END IF
+        vamp_rows(n_vamp) = line(1:MIN(LEN(line), DECK_RECLEN))
+        vamp_lines(n_vamp) = lineno
       CASE (SEC_OPTIONS)
         CALL apply_option(line, opts, ErrStat, ErrMsg)
       CASE (SEC_OUTPUTS)
@@ -14097,6 +14192,19 @@ CONTAINS
       IF (ErrStat /= 0) THEN
         CALL add_row_context('deck', wake_lines(i_ch), wake_rows(i_ch), ErrMsg)
         RETURN
+      END IF
+    END DO
+    DO i_ch = 1, n_vamp
+      CALL apply_type_viv_amp(vamp_rows(i_ch), types, ErrStat, ErrMsg)
+      IF (ErrStat /= 0) THEN
+        CALL add_row_context('deck', vamp_lines(i_ch), vamp_rows(i_ch), ErrMsg)
+        RETURN
+      END IF
+    END DO
+    DO i_ch = 1, SIZE(types)
+      IF (types(i_ch)%amp_n == 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'VIV AMPLITUDE gives LINE TYPE "'//TRIM(types(i_ch)%name)//'" one row: a '// &
+                  'table needs at least two'); RETURN
       END IF
     END DO
 
@@ -15767,6 +15875,8 @@ CONTAINS
       section = 18
     CASE ('VIV', 'VORTEX-INDUCED VIBRATION', 'VORTEX INDUCED VIBRATION')
       section = 19
+    CASE ('VIV AMPLITUDE', 'VIV AMPLITUDES')
+      section = 21
     CASE ('WAKE OSCILLATOR', 'WAKE OSCILLATORS', 'WAKE')
       section = 20
     CASE DEFAULT
@@ -17430,6 +17540,72 @@ CONTAINS
     types(it)%has_wake_row = .TRUE.
   END SUBROUTINE apply_type_wake
 
+  SUBROUTINE apply_type_viv_amp(row, types, ErrStat, ErrMsg)
+    !! One VIV AMPLITUDE row: TypeName AD Cv [CdAmp] -- a row of a line type's amplitude table, the
+    !! rows of a type in increasing amplitude ratio AD = A/D >= 0, the cross-flow coefficient
+    !! Cv >= 0 that replaces the type's LINE TYPES Cl at that amplitude, and the factor CdAmp > 0
+    !! (default 1) of its normal drag coefficient; the rows of one type have the same columns. The
+    !! type needs the synchronisation lift (LINE TYPES Cl > 0). At most CD_VIV_AMP_MAXP rows a type.
+    CHARACTER(*), INTENT(IN) :: row
+    TYPE(DeckLineType), INTENT(INOUT) :: types(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(DECK_RECLEN) :: tok
+    INTEGER :: it, ntok, i, n
+    REAL(wp) :: v(3)
+    LOGICAL :: found, ok
+
+    ErrStat = 0; ErrMsg = ''
+    ntok = count_tokens(row)
+    IF (ntok < 3 .OR. ntok > 4) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV AMPLITUDE rows must be: TypeName AD Cv [CdAmp]'); RETURN
+    END IF
+    CALL get_token(row, 1, tok, found)
+    it = find_type(types, TRIM(tok))
+    IF (it == 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV AMPLITUDE row names undefined LINE TYPE "'//TRIM(tok)//'"'); RETURN
+    END IF
+    IF (.NOT. (types(it)%cl > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV AMPLITUDE of LINE TYPE "'//TRIM(types(it)%name)//'" scales its '// &
+                'synchronisation lift: give the type LINE TYPES Cl > 0'); RETURN
+    END IF
+    IF (types(it)%amp_n > 0 .AND. ntok /= types(it)%amp_cols) THEN
+      CALL fail(ErrStat, ErrMsg, 'the VIV AMPLITUDE rows of LINE TYPE "'//TRIM(types(it)%name)// &
+                '" must all have the same columns'); RETURN
+    END IF
+    IF (types(it)%amp_n >= CD_VIV_AMP_MAXP) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV AMPLITUDE gives LINE TYPE "'//TRIM(types(it)%name)//'" more than 32 '// &
+                'rows'); RETURN
+    END IF
+    v = [CD_ZERO, CD_ZERO, CD_ONE]
+    ok = .TRUE.
+    DO i = 2, ntok
+      IF (.NOT. ok) EXIT
+      CALL get_token(row, i, tok, found)
+      CALL parse_real_token(tok, v(i - 1), ok)
+    END DO
+    IF (.NOT. ok) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV AMPLITUDE AD, Cv and CdAmp must be plain numbers'); RETURN
+    END IF
+    IF (.NOT. ALL(IEEE_IS_FINITE(v))) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV AMPLITUDE AD, Cv and CdAmp must be finite'); RETURN
+    END IF
+    IF (.NOT. (v(1) >= CD_ZERO .AND. v(1) <= MAX_COEFFICIENT .AND. v(2) >= CD_ZERO .AND. &
+               v(2) <= MAX_COEFFICIENT .AND. v(3) > CD_ZERO .AND. v(3) <= MAX_COEFFICIENT)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV AMPLITUDE needs AD >= 0, Cv >= 0 and CdAmp > 0, each at most 1e15'); RETURN
+    END IF
+    n = types(it)%amp_n
+    IF (n > 0) THEN
+      IF (.NOT. (v(1) > types(it)%amp_tab(1, n))) THEN
+        CALL fail(ErrStat, ErrMsg, 'the VIV AMPLITUDE rows of LINE TYPE "'//TRIM(types(it)%name)// &
+                  '" must increase strictly in AD'); RETURN
+      END IF
+    END IF
+    types(it)%amp_n = n + 1
+    types(it)%amp_cols = ntok
+    types(it)%amp_tab(:, n + 1) = v
+  END SUBROUTINE apply_type_viv_amp
+
   SUBROUTINE append_line_stiffener(row, lines, ErrStat, ErrMsg)
     !! One STIFFENERS row: LineID End Length RootOD TipOD InnerD E Density -- a conical segment of
     !! the bend stiffener sleeving End A or End B of a finite-EI line. The rows of one line end
@@ -18755,7 +18931,7 @@ CONTAINS
       IF (a > 0 .AND. b > 0) key = 'point:'//TRIM(int_to_str(a))//':'//TRIM(int_to_str(b))
     ELSE IF (starts_with(lo, 'ten') .OR. starts_with(lo, 'curv') .OR. starts_with(lo, 'bendmom') .OR. &
              starts_with(lo, 'stfmom') .OR. starts_with(lo, 'l') .OR. starts_with(lo, 'torq') .OR. &
-             starts_with(lo, 'twist') .OR. is_load_power_channel(lo)) THEN
+             starts_with(lo, 'twist') .OR. is_load_power_channel(lo) .OR. starts_with(lo, 'vivamp')) THEN
       CALL parse_line_node_channel(ch, a, b, c, d)
       IF (a > 0 .AND. b > 0 .AND. c > 0) key = 'node:'//TRIM(int_to_str(a))//':'//TRIM(int_to_str(b))// &
                                                ':'//TRIM(int_to_str(c))//':'//TRIM(int_to_str(d))
@@ -35214,7 +35390,8 @@ CONTAINS
           END IF
         ELSE
           CALL parse_line_node_channel(channels(j), il, node, kind, comp)
-          IF (is_load_power_kind(kind)) CYCLE   ! from the line model, channel-at-a-time (CH_LEGACY)
+          ! from the line model, channel-at-a-time (CH_LEGACY)
+          IF (is_load_power_kind(kind) .OR. kind == 21) CYCLE
           il = find_line(lines, il)
           IF (il < 1) CYCLE
           CALL line_sizes(il, sized, tension_sized)
@@ -35481,6 +35658,19 @@ CONTAINS
         END BLOCK
         RETURN
       END IF
+      IF (kind == 21) THEN
+        BLOCK
+          REAL(wp) :: amp(nnode)
+          CALL CD_Get_Model_VIV_Amplitude(system%lines(li), amp, es, em)
+          IF (es /= CD_MODEL_OK) THEN
+            ErrStat = CD_DECKDRV_SOLVEFAIL
+            ErrMsg = 'CableDyn_DeckDriver: system line VIV amplitude recovery failed: '//TRIM(em)
+            RETURN
+          END IF
+          val = amp(inode)
+        END BLOCK
+        RETURN
+      END IF
       IF (kind == 3) THEN
         CALL ensure_model_output_workspace(work, 0, nnode - 1)
         CALL CD_Get_System_Line_Tension(system, li, work%tension(1:nnode - 1), es, em)
@@ -35633,6 +35823,19 @@ CONTAINS
             RETURN
           END IF
           val = load_power_value(kind, inode, pv, pd, pm, models(li)%l0)
+        END BLOCK
+        RETURN
+      END IF
+      IF (kind == 21) THEN
+        BLOCK
+          REAL(wp) :: amp(nnode)
+          CALL CD_Get_Model_VIV_Amplitude(models(li), amp, es, em)
+          IF (es /= CD_MODEL_OK) THEN
+            ErrStat = CD_DECKDRV_SOLVEFAIL
+            ErrMsg = 'CableDyn_DeckDriver: dynamic line VIV amplitude recovery failed: '//TRIM(em)
+            RETURN
+          END IF
+          val = amp(inode)
         END BLOCK
         RETURN
       END IF
@@ -37078,6 +37281,27 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": line '//TRIM(int_to_str(line_id))//' is not '// &
                   'torsionally restrained (END CONNECTIONS TorsStiffness), so it carries no torque'); RETURN
       END IF
+    ELSE IF (starts_with(lo, 'vivamp')) THEN
+      CALL parse_line_node_channel(ch, line_id, node, kind, comp)
+      li = find_line(lines, line_id)
+      IF (li /= 0 .AND. node == 0 .AND. names_node_zero(lo)) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": node numbers start at 1 = End A (MoorDyn '// &
+                  'numbers from N0)'); RETURN
+      END IF
+      IF (li == 0 .OR. kind == 0 .OR. node < 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": bad VIV amplitude channel (use VIVAmp<L>N<J>, '// &
+                  'with a known line id)'); RETURN
+      END IF
+      nelem = line_nelem_from_sections(lines(li)%id, sections)
+      IF (node > nelem + 1) THEN
+        CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": node index exceeds line node count'); RETURN
+      END IF
+      IF (PRESENT(types)) THEN
+        IF (.NOT. line_has_viv_amp(lines(li), types, sections)) THEN
+          CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": line '//TRIM(int_to_str(line_id))//' has no '// &
+                    'VIV AMPLITUDE table, so no amplitude estimate'); RETURN
+        END IF
+      END IF
     ELSE IF (is_load_power_channel(lo)) THEN
       CALL parse_line_node_channel(ch, line_id, node, kind, comp)
       li = find_line(lines, line_id)
@@ -37126,7 +37350,7 @@ CONTAINS
                 'Point<P>p{x,y,z} (alias Con<P>p{x,y,z}), Point<P>F{x,y,z,H}, '// &
                 'Ten<L>N<J>, Curv<L>N<J>, CurvX<L>N<J>, CurvY<L>N<J>, BendMom<L>N<J>, StfMom<L>N<J>, '// &
                 'Torq<L>N<J>, Twist<L>N<J>, Twist<L>, '// &
-                'VIVPow<L>, DragPow<L>, DampPow<L> (and <name><L>N<J>), '// &
+                'VIVPow<L>, DragPow<L>, DampPow<L> (and <name><L>N<J>), VIVAmp<L>N<J>, '// &
                 'L<L>N<J>p{x,y,z}, L<L>N<J>v{x,y,z}, L<L>N<J>a{x,y,z}, L<L>N<J>Dec, L<L>N<J>Azi, '// &
                 'TDP<L>{s,x,y,z,Lay,Exc,Grd}, or the Body<N>/Rod<N> channels)'); RETURN
     END IF
@@ -37389,6 +37613,7 @@ CONTAINS
     !!   DragPow<L>N<J>    -> kind=18, comp=0   the same per unit length about node J [W/m]
     !!   DampPow<L>        -> kind=19, comp=0   power of the structural damping (node 1) [W]
     !!   DampPow<L>N<J>    -> kind=20, comp=0   the same per unit length about node J [W/m]
+    !!   VIVAmp<L>N<J>     -> kind=21, comp=0   smoothed VIV amplitude estimate (VIV AMPLITUDE) [m]
     CHARACTER(*), INTENT(IN) :: ch
     INTEGER, INTENT(OUT) :: line_id, node_id, kind, comp
 
@@ -37440,6 +37665,10 @@ CONTAINS
     ELSE IF (starts_with(lo, 'stfmom')) THEN
       CALL parse_keyword_line_node(lo, 6, last, line_id, node_id)
       IF (line_id > 0 .AND. node_id > 0) kind = 12
+      RETURN
+    ELSE IF (starts_with(lo, 'vivamp')) THEN
+      CALL parse_keyword_line_node(lo, 6, last, line_id, node_id)
+      IF (line_id > 0 .AND. node_id > 0) kind = 21
       RETURN
     ELSE IF (is_load_power_channel(lo)) THEN
       ! the load power channels: the line total <name><L> (node 1, as Twist<L>), or the power per
@@ -39360,6 +39589,17 @@ CONTAINS
       END BLOCK
       RETURN
     END IF
+    IF (kind == 21) THEN
+      BLOCK
+        REAL(wp) :: amp(nnode)
+        CALL CD_Get_Model_VIV_Amplitude(system%lines(li), amp, es, em)
+        IF (es /= CD_MODEL_OK) THEN
+          CALL sys_solvefail(ch, em, ErrStat, ErrMsg); RETURN
+        END IF
+        val = amp(inode)
+      END BLOCK
+      RETURN
+    END IF
     IF (kind == 3) THEN
       BLOCK
         REAL(wp) :: tension(nnode - 1)
@@ -39513,6 +39753,16 @@ CONTAINS
                           TRIM(em)); RETURN
         END IF
         val = load_power_value(kind, inode, pv, pd, pm, cable%line%l0)
+      END BLOCK
+    CASE (21)   ! the smoothed VIV amplitude estimate of the node (VIV AMPLITUDE)
+      BLOCK
+        REAL(wp) :: amp(nnode)
+        CALL CD_HermiteCable_Dyn_VIV_Amplitude(cable%line, amp, es, em)
+        IF (es /= CD_HCDYN_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": finite-EI VIV amplitude recovery failed: '// &
+                          TRIM(em)); RETURN
+        END IF
+        val = amp(inode)
       END BLOCK
     CASE (3, 5, 6)   ! nodal tension, curvature, bend moment
       CALL cable_recovered_value(cable, kind, inode, ch, val, ErrStat, ErrMsg)
@@ -39986,7 +40236,7 @@ CONTAINS
     !! OrcaFlex-vocabulary output unit for a channel token, by kind: tension (FairTen/AnchTen/Ten)
     !! and anchor force (AnchFz/AnchFH) -> (N); curvature (Curv) -> (1/m); bend moment (BendMom)
     !! -> (N.m); endpoint orientation/Dec/Azi -> (deg); torque (Torq) -> (N.m); twist (Twist) -> (deg); position (Point/...p) -> (m);
-    !! load power (VIVPow/DragPow/DampPow) -> (W), per unit length about a node -> (W/m);
+    !! load power (VIVPow/DragPow/DampPow) -> (W), per unit length about a node -> (W/m); VIVAmp -> (m);
     !! velocity (...v) -> (m/s);
     !! acceleration (...a) -> (m/s2).
     CHARACTER(*), INTENT(IN) :: ch
@@ -40027,7 +40277,7 @@ CONTAINS
       CASE (10, 11); unit = '(deg)'
       CASE (15, 17, 19); unit = '(W)'
       CASE (16, 18, 20); unit = '(W/m)'
-      CASE (1); unit = '(m)'
+      CASE (1, 21); unit = '(m)'
       CASE (2); unit = '(m/s)'
       CASE (4); unit = '(m/s2)'
       CASE DEFAULT; unit = '(-)'

@@ -62,6 +62,10 @@ MODULE CableDyn_VIV
   PUBLIC :: CD_VIV_Inline_Per_Length
   PUBLIC :: CD_VIV_Inline_Phase_Rate
   PUBLIC :: CD_VIV_Wake_Advance
+  PUBLIC :: CD_VIV_Amplitude_Update
+  PUBLIC :: CD_VIV_Table
+  PUBLIC :: CD_VIV_Check_Amp_Table
+  PUBLIC :: CD_VIV_Ambient_Crossflow_Rate
 
   !> MoorDyn's running-RMS window in time steps (Line%n_m): each step updates the stored
   !> mean square as ((n_m - 1) old + new) / n_m.
@@ -80,6 +84,15 @@ MODULE CableDyn_VIV
   REAL(wp), PARAMETER, PUBLIC :: CD_VIV_WAKE_DEFAULT_CL0 = 0.3_wp
   REAL(wp), PARAMETER, PUBLIC :: CD_VIV_WAKE_DEFAULT_EPS = 0.3_wp
   REAL(wp), PARAMETER, PUBLIC :: CD_VIV_WAKE_DEFAULT_A = 12.0_wp
+  !> Rows of the per-node VIV motion statistics: the running mean squares of the cross-flow
+  !> velocity and acceleration (CD_VIV_NMS), and with an amplitude table (VIV AMPLITUDE section)
+  !> the four values of the amplitude estimate after them (CD_VIV_NMS_AMP; CD_VIV_Amplitude_Update).
+  INTEGER, PARAMETER, PUBLIC :: CD_VIV_NMS = 2
+  INTEGER, PARAMETER, PUBLIC :: CD_VIV_NMS_AMP = 6
+  !> The smoothing of the amplitude estimate per time step, k_a dt of Thorsen et al. (2016, Eq. 9).
+  REAL(wp), PARAMETER, PUBLIC :: CD_VIV_AMP_KDT = 0.1_wp
+  !> The most rows of one line type's amplitude table.
+  INTEGER, PARAMETER, PUBLIC :: CD_VIV_AMP_MAXP = 32
 
   !> Chord below which a node tangent is undefined (a collapsed pair of neighbours).
   REAL(wp), PARAMETER :: TINY_CHORD = 1.0e-12_wp
@@ -503,6 +516,127 @@ CONTAINS
       d(2) = ad*(f0 + (f1 - f0)*tau/h) - eps*om*(x(1)*x(1) - CD_ONE)*x(2) - om*om*x(1)
     END FUNCTION rhs
   END SUBROUTINE CD_VIV_Wake_Advance
+
+  PURE SUBROUTINE CD_VIV_Amplitude_Update(st, yd, dt)
+    !! One time step dt of the cross-flow amplitude estimate of Thorsen, Saevik and Larsen
+    !! (J. Fluids Struct. 61, 2016, Eq. 8 and 9) at a node, with the cross-flow velocity yd at the
+    !! end of the step. st = (s, y0, y0s, yd_last):
+    !!
+    !!   s       the travel int |y'| dt since the last zero crossing of y' (trapezoidal)
+    !!   y0      the amplitude s/2 of the last half cycle, set at each zero crossing of y' (the
+    !!           node travels 2 y0 between two crossings of a narrow-band response, Eq. 8)
+    !!   y0s     the smoothed amplitude, y0s + k_a dt (y0 - y0s) per step (Eq. 9, k_a = 0.1/dt)
+    !!   yd_last y' at the start of the step
+    !!
+    !! A crossing inside the step is placed by linear interpolation of y', and the travel splits
+    !! there between the half cycle it ends and the next. A step that starts or ends at y' = 0
+    !! is not a crossing (the sign must change).
+    REAL(wp), INTENT(INOUT) :: st(4)
+    REAL(wp), INTENT(IN) :: yd, dt
+    REAL(wp) :: y_old, theta
+    IF (.NOT. (dt > CD_ZERO)) RETURN
+    y_old = st(4)
+    IF ((y_old > CD_ZERO .AND. yd < CD_ZERO) .OR. (y_old < CD_ZERO .AND. yd > CD_ZERO)) THEN
+      theta = y_old/(y_old - yd)
+      st(1) = st(1) + 0.5_wp*ABS(y_old)*theta*dt
+      st(2) = 0.5_wp*st(1)
+      st(1) = 0.5_wp*ABS(yd)*(CD_ONE - theta)*dt
+    ELSE
+      st(1) = st(1) + 0.5_wp*(ABS(y_old) + ABS(yd))*dt
+    END IF
+    st(3) = st(3) + CD_VIV_AMP_KDT*(st(2) - st(3))
+    st(4) = yd
+  END SUBROUTINE CD_VIV_Amplitude_Update
+
+  PURE REAL(wp) FUNCTION CD_VIV_Ambient_Crossflow_Rate(tdir, rd, u) RESULT(yd)
+    !! The cross-flow velocity of a node across the AMBIENT flow, the y' of the amplitude estimate
+    !! (Thorsen et al. 2016, Fig. 1: y across the incoming flow): rd . (t x u_n)/|u_n|, with t the
+    !! unit line tangent along tdir and u_n the ambient velocity u normal to it; 0 without ambient
+    !! normal flow or with a degenerate tangent. Unlike the cross-flow axis of the phase (across the
+    !! relative flow), this axis does not turn with the node's own velocity, which at a response
+    !! velocity comparable to the flow would shorten the projected velocity by U/|v_n|.
+    REAL(wp), INTENT(IN) :: tdir(3), rd(3), u(3)
+    REAL(wp) :: t(3), un(3), s, e(3)
+    yd = CD_ZERO
+    s = SQRT(tdir(1)*tdir(1) + tdir(2)*tdir(2) + tdir(3)*tdir(3))
+    IF (.NOT. (s > TINY_CHORD)) RETURN
+    t = tdir/s
+    un = u - (t(1)*u(1) + t(2)*u(2) + t(3)*u(3))*t
+    s = SQRT(un(1)*un(1) + un(2)*un(2) + un(3)*un(3))
+    IF (.NOT. (s > CD_ZERO)) RETURN
+    e = cross3(t, un)/s
+    yd = rd(1)*e(1) + rd(2)*e(2) + rd(3)*e(3)
+  END FUNCTION CD_VIV_Ambient_Crossflow_Rate
+
+  PURE SUBROUTINE CD_VIV_Check_Amp_Table(amp, amp_n, cl, msg)
+    !! Check the per-element amplitude tables of a line (CD_VIV_Amplitude_Update): amp (3,
+    !! CD_VIV_AMP_MAXP, n_elem) holds amp_n(e) rows (A/D, C_v, drag factor) of element e, cl the
+    !! element lift coefficients. msg is blank when the tables are valid: amp_n in [0,
+    !! CD_VIV_AMP_MAXP], > 0 only where cl > 0, the used rows finite with A/D >= 0 strictly
+    !! increasing, C_v >= 0 and the drag factor > 0, each at most 1e15.
+    REAL(wp), INTENT(IN) :: amp(:, :, :), cl(:)
+    INTEGER, INTENT(IN) :: amp_n(:)
+    CHARACTER(*), INTENT(OUT) :: msg
+    INTEGER :: e, n, i
+    REAL(wp), PARAMETER :: big = 1.0e15_wp
+    msg = ''
+    IF (SIZE(amp, 1) /= 3 .OR. SIZE(amp, 2) /= CD_VIV_AMP_MAXP .OR. SIZE(amp, 3) /= SIZE(cl) .OR. &
+        SIZE(amp_n) /= SIZE(cl)) THEN
+      msg = 'VIV amplitude tables must have shapes (3, 32, n_elem) and (n_elem)'
+      RETURN
+    END IF
+    DO e = 1, SIZE(cl)
+      n = amp_n(e)
+      IF (n < 0 .OR. n > CD_VIV_AMP_MAXP) THEN
+        msg = 'a VIV amplitude table holds 0 to 32 rows'
+        RETURN
+      END IF
+      IF (n == 0) CYCLE
+      IF (.NOT. (cl(e) > CD_ZERO)) THEN
+        msg = 'a VIV amplitude table needs the cross-flow lift (cl > 0) on its element'
+        RETURN
+      END IF
+      DO i = 1, n
+        IF (.NOT. (amp(1, i, e) >= CD_ZERO .AND. amp(1, i, e) <= big .AND. amp(2, i, e) >= CD_ZERO .AND. &
+                   amp(2, i, e) <= big .AND. amp(3, i, e) > CD_ZERO .AND. amp(3, i, e) <= big)) THEN
+          msg = 'VIV amplitude table rows need finite A/D >= 0, C_v >= 0 and drag factor > 0, each at most 1e15'
+          RETURN
+        END IF
+        IF (i > 1) THEN
+          IF (.NOT. (amp(1, i, e) > amp(1, i - 1, e))) THEN
+            msg = 'the A/D of a VIV amplitude table must increase strictly'
+            RETURN
+          END IF
+        END IF
+      END DO
+    END DO
+  END SUBROUTINE CD_VIV_Check_Amp_Table
+
+  PURE REAL(wp) FUNCTION CD_VIV_Table(x, xs, ys) RESULT(y)
+    !! Piecewise-linear interpolation of the table (xs, ys) at x, xs strictly increasing, held
+    !! at the end values outside [xs(1), xs(n)]; a one-row table is constant.
+    REAL(wp), INTENT(IN) :: x, xs(:), ys(:)
+    INTEGER :: n, i
+    n = SIZE(xs)
+    IF (n < 1) THEN
+      y = CD_ZERO
+      RETURN
+    END IF
+    IF (n == 1 .OR. x <= xs(1)) THEN
+      y = ys(1)
+      RETURN
+    END IF
+    IF (x >= xs(n)) THEN
+      y = ys(n)
+      RETURN
+    END IF
+    ! The search stops at the last segment (i = n) also for an x that compares false with
+    ! every row (NaN), which then propagates instead of indexing past the table.
+    DO i = 2, n - 1
+      IF (x <= xs(i)) EXIT
+    END DO
+    y = ys(i - 1) + (ys(i) - ys(i - 1))*(x - xs(i - 1))/(xs(i) - xs(i - 1))
+  END FUNCTION CD_VIV_Table
 
   ELEMENTAL REAL(wp) FUNCTION CD_VIV_Wrap_Phase(phi) RESULT(wrapped)
     !! The phase mapped to [0, 2 pi); the model only uses cos(phi) and sin(. - phi).

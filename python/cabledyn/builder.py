@@ -114,7 +114,9 @@ _CHANNEL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("line", re.compile(r"(tdp)([0-9]+)(s|x|y|z|lay|exc|grd)", re.IGNORECASE)),
     (
         "line",
-        re.compile(r"(ten|curvx|curvy|curv|bendmom|stfmom|torq)([0-9]+)(n[0-9]+)", re.IGNORECASE),
+        re.compile(
+            r"(ten|curvx|curvy|curv|bendmom|stfmom|torq|vivamp)([0-9]+)(n[0-9]+)", re.IGNORECASE
+        ),
     ),
     ("line", re.compile(r"(twist)([0-9]+)(n[0-9]+|)", re.IGNORECASE)),
     ("line", re.compile(r"(vivpow|dragpow|damppow)([0-9]+)(n[0-9]+|)", re.IGNORECASE)),
@@ -227,6 +229,13 @@ class LineType:
         synchronisation lift, so ``cl`` stays ``None`` or 0, and acts on
         finite-EI cables. ``None`` leaves a trailing value out of the row (the
         solver takes 0.2, 0.3 and 12); a value given writes the ones before it.
+    viv_amplitude : list of tuples | None
+        Optional amplitude-dependent VIV coefficients of a type (Thorsen et al.
+        2016), the rows of a ``VIV AMPLITUDE`` section table ``Name AD Cv
+        [CdAmp]`` as ``(AD, Cv)`` or ``(AD, Cv, CdAmp)`` tuples, all of one
+        length, 2 to 32 of them in increasing amplitude ratio ``AD``: ``Cv``
+        replaces ``cl`` at that amplitude (so ``cl`` must be set) and ``CdAmp``
+        multiplies the normal drag coefficient ``cdn`` (1 when left out).
     """
 
     name: str
@@ -253,6 +262,7 @@ class LineType:
     wake_st: float | None = None
     wake_eps: float | None = None
     wake_a: float | None = None
+    viv_amplitude: list[tuple[float, ...]] | None = None
 
 
 @dataclass(eq=False)
@@ -1676,6 +1686,7 @@ class DeckModel:
         wake_st: float | None = None,
         wake_eps: float | None = None,
         wake_a: float | None = None,
+        viv_amplitude: list[tuple[float, ...]] | None = None,
     ) -> LineType:
         """Add a ``LINE TYPES`` row; see :class:`LineType` for the fields.
 
@@ -1716,6 +1727,7 @@ class DeckModel:
             wake_st,
             wake_eps,
             wake_a,
+            None if viv_amplitude is None else [tuple(row) for row in viv_amplitude],
         )
         self._line_types.append(item)
         return item
@@ -2608,6 +2620,7 @@ class DeckModel:
         _emit(out, "STIFFENERS", *self._stiffener_table())
         _emit(out, "VIV", *self._viv_table())
         _emit(out, "WAKE OSCILLATOR", *self._wake_table())
+        _emit(out, "VIV AMPLITUDE", *self._viv_amp_table())
         _emit(out, "FAILURE", *self._failure_table())
         _emit(out, "CONTROL", *self._control_table())
         _emit(out, "EXTERNAL LOADS", *self._external_load_table())
@@ -3008,6 +3021,26 @@ class DeckModel:
             rows.append(row)
         return "Name CL0 St eps A", "(-) (-) (-) (-) (-)", rows
 
+    def _viv_amp_table(self) -> tuple[str, str, list[list[str]]]:
+        rows: list[list[str]] = []
+        for item in self._line_types:
+            if item.viv_amplitude is None:
+                continue
+            what = f"line type {item.name!r}"
+            table = list(item.viv_amplitude)
+            if not table:
+                raise ValueError(f"{what}: viv_amplitude needs at least two rows")
+            widths = {len(row) for row in table}
+            if len(widths) != 1 or not widths <= {2, 3}:
+                raise ValueError(
+                    f"{what}: viv_amplitude rows are (AD, Cv) or (AD, Cv, CdAmp), all of one length"
+                )
+            if item.cl is None:
+                raise ValueError(f"{what}: viv_amplitude scales the synchronisation lift, set cl")
+            for row in table:
+                rows.append([_text(item.name, what), *(_num(value, what) for value in row)])
+        return "Name AD Cv CdAmp", "(-) (-) (-) (-)", rows
+
     def _syrope_table(self) -> tuple[str, str, list[list[str]]]:
         rows = [
             [_line_list(row.lines), _num(row.tmax0, "SYROPE IC"), _num(row.tmean0, "SYROPE IC")]
@@ -3219,6 +3252,12 @@ class _Loader:
             item.wake_st = _f(t[2]) if len(t) >= 3 else None
             item.wake_eps = _f(t[3]) if len(t) >= 4 else None
             item.wake_a = _f(t[4]) if len(t) == 5 else None
+        for row in self.rows("VIV AMPLITUDE"):
+            t = row.tokens
+            item = model.line_types[t[0]]
+            if item.viv_amplitude is None:
+                item.viv_amplitude = []
+            item.viv_amplitude.append(tuple(_f(token) for token in t[1:]))
         for row in self.rows("ATTACHMENTS"):
             t = row.tokens
             arc: float | tuple[float, float, float]
