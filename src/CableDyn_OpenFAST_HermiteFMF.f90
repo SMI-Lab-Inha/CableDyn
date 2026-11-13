@@ -2250,14 +2250,15 @@ CONTAINS
 
   INTEGER FUNCTION CD_HFMF_VIVMirrorSize(self) RESULT(n)
     !! Mirror slots of the VIV state, before the torsion block: the cross-flow shedding phase
-    !! per node, the running mean squares of the cross-flow velocity and acceleration per node
-    !! (interleaved) and the averaging time (3 nn + 1 values); with in-line VIV then the in-line
-    !! phase and mean squares (3 nn more); with the wake oscillator its state (q, dq/dt) per node
-    !! (2 nn more); zero without VIV.
+    !! per node, the running mean squares of the cross-flow velocity and acceleration per node and,
+    !! with amplitude tables, the four values of the amplitude estimate after them (2 or 6 values a
+    !! node, interleaved), and the averaging time (3 nn + 1 values, 7 nn + 1 with amplitude tables);
+    !! with in-line VIV then the in-line phase and mean squares (3 nn more); with the wake
+    !! oscillator its state (q, dq/dt) per node (2 nn more); zero without VIV.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
     n = 0
     IF (.NOT. self%initialized) RETURN
-    IF (self%line%has_viv) n = 3*self%line%nn + 1
+    IF (self%line%has_viv) n = (1 + SIZE(self%line%viv_ms, 1))*self%line%nn + 1
     IF (self%line%has_viv_il) n = n + 3*self%line%nn
     IF (self%line%viv_wake) n = n + 2*self%line%nn
   END FUNCTION CD_HFMF_VIVMirrorSize
@@ -2280,7 +2281,7 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: buf(:)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: i, nf, nh, k
+    INTEGER :: i, nf, nh, k, nv
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     buf = CD_ZERO
     IF (.NOT. self%initialized) THEN
@@ -2337,10 +2338,11 @@ CONTAINS
       k = k + 1 + self%line%ndof
     END IF
     IF (self%line%has_viv) THEN
+      nv = SIZE(self%line%viv_ms, 1)
       buf(k + 1:k + self%line%nn) = self%line%viv_phi
-      buf(k + self%line%nn + 1:k + 3*self%line%nn) = RESHAPE(self%line%viv_ms, [2*self%line%nn])
-      buf(k + 3*self%line%nn + 1) = self%line%viv_tw
-      k = k + 3*self%line%nn + 1
+      buf(k + self%line%nn + 1:k + (1 + nv)*self%line%nn) = RESHAPE(self%line%viv_ms, [nv*self%line%nn])
+      buf(k + (1 + nv)*self%line%nn + 1) = self%line%viv_tw
+      k = k + (1 + nv)*self%line%nn + 1
     END IF
     IF (self%line%has_viv_il) THEN
       buf(k + 1:k + self%line%nn) = self%line%vil_phi
@@ -2374,7 +2376,8 @@ CONTAINS
     REAL(wp), INTENT(IN) :: t
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: i, nf, nh, k, kb, es
+    INTEGER :: i, nf, nh, k, kb, es, nv
+    LOGICAL :: bad_viv
     CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
     IF (.NOT. self%initialized) THEN
@@ -2431,12 +2434,23 @@ CONTAINS
         RETURN
       END IF
     END IF
-    ! and the VIV block's mean squares and averaging time, which cannot be negative
+    ! and the VIV block's mean squares, amplitudes and averaging time, which cannot be negative
+    ! (per node the rows of the motion statistics: the mean squares, rows 1:2, and the amplitudes
+    ! y0, y0s of the amplitude estimate, rows 4:5; its travel and last cross-flow velocity, rows
+    ! 3 and 6, are signed)
     IF (self%line%has_viv) THEN
+      nv = SIZE(self%line%viv_ms, 1)
       kb = SIZE(buf) - CD_HFMF_TorsionMirrorSize(self) - CD_HFMF_VIVMirrorSize(self) + self%line%nn
-      IF (ANY(buf(kb + 1:kb + 2*self%line%nn + 1) < CD_ZERO)) THEN
+      bad_viv = buf(kb + nv*self%line%nn + 1) < CD_ZERO
+      DO i = 1, self%line%nn
+        IF (ANY(buf(kb + (i - 1)*nv + 1:kb + (i - 1)*nv + 2) < CD_ZERO)) bad_viv = .TRUE.
+        IF (nv >= 5) THEN
+          IF (ANY(buf(kb + (i - 1)*nv + 4:kb + (i - 1)*nv + 5) < CD_ZERO)) bad_viv = .TRUE.
+        END IF
+      END DO
+      IF (bad_viv) THEN
         ErrStat = CD_HFMF_BADINPUT
-        ErrMsg = 'CD_HFMF_UnpackMirror: the VIV mean squares and averaging time must be non-negative'
+        ErrMsg = 'CD_HFMF_UnpackMirror: the VIV mean squares, amplitudes and averaging time must be non-negative'
         RETURN
       END IF
     END IF
@@ -2510,13 +2524,14 @@ CONTAINS
     ! the VIV state, with the step-start copy of a recovering step and the in-step phase
     IF (self%line%has_viv) THEN
       self%line%viv_phi = buf(k + 1:k + self%line%nn)
-      self%line%viv_ms = RESHAPE(buf(k + self%line%nn + 1:k + 3*self%line%nn), [2, self%line%nn])
-      self%line%viv_tw = buf(k + 3*self%line%nn + 1)
+      nv = SIZE(self%line%viv_ms, 1)
+      self%line%viv_ms = RESHAPE(buf(k + self%line%nn + 1:k + (1 + nv)*self%line%nn), [nv, self%line%nn])
+      self%line%viv_tw = buf(k + (1 + nv)*self%line%nn + 1)
       self%line%viv_phi_eval = self%line%viv_phi
       self%line%viv_ms_next = self%line%viv_ms
       self%line%ws_recovery_viv_phi = self%line%viv_phi
       self%line%ws_recovery_viv_ms = self%line%viv_ms
-      k = k + 3*self%line%nn + 1
+      k = k + (1 + nv)*self%line%nn + 1
     END IF
     IF (self%line%has_viv_il) THEN
       self%line%vil_phi = buf(k + 1:k + self%line%nn)

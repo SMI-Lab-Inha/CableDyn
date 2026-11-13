@@ -1330,6 +1330,20 @@ target_link_libraries(test_viv_wake_deck PRIVATE cabledyn_core)
 add_test(NAME viv_wake_deck COMMAND test_viv_wake_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(viv_wake_deck PROPERTIES LABELS "fortran;integration;dynamic;viv" TIMEOUT 1200)
 
+# VIV amplitude estimate (Thorsen et al. 2016, Eq. 8 and 9) and the amplitude tables.
+add_executable(test_viv_amplitude_kernel tests/test_viv_amplitude_kernel.f90)
+target_link_libraries(test_viv_amplitude_kernel PRIVATE cabledyn_core)
+add_test(NAME viv_amplitude_kernel COMMAND test_viv_amplitude_kernel)
+set_tests_properties(viv_amplitude_kernel PROPERTIES LABELS "fortran;unit;dynamic;viv")
+
+# Amplitude-dependent VIV coefficients on a deck (VIV AMPLITUDE section), both line kinds: the
+# identity table, the amplitude channel against the response, self-limiting, drag amplification
+# and the refusals.
+add_executable(test_viv_amplitude_deck tests/test_viv_amplitude_deck.f90)
+target_link_libraries(test_viv_amplitude_deck PRIVATE cabledyn_core)
+add_test(NAME viv_amplitude_deck COMMAND test_viv_amplitude_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(viv_amplitude_deck PROPERTIES LABELS "fortran;integration;dynamic;viv" TIMEOUT 1200)
+
 add_executable(test_hermite_viv tests/test_hermite_viv.f90)
 target_link_libraries(test_hermite_viv PRIVATE cabledyn_core)
 add_test(NAME hermite_viv COMMAND test_hermite_viv)

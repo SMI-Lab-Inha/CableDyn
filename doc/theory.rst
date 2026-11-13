@@ -1292,6 +1292,50 @@ steady mid-span A/D of 0.58; with :math:`A` = 0 the uncoupled wake drives it at 
 0.10, and over the lock-in the drag and damping take out the wake lift's power within 0.3 %. The
 wake oscillator acts on finite-EI cables, cross-flow only.
 
+.. _theory-viv-amplitude:
+
+Amplitude-dependent coefficients
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A ``VIV AMPLITUDE`` table makes the cross-flow coefficient of the synchronisation model and the
+normal drag coefficient of a line type functions of the cross-flow amplitude, the form of
+:ref:`Thorsen et al. (2016) <ref-thorsen2016>`, who fit an excitation curve
+:math:`C_v(y_0/D)` to riser tests. Each node estimates its amplitude as they do (their Eq. 8 and
+9):
+
+.. math::
+
+   y_0 = \frac{1}{2}\int_{t_1}^{t_2} |\dot y|\,\mathrm{d}t, \qquad
+   \frac{\mathrm{d}y_0^*}{\mathrm{d}t} = k_a\,(y_0 - y_0^*), \quad k_a = \frac{0.1}{\Delta t},
+
+with :math:`t_1, t_2` the last two zero crossings of :math:`\dot y` (a narrow-band response
+travels :math:`2y_0` between them) and :math:`y_0^*` the smoothed amplitude, which moves a tenth
+of the way to :math:`y_0` in each time step :math:`\Delta t`. :math:`\dot y` is the node's
+velocity across the ambient flow normal to the line, :math:`\dot{\mathbf r}\cdot(\mathbf t\times
+\mathbf u_n)/|\mathbf u_n|`: their :math:`y` is measured across the incoming flow, and the
+cross-flow axis of the phase, across the relative flow, turns with the node's own velocity, which
+at a response velocity comparable to the flow would shorten the projected velocity by
+:math:`U/|\mathbf v_n|` (16 % at the A/D of 0.68 of the gate below). The travel is integrated by
+the trapezoidal rule over each step, with a crossing inside a step placed by linear interpolation;
+the error is that of the rule, :math:`(\omega\Delta t)^2/12` relative for a harmonic response.
+The travel is carried signed, :math:`\int\dot y\,\mathrm{d}t` since the last crossing, whose sign
+is that of the half cycle: a velocity that reverses through a sample at zero ends the half cycle
+there, and one that touches zero without a sign change ends none.
+
+An element takes the mean :math:`y_0^*` of its free nodes (the VIV nodes; a fixed end node has
+none) over its diameter as :math:`A/D` and reads its table there: :math:`C_v` in place of ``Cl`` in the lift, and a factor of ``Cd`` in the
+normal Morison drag, linear between rows and held beyond the end ones. The coefficients of a step
+use the estimate of the committed state, so the Jacobians only scale. The estimate is updated at
+the end of each converged step from the committed one, so a repeated or rewound step updates it
+once, and it is part of the step-recovery, snapshot and checkpoint state.
+
+On the taut line of the wake-oscillator gate (Cl 0.8, ``EI = 0`` and finite-EI alike) the
+smoothed mid-span estimate follows the half peak-to-peak cross-flow displacement of the steady
+response within 0.03 % at A/D 0.68; a table whose :math:`C_v` falls from 0.8 at A/D 0.1 to zero
+at 0.3 holds the response at A/D 0.28; :math:`C_v = 0` with a drag factor 2 settles at the static
+offset of ``Cd`` 2.4 to six digits; and a table with :math:`C_v` = ``Cl`` and factor 1 is the
+line without it, bit for bit.
+
 .. _theory-dry-buoyancy:
 
 Buoyancy and wetting

@@ -57,7 +57,9 @@ MODULE CableDyn_Model
                             CD_Added_Mass_Element, CD_Added_Mass_Element_Matrix, CD_Added_Mass_Element_Force, &
                             CD_Submerged_Fraction
   USE CableDyn_VIV, ONLY: CD_VIV_Node_Lift, CD_VIV_Crossflow_Motion, CD_VIV_Phase_Rate, CD_VIV_Mean_Square, &
-                          CD_VIV_Wrap_Phase, CD_VIV_NM, CD_VIV_TWO_PI, CD_VIV_Node_Inline, CD_VIV_Inline_Phase_Rate
+                          CD_VIV_Wrap_Phase, CD_VIV_NM, CD_VIV_TWO_PI, CD_VIV_Node_Inline, CD_VIV_Inline_Phase_Rate, &
+                          CD_VIV_NMS, CD_VIV_NMS_AMP, CD_VIV_AMP_MAXP, CD_VIV_Amplitude_Update, CD_VIV_Table, &
+                          CD_VIV_Check_Amp_Table, CD_VIV_Ambient_Crossflow_Rate
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_CableGenAlphaWorkspace, CD_Clear_GenAlpha_Workspace, &
                               CD_Cable_Initial_Acceleration, CD_Cable_Gen_Alpha_Step, CD_Cable_Step_Loads, &
                               CD_DYN_OK, CD_DYN_ALLOCFAIL, &
@@ -97,7 +99,8 @@ MODULE CableDyn_Model
   PUBLIC :: CD_Set_Model_Syrope_State
   PUBLIC :: CD_Set_Model_VIV
   PUBLIC :: CD_Latch_Model_VIV_Window
-  PUBLIC :: CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, CD_Model_Has_VIV, CD_Get_Model_VIV_Lift
+  PUBLIC :: CD_Get_Model_VIV_State, CD_Set_Model_VIV_State, CD_Model_Has_VIV, CD_Get_Model_VIV_Lift, &
+            CD_Model_VIV_NMS, CD_Get_Model_VIV_Amplitude
   PUBLIC :: CD_Model_Has_VIV_Inline
   PUBLIC :: CD_Get_Model_Load_Power
   PUBLIC :: CD_Get_Model_Tension
@@ -426,6 +429,15 @@ MODULE CableDyn_Model
     REAL(wp), ALLOCATABLE :: vil_phi(:), vil_ms(:, :), vil_phi_rollback(:), vil_ms_rollback(:, :)
     REAL(wp), ALLOCATABLE :: recovery_vil_phi(:), recovery_vil_ms(:, :)
     REAL(wp), ALLOCATABLE :: vil_phi_eval(:), vil_rate(:), vil_ms_next(:, :), vil_phi_next(:)
+    ! Amplitude-dependent VIV coefficients (CD_Set_Model_VIV amp, amp_n; VIV AMPLITUDE section):
+    ! per element a table of amp_n rows (A/D, C_v, drag factor) in viv_amp(:, 1:amp_n, e) (amp_n 0
+    ! = none). With it viv_ms carries CD_VIV_NMS_AMP rows: after the mean squares, the amplitude
+    ! estimate of Thorsen et al. (2016) per node (CD_VIV_Amplitude_Update, row 5 the smoothed
+    ! amplitude). An element takes C_v and the factor of its normal drag coefficient from its table
+    ! at the mean smoothed amplitude of its VIV nodes over its diameter.
+    LOGICAL :: has_viv_amp = .FALSE.
+    REAL(wp), ALLOCATABLE :: viv_amp(:, :, :)
+    INTEGER, ALLOCATABLE :: viv_amp_n(:)
     TYPE(GenAlphaConfig) :: cfg
     ! Run audit of the committed host steps (CD_Audit_Model_Step), diagnostics only: never part
     ! of the state, of a copy, or of a result. audit_t holds the segment tensions of the last two
@@ -2272,6 +2284,7 @@ CONTAINS
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     LOGICAL, INTENT(IN) :: has_pres
     INTEGER :: istat, k
+    LOGICAL :: reuse
     ok = .FALSE.
     istat = 0
     DO k = 1, 2
@@ -2311,9 +2324,15 @@ CONTAINS
           END IF
         END IF
         IF (model%has_viv) THEN
-          IF (.NOT. sized(s%viv_phi, SIZE(model%viv_phi))) THEN
-            IF (ALLOCATED(s%viv_phi)) DEALLOCATE (s%viv_phi, s%viv_ms)
-            ALLOCATE (s%viv_phi(SIZE(model%viv_phi)), s%viv_ms(2, SIZE(model%viv_phi)), STAT=istat)
+          ! the motion statistics change rows with amplitude tables (CD_Model_VIV_NMS) on a line
+          ! whose VIV is set again after it has stepped: the slot follows both dimensions
+          reuse = sized(s%viv_phi, SIZE(model%viv_phi))
+          IF (reuse) reuse = ALLOCATED(s%viv_ms)
+          IF (reuse) reuse = SIZE(s%viv_ms, 1) == SIZE(model%viv_ms, 1) .AND. SIZE(s%viv_ms, 2) == SIZE(model%viv_ms, 2)
+          IF (.NOT. reuse) THEN
+            IF (ALLOCATED(s%viv_phi)) DEALLOCATE (s%viv_phi)
+            IF (ALLOCATED(s%viv_ms)) DEALLOCATE (s%viv_ms)
+            ALLOCATE (s%viv_phi(SIZE(model%viv_phi)), s%viv_ms(SIZE(model%viv_ms, 1), SIZE(model%viv_phi)), STAT=istat)
             IF (istat /= 0) RETURN
           END IF
         END IF
@@ -3928,7 +3947,7 @@ CONTAINS
   END SUBROUTINE CD_Set_Model_Syrope_State
 
   SUBROUTINE CD_Set_Model_VIV(model, rho, cl, diameter, cf, df, t_window, ErrStat, ErrMsg, phase_seed, &
-                              tangent_reversed, clx, il_alpha, chh)
+                              tangent_reversed, clx, il_alpha, chh, amp, amp_n)
     !! Install the cross-flow VIV model (CableDyn_VIV) on an initialised line. Per element:
     !! the lift coefficient cl (0 = no lift on that element), hydrodynamic diameter, and the
     !! synchronisation centre cf and half-range df of the non-dimensional shedding frequency;
@@ -3950,6 +3969,11 @@ CONTAINS
     !! twice its cross-flow phase. chh (optional, with clx), per element, the coefficient C_hh >= 0
     !! of the higher-harmonic force of Ulveseter et al. (2019), the lift's form at the phase sum
     !! phi_y + phi_x (0: none; > 0 only where clx > 0).
+    !! Amplitude-dependent coefficients (both or neither): amp (3, CD_VIV_AMP_MAXP, n_elem) and
+    !! amp_n (n_elem), per element a table of amp_n rows (0: none; only where cl > 0) of the
+    !! amplitude ratio A/D >= 0 (strictly increasing), the cross-flow coefficient C_v >= 0 that
+    !! replaces cl, and the factor > 0 of the element's normal drag coefficient, at the smoothed
+    !! amplitude estimate of Thorsen et al. (2016); piecewise linear, held beyond the end rows.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: rho, cl(:), diameter(:), cf(:), df(:), t_window
     INTEGER, INTENT(OUT) :: ErrStat
@@ -3960,9 +3984,12 @@ CONTAINS
     !! .FALSE. on a line the reader turned around, whose tangent runs as MoorDyn's
     LOGICAL, INTENT(IN), OPTIONAL :: tangent_reversed
     REAL(wp), INTENT(IN), OPTIONAL :: clx(:), il_alpha(:), chh(:)
-    INTEGER :: n_nodes, n_elem, e, nd, istat, k
+    REAL(wp), INTENT(IN), OPTIONAL :: amp(:, :, :)
+    INTEGER, INTENT(IN), OPTIONAL :: amp_n(:)
+    INTEGER :: n_nodes, n_elem, e, nd, istat, k, nms
     REAL(wp) :: wsum
-    LOGICAL :: want_il
+    LOGICAL :: want_il, want_amp
+    CHARACTER(160) :: amsg
 
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -4036,6 +4063,19 @@ CONTAINS
         RETURN
       END IF
     END IF
+    IF (PRESENT(amp) .NEQV. PRESENT(amp_n)) THEN
+      CALL fail(ErrStat, ErrMsg, 'the VIV amplitude tables amp and amp_n go together')
+      RETURN
+    END IF
+    want_amp = .FALSE.
+    IF (PRESENT(amp)) THEN
+      CALL CD_VIV_Check_Amp_Table(amp, amp_n, cl, amsg)
+      IF (LEN_TRIM(amsg) > 0) THEN
+        CALL fail(ErrStat, ErrMsg, TRIM(amsg))
+        RETURN
+      END IF
+      want_amp = ANY(amp_n > 0)
+    END IF
     CALL clear_viv(model)
     IF (.NOT. ANY(cl > CD_ZERO)) RETURN
     IF (.NOT. (CD_Is_Finite(rho) .AND. rho > CD_ZERO)) THEN
@@ -4060,16 +4100,28 @@ CONTAINS
         RETURN
       END IF
     END DO
+    nms = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, want_amp)
     ALLOCATE (model%viv_cl(n_elem), model%viv_d(n_elem), model%viv_node(n_nodes), model%viv_cf(n_nodes), &
-              model%viv_df(n_nodes), model%viv_dn(n_nodes), model%viv_phi(n_nodes), model%viv_ms(2, n_nodes), &
-              model%viv_phi_rollback(n_nodes), model%viv_ms_rollback(2, n_nodes), &
-              model%recovery_viv_phi(n_nodes), model%recovery_viv_ms(2, n_nodes), &
-              model%viv_phi_eval(n_nodes), model%viv_rate(n_nodes), model%viv_ms_next(2, n_nodes), &
+              model%viv_df(n_nodes), model%viv_dn(n_nodes), model%viv_phi(n_nodes), model%viv_ms(nms, n_nodes), &
+              model%viv_phi_rollback(n_nodes), model%viv_ms_rollback(nms, n_nodes), &
+              model%recovery_viv_phi(n_nodes), model%recovery_viv_ms(nms, n_nodes), &
+              model%viv_phi_eval(n_nodes), model%viv_rate(n_nodes), model%viv_ms_next(nms, n_nodes), &
               model%viv_phi_next(n_nodes), STAT=istat)
     IF (istat /= 0) THEN
       CALL clear_viv(model)
       CALL alloc_fail(ErrStat, ErrMsg, 'VIV storage allocation failed')
       RETURN
+    END IF
+    IF (want_amp) THEN
+      ALLOCATE (model%viv_amp(3, CD_VIV_AMP_MAXP, n_elem), model%viv_amp_n(n_elem), STAT=istat)
+      IF (istat /= 0) THEN
+        CALL clear_viv(model)
+        CALL alloc_fail(ErrStat, ErrMsg, 'VIV amplitude table allocation failed')
+        RETURN
+      END IF
+      model%viv_amp = amp
+      model%viv_amp_n = amp_n
+      model%has_viv_amp = .TRUE.
     END IF
     model%viv_rho = rho
     model%viv_tw = t_window
@@ -4190,8 +4242,8 @@ CONTAINS
       ErrMsg = 'CableDyn_Model: model is not initialized'
       RETURN
     END IF
-    IF (SIZE(phi) /= model%n_dof/3 .OR. SIZE(ms, 1) /= 2 .OR. SIZE(ms, 2) /= model%n_dof/3) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV state outputs must have shapes (n_nodes) and (2, n_nodes)')
+    IF (SIZE(phi) /= model%n_dof/3 .OR. SIZE(ms, 1) /= CD_Model_VIV_NMS(model) .OR. SIZE(ms, 2) /= model%n_dof/3) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV state outputs must have shapes (n_nodes) and (CD_Model_VIV_NMS, n_nodes)')
       RETURN
     END IF
     IF (PRESENT(phi_x) .NEQV. PRESENT(ms_x)) THEN
@@ -4217,13 +4269,14 @@ CONTAINS
   SUBROUTINE CD_Set_Model_VIV_State(model, phi, ms, t_window, ErrStat, ErrMsg, phi_x, ms_x)
     !! Overwrite the committed VIV state from a checkpoint (see CD_Get_Model_VIV_State).
     !! Fails closed on a model without VIV, a shape mismatch, non-finite values, a negative
-    !! mean square or averaging time. A model with in-line VIV needs phi_x and ms_x, one without
-    !! refuses them.
+    !! mean square, amplitude or averaging time. A model with in-line VIV needs phi_x and ms_x,
+    !! one without refuses them.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: phi(:), ms(:, :), t_window
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: phi_x(:), ms_x(:, :)
+    LOGICAL :: neg
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
     IF (.NOT. model%initialized) THEN
@@ -4235,16 +4288,20 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'model carries no VIV state to set')
       RETURN
     END IF
-    IF (SIZE(phi) /= model%n_dof/3 .OR. SIZE(ms, 1) /= 2 .OR. SIZE(ms, 2) /= model%n_dof/3) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV state inputs must have shapes (n_nodes) and (2, n_nodes)')
+    IF (SIZE(phi) /= model%n_dof/3 .OR. SIZE(ms, 1) /= CD_Model_VIV_NMS(model) .OR. SIZE(ms, 2) /= model%n_dof/3) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV state inputs must have shapes (n_nodes) and (CD_Model_VIV_NMS, n_nodes)')
       RETURN
     END IF
     IF (.NOT. (CD_All_Finite(phi) .AND. CD_All_Finite(ms) .AND. CD_Is_Finite(t_window))) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV state mirror must be finite')
       RETURN
     END IF
-    IF (ANY(ms < CD_ZERO) .OR. t_window < CD_ZERO) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV mean squares and averaging time must be non-negative')
+    ! the mean squares (rows 1:2) and the amplitudes y0, y0s (rows 4:5) cannot be negative; the
+    ! travel and the last cross-flow velocity of the amplitude estimate (rows 3, 6) are signed
+    neg = ANY(ms(1:2, :) < CD_ZERO)
+    IF (SIZE(ms, 1) >= 5) neg = neg .OR. ANY(ms(4:5, :) < CD_ZERO)
+    IF (neg .OR. t_window < CD_ZERO) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV mean squares, amplitudes and averaging time must be non-negative')
       RETURN
     END IF
     IF (((PRESENT(phi_x) .AND. PRESENT(ms_x)) .NEQV. model%has_viv_il) .OR. (PRESENT(phi_x) .NEQV. PRESENT(ms_x))) THEN
@@ -4355,7 +4412,7 @@ CONTAINS
         CALL extract_nodal_scalar(model%drag_waterline_z, model, e, wl2)
         CALL CD_Morison_Drag_Element_Force(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                            fluid2(:, 1), fluid2(:, 2), wl2(1), wl2(2), model%drag_rho, &
-                                           model%drag_diameter_elem(e), model%drag_cdn_elem(e), &
+                                           model%drag_diameter_elem(e), elem_cdn(model, e), &
                                            model%drag_cdt_elem(e), f2, ErrStat, ErrMsg(1:lk), inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL add_shares(p_drag)
@@ -4464,6 +4521,82 @@ CONTAINS
     has = model%has_viv
   END FUNCTION CD_Model_Has_VIV
 
+  PURE INTEGER FUNCTION CD_Model_VIV_NMS(model) RESULT(n)
+    !! Rows of the VIV motion statistics of a node in the VIV state (CD_Get_Model_VIV_State ms):
+    !! CD_VIV_NMS_AMP with amplitude tables (the amplitude estimate after the mean squares),
+    !! CD_VIV_NMS otherwise.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    n = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, model%has_viv_amp)
+  END FUNCTION CD_Model_VIV_NMS
+
+  SUBROUTINE CD_Get_Model_VIV_Amplitude(model, amp, ErrStat, ErrMsg)
+    !! The smoothed cross-flow amplitude estimate of every node at the committed state [m]
+    !! (n_nodes; Thorsen et al. 2016, Eq. 9); zero on nodes without VIV and on a model without
+    !! amplitude tables.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: amp(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    amp = CD_ZERO
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_MODEL_NOT_INITIALIZED
+      ErrMsg = 'CableDyn_Model: model is not initialized'
+      RETURN
+    END IF
+    IF (SIZE(amp) /= model%n_dof/3) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV amplitude output must have shape (n_nodes)')
+      RETURN
+    END IF
+    IF (.NOT. model%has_viv_amp) RETURN
+    amp = MERGE(model%viv_ms(5, :), CD_ZERO, model%viv_node)
+  END SUBROUTINE CD_Get_Model_VIV_Amplitude
+
+  PURE REAL(wp) FUNCTION viv_elem_amplitude(model, e) RESULT(y0)
+    !! The smoothed cross-flow amplitude of element e [m]: the mean over its VIV end nodes (zero
+    !! without amplitude tables or VIV nodes).
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    INTEGER :: k, n
+    y0 = CD_ZERO
+    IF (.NOT. model%has_viv_amp) RETURN
+    n = 0
+    DO k = e, e + 1
+      IF (.NOT. model%viv_node(k)) CYCLE
+      y0 = y0 + model%viv_ms(5, k)
+      n = n + 1
+    END DO
+    IF (n > 1) y0 = y0/REAL(n, wp)
+  END FUNCTION viv_elem_amplitude
+
+  PURE REAL(wp) FUNCTION viv_elem_cl(model, e) RESULT(cl)
+    !! The cross-flow coefficient of element e: its LINE TYPES Cl, or with an amplitude table the
+    !! table's C_v at the element's smoothed amplitude over its diameter.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    INTEGER :: n
+    cl = model%viv_cl(e)
+    IF (.NOT. model%has_viv_amp) RETURN
+    n = model%viv_amp_n(e)
+    IF (n == 0) RETURN
+    cl = CD_VIV_Table(viv_elem_amplitude(model, e)/model%viv_d(e), model%viv_amp(1, 1:n, e), model%viv_amp(2, 1:n, e))
+  END FUNCTION viv_elem_cl
+
+  PURE REAL(wp) FUNCTION elem_cdn(model, e) RESULT(cdn)
+    !! The normal drag coefficient of element e: drag_cdn_elem, times the drag factor of its VIV
+    !! amplitude table at the element's smoothed amplitude where it has one.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    INTEGER :: n
+    cdn = model%drag_cdn_elem(e)
+    IF (.NOT. model%has_viv_amp) RETURN
+    n = model%viv_amp_n(e)
+    IF (n == 0) RETURN
+    cdn = cdn*CD_VIV_Table(viv_elem_amplitude(model, e)/model%viv_d(e), model%viv_amp(1, 1:n, e), &
+                           model%viv_amp(3, 1:n, e))
+  END FUNCTION elem_cdn
+
   SUBROUTINE viv_node_coef(model, q, nd, coef, uu, coefx, coefh)
     !! Lift scale of interior node nd at positions q, sum over its two elements of
     !! (1/2 l0_e w_e)(1/2 rho D_e Cl_e) with w_e the wetted fraction under the drag waterline
@@ -4489,7 +4622,7 @@ CONTAINS
         wlb = model%drag_waterline_z(e + 1)
       END IF
       CALL CD_Submerged_Fraction(q(3*e) - wla, q(3*e + 3) - wlb, frac)
-      coef = coef + 0.25_wp*model%viv_rho*model%viv_d(e)*model%viv_cl(e)*model%l0(e)*frac
+      coef = coef + 0.25_wp*model%viv_rho*model%viv_d(e)*viv_elem_cl(model, e)*model%l0(e)*frac
       IF (PRESENT(coefx)) coefx = coefx + 0.25_wp*model%viv_rho*model%viv_d(e)*model%vil_cx(e)*model%l0(e)*frac
       IF (PRESENT(coefh)) coefh = coefh + 0.25_wp*model%viv_rho*model%viv_d(e)*model%vhh_cx(e)*model%l0(e)*frac
     END DO
@@ -4561,7 +4694,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: nd, ia
-    REAL(wp) :: w, yd, ydd, un, coef, uu(3), ms1, ms2, rate_end, xd, xdd, rate_end_x
+    REAL(wp) :: w, yd, ydd, un, coef, uu(3), ms1, ms2, rate_end, xd, xdd, rate_end_x, st(4)
     LOGICAL :: ok
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -4578,6 +4711,15 @@ CONTAINS
       IF (.NOT. ok) THEN
         CALL fail(ErrStat, ErrMsg, 'VIV phase: the neighbours of a node coincide (no line tangent)')
         RETURN
+      END IF
+      IF (model%has_viv_amp) THEN
+        ! the amplitude estimate over the step, from the committed one (repeatable), on the
+        ! cross-flow velocity across the ambient flow
+        st = model%viv_ms(3:6, nd)
+        CALL CD_VIV_Amplitude_Update(st, CD_VIV_Ambient_Crossflow_Rate(model%q_step(ia + 3:ia + 5) - &
+                                                                       model%q_step(ia - 3:ia - 1), &
+                                                                       smoothed(model%v_step, ia), uu), dt)
+        model%viv_ms_next(3:6, nd) = st
       END IF
       ms1 = CD_VIV_Mean_Square(model%viv_ms_next(1, nd), yd, w)
       ms2 = CD_VIV_Mean_Square(model%viv_ms_next(2, nd), ydd, w)
@@ -4652,6 +4794,9 @@ CONTAINS
     IF (ALLOCATED(model%vil_rate)) DEALLOCATE (model%vil_rate)
     IF (ALLOCATED(model%vil_ms_next)) DEALLOCATE (model%vil_ms_next)
     IF (ALLOCATED(model%vil_phi_next)) DEALLOCATE (model%vil_phi_next)
+    IF (ALLOCATED(model%viv_amp)) DEALLOCATE (model%viv_amp)
+    IF (ALLOCATED(model%viv_amp_n)) DEALLOCATE (model%viv_amp_n)
+    model%has_viv_amp = .FALSE.
     model%has_viv_il = .FALSE.
     model%has_viv = .FALSE.
     model%viv_rho = CD_ZERO
@@ -7411,6 +7556,11 @@ CONTAINS
     IF (ErrStat /= CD_MODEL_OK) RETURN
     CALL copy_real1(src%viv_phi_next, work%viv_phi_next, 'viv_phi_next', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
+    work%has_viv_amp = src%has_viv_amp
+    CALL copy_real3(src%viv_amp, work%viv_amp, 'viv_amp', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_int1(src%viv_amp_n, work%viv_amp_n, 'viv_amp_n', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
     work%has_viv_il = src%has_viv_il
     CALL copy_real1(src%vil_cx, work%vil_cx, 'vil_cx', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
@@ -7596,6 +7746,9 @@ CONTAINS
     CALL MOVE_ALLOC(from%viv_rate, to%viv_rate)
     CALL MOVE_ALLOC(from%viv_ms_next, to%viv_ms_next)
     CALL MOVE_ALLOC(from%viv_phi_next, to%viv_phi_next)
+    to%has_viv_amp = from%has_viv_amp
+    CALL MOVE_ALLOC(from%viv_amp, to%viv_amp)
+    CALL MOVE_ALLOC(from%viv_amp_n, to%viv_amp_n)
     to%has_viv_il = from%has_viv_il
     CALL MOVE_ALLOC(from%vil_cx, to%vil_cx)
     CALL MOVE_ALLOC(from%vhh_cx, to%vhh_cx)
@@ -7739,6 +7892,22 @@ CONTAINS
     ALLOCATE (dst(SIZE(src, 1), SIZE(src, 2)), SOURCE=src, STAT=istat)
     IF (istat /= 0) CALL copy_alloc_fail(label, ErrStat, ErrMsg)
   END SUBROUTINE copy_real2
+
+  SUBROUTINE copy_real3(src, dst, label, ErrStat, ErrMsg)
+    REAL(wp), ALLOCATABLE, INTENT(IN) :: src(:, :, :)
+    REAL(wp), ALLOCATABLE, INTENT(INOUT) :: dst(:, :, :)
+    CHARACTER(*), INTENT(IN) :: label
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    INTEGER :: istat
+
+    ErrStat = CD_MODEL_OK
+    ErrMsg = ''
+    IF (.NOT. ALLOCATED(src)) RETURN
+    ALLOCATE (dst(SIZE(src, 1), SIZE(src, 2), SIZE(src, 3)), SOURCE=src, STAT=istat)
+    IF (istat /= 0) CALL copy_alloc_fail(label, ErrStat, ErrMsg)
+  END SUBROUTINE copy_real3
 
   SUBROUTINE copy_alloc_fail(label, ErrStat, ErrMsg)
     CHARACTER(*), INTENT(IN) :: label
@@ -8528,7 +8697,7 @@ CONTAINS
         CALL extract_nodal_scalar(model%drag_waterline_z, model, e, wl2)
         CALL CD_Morison_Drag_Element_Load(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                           fluid2(:, 1), fluid2(:, 2), wl2(1), wl2(2), model%drag_rho, &
-                                          model%drag_diameter_elem(e), model%drag_cdn_elem(e), &
+                                          model%drag_diameter_elem(e), elem_cdn(model, e), &
                                           model%drag_cdt_elem(e), f2, jq2, jv2, ErrStat, ErrMsg(1:lk), &
                                           inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
@@ -8795,7 +8964,7 @@ CONTAINS
         CALL extract_nodal_scalar(model%drag_waterline_z, model, e, wl2)
         CALL CD_Morison_Drag_Element_Force(q2(1:3), q2(4:6), v2(1:3), v2(4:6), model%l0(e), &
                                            fluid2(:, 1), fluid2(:, 2), wl2(1), wl2(2), model%drag_rho, &
-                                           model%drag_diameter_elem(e), model%drag_cdn_elem(e), &
+                                           model%drag_diameter_elem(e), elem_cdn(model, e), &
                                            model%drag_cdt_elem(e), f2, ErrStat, ErrMsg(1:lk), inputs_validated=.TRUE.)
         IF (ErrStat /= 0) RETURN
         CALL scatter_element_vector(force, idx, f2)
@@ -9362,7 +9531,7 @@ CONTAINS
       CALL extract_nodal_scalar(model%drag_waterline_z, model, e, wl2)
       l02(1) = model%l0(e)
       CALL CD_Cable_Morison_Drag_Load(q2, v2, conn1, l02, fluid2, wl2, model%drag_rho, &
-                                      model%drag_diameter_elem(e), model%drag_cdn_elem(e), &
+                                      model%drag_diameter_elem(e), elem_cdn(model, e), &
                                       model%drag_cdt_elem(e), f2, jq2, jv2, ErrStat, ErrMsg)
       IF (ErrStat /= 0) RETURN
       CALL scatter_element_vector(force, idx, f2)

@@ -67,7 +67,9 @@ MODULE CableDyn_HermiteCableDynamic
   USE CableDyn_Linalg, ONLY: CD_Factor_Banded, CD_Solve_Factored_Banded, CD_LINALG_OK
   USE CableDyn_VIV, ONLY: CD_VIV_Lift_Per_Length, CD_VIV_Crossflow_Along, CD_VIV_Phase_Rate, CD_VIV_Mean_Square, &
                           CD_VIV_Wrap_Phase, CD_VIV_TWO_PI, CD_VIV_NM, CD_VIV_Inline_Per_Length, &
-                          CD_VIV_Inline_Phase_Rate, CD_VIV_Wake_Advance
+                          CD_VIV_Inline_Phase_Rate, CD_VIV_Wake_Advance, CD_VIV_NMS, CD_VIV_NMS_AMP, &
+                          CD_VIV_AMP_MAXP, CD_VIV_Amplitude_Update, CD_VIV_Table, CD_VIV_Check_Amp_Table, &
+                          CD_VIV_Ambient_Crossflow_Rate
   USE CableDyn_Hydro, ONLY: CD_Morison_Drag_Per_Length_Jac, CD_Airy_Wave_Kinematics_Precomputed, &
                             CD_Component_Wave_Kinematics, CD_Solve_Dispersion_Wavenumber, CD_HYDRO_OK
   USE CableDyn_SeabedContact, ONLY: CD_Seabed_Normal_Law, CD_Seabed_Contact_Gate, CD_SEABED_CONTACT_BLEND, &
@@ -129,6 +131,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Drag_Element
   PUBLIC :: CD_HermiteCable_VIV_Lift_Element
   PUBLIC :: CD_HermiteCable_Dyn_Load_Power
+  PUBLIC :: CD_HermiteCable_Dyn_VIV_Amplitude
   PUBLIC :: CD_HermiteCable_Axial_Damping_Element
   PUBLIC :: CD_HermiteCable_Axial_Damping_Resultant
   PUBLIC :: CD_HermiteCable_AddedMass_Element
@@ -353,7 +356,16 @@ MODULE CableDyn_HermiteCableDynamic
     LOGICAL :: viv_wake = .FALSE.
     REAL(wp), ALLOCATABLE :: wo_st(:), wo_eps(:), wo_a(:), wo_s(:, :), wo_q_eval(:), wo_ydd0(:), wo_om0(:)
     REAL(wp), ALLOCATABLE :: ws_recovery_wo_s(:, :), snap_wo_s(:, :)
-    REAL(wp), ALLOCATABLE :: Mgb(:, :)                            ! constant global mass (band)
+    ! Amplitude-dependent VIV coefficients (Set_VIV amp, amp_n; VIV AMPLITUDE section): per element
+    ! a table of viv_amp_n rows (A/D, C_v, drag factor) in viv_amp(:, 1:n, e). With it viv_ms carries
+    ! CD_VIV_NMS_AMP rows per node, the amplitude estimate of Thorsen et al. (2016) after the mean
+    ! squares (CD_VIV_Amplitude_Update; row 5 the smoothed amplitude); an element takes C_v in place
+    ! of cl and the factor of its normal drag coefficient at the mean smoothed amplitude of its VIV
+    ! nodes over its diameter.
+    LOGICAL :: has_viv_amp = .FALSE.
+    REAL(wp), ALLOCATABLE :: viv_amp(:, :, :)
+    INTEGER, ALLOCATABLE :: viv_amp_n(:)
+    REAL(wp), ALLOCATABLE :: Mgb(:, :)                           ! constant global mass (band)
     LOGICAL, ALLOCATABLE :: freemask(:), solve_mask(:)
     INTEGER, ALLOCATABLE :: fmap(:)                              ! free -> global DOF index
     REAL(wp), ALLOCATABLE :: q(:), v(:), a(:)                    ! dynamic state
@@ -1111,7 +1123,7 @@ CONTAINS
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Friction_Axial
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, t_window, ErrStat, ErrMsg, phase_seed, tangent_reversed, &
-                                         clx, il_alpha, chh, wake)
+                                         clx, il_alpha, chh, wake, amp, amp_n)
     !! Install the cross-flow VIV synchronisation model (CableDyn_VIV) on a cable with drag:
     !! per element the lift coefficient cl (0: no lift) and the band df/cf, and the running-RMS
     !! averaging time t_window (s; 0 takes 500 steps of the first step). The lift acts on the
@@ -1140,6 +1152,13 @@ CONTAINS
     !! q'' + eps om (q^2 - 1) q' + om^2 q = (A/D) y'' at each lifting node (om = 2 pi St U/D, y''
     !! its cross-flow acceleration); q starts on its limit cycle at the phase seed, q = 2 cos(phi_0)
     !! and q' = 0.
+    !!
+    !! Amplitude-dependent coefficients (both or neither; not with the wake oscillator): amp (3,
+    !! CD_VIV_AMP_MAXP, ne) and amp_n (ne), per element a table of amp_n rows (0: none; only where
+    !! cl > 0) of the amplitude ratio A/D >= 0 (strictly increasing), the cross-flow coefficient
+    !! C_v >= 0 that replaces cl, and the factor > 0 of the element's normal drag coefficient, at
+    !! the smoothed amplitude estimate of Thorsen et al. (2016); piecewise linear, held beyond the
+    !! end rows.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: cl(:), cf(:), df(:), t_window
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1151,10 +1170,14 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: tangent_reversed
     REAL(wp), INTENT(IN), OPTIONAL :: clx(:), il_alpha(:), chh(:)
     REAL(wp), INTENT(IN), OPTIONAL :: wake(:, :)
-    INTEGER :: e, k, ne, nn, es
+    REAL(wp), INTENT(IN), OPTIONAL :: amp(:, :, :)
+    INTEGER, INTENT(IN), OPTIONAL :: amp_n(:)
+    INTEGER :: e, k, ne, nn, es, nms
     REAL(wp) :: wsum, tw_old, rest_old
-    LOGICAL :: had_viv, had_il, want_il, had_wake, want_wake, bad_band
+    LOGICAL :: had_viv, had_il, want_il, had_wake, want_wake, bad_band, had_amp, want_amp
     CHARACTER(LEN=1024) :: em
+    REAL(wp), ALLOCATABLE :: p_amp(:, :, :)
+    INTEGER, ALLOCATABLE :: p_ampn(:)
     REAL(wp), ALLOCATABLE :: a_old(:), o_cl(:), o_k(:), o_cf(:), o_df(:), o_dn(:), o_phi(:), o_phi_eval(:), &
                              o_rate(:), o_ms(:, :), o_ms_next(:, :), o_rec_phi(:), o_rec_ms(:, :), &
                              o_snap_phi(:), o_snap_ms(:, :)
@@ -1266,10 +1289,28 @@ CONTAINS
                  'higher-harmonic force runs at the cross-flow plus in-line phase)'; RETURN
       END IF
     END IF
+    IF (PRESENT(amp) .NEQV. PRESENT(amp_n)) THEN
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: the amplitude tables amp and amp_n go together'; RETURN
+    END IF
+    want_amp = .FALSE.
+    IF (PRESENT(amp)) THEN
+      CALL CD_VIV_Check_Amp_Table(amp, amp_n, cl, em)
+      IF (LEN_TRIM(em) > 0) THEN
+        ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: '//TRIM(em); RETURN
+      END IF
+      want_amp = ANY(amp_n > 0)
+      IF (want_amp .AND. want_wake) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: the amplitude tables act on the synchronisation model, not the '// &
+                 'wake oscillator'; RETURN
+      END IF
+    END IF
     ! the previous configuration and state, kept for a rollback
     had_viv = model%has_viv
     had_il = model%has_viv_il
     had_wake = model%viv_wake
+    had_amp = model%has_viv_amp
     tw_old = model%viv_tw
     rest_old = model%viv_phi_rest
     a_old = model%a
@@ -1283,11 +1324,18 @@ CONTAINS
       IF (had_viv) CALL refresh_acceleration()
       RETURN
     END IF
+    nms = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, want_amp)
     ALLOCATE (model%viv_cl(ne), model%viv_k(ne), model%viv_cf(nn), model%viv_df(nn), model%viv_dn(nn), &
               model%viv_phi(nn), &
-              model%viv_phi_eval(nn), model%viv_rate(nn), model%viv_ms(2, nn), model%viv_ms_next(2, nn), &
-              model%ws_recovery_viv_phi(nn), model%ws_recovery_viv_ms(2, nn), model%snap_viv_phi(nn), &
-              model%snap_viv_ms(2, nn), model%viv_node(nn))
+              model%viv_phi_eval(nn), model%viv_rate(nn), model%viv_ms(nms, nn), model%viv_ms_next(nms, nn), &
+              model%ws_recovery_viv_phi(nn), model%ws_recovery_viv_ms(nms, nn), model%snap_viv_phi(nn), &
+              model%snap_viv_ms(nms, nn), model%viv_node(nn))
+    IF (want_amp) THEN
+      ALLOCATE (model%viv_amp(3, CD_VIV_AMP_MAXP, ne), model%viv_amp_n(ne))
+      model%viv_amp = amp
+      model%viv_amp_n = amp_n
+      model%has_viv_amp = .TRUE.
+    END IF
     model%viv_cl = cl
     model%viv_cf = CD_ZERO
     model%viv_df = CD_ZERO
@@ -1400,6 +1448,7 @@ CONTAINS
       model%has_viv = had_viv
       model%has_viv_il = had_il
       model%viv_wake = had_wake
+      model%has_viv_amp = had_amp
       model%viv_tw = tw_old
       model%viv_phi_rest = rest_old
       model%a = a_old
@@ -1432,6 +1481,7 @@ CONTAINS
         CALL MOVE_ALLOC(w_qe, model%wo_q_eval); CALL MOVE_ALLOC(w_y0, model%wo_ydd0)
         CALL MOVE_ALLOC(w_om, model%wo_om0); CALL MOVE_ALLOC(w_rec, model%ws_recovery_wo_s)
         CALL MOVE_ALLOC(w_snap, model%snap_wo_s)
+        CALL MOVE_ALLOC(p_amp, model%viv_amp); CALL MOVE_ALLOC(p_ampn, model%viv_amp_n)
       ELSE
         CALL MOVE_ALLOC(model%viv_cl, o_cl); CALL MOVE_ALLOC(model%viv_k, o_k)
         CALL MOVE_ALLOC(model%viv_cf, o_cf); CALL MOVE_ALLOC(model%viv_df, o_df)
@@ -1454,6 +1504,7 @@ CONTAINS
         CALL MOVE_ALLOC(model%wo_q_eval, w_qe); CALL MOVE_ALLOC(model%wo_ydd0, w_y0)
         CALL MOVE_ALLOC(model%wo_om0, w_om); CALL MOVE_ALLOC(model%ws_recovery_wo_s, w_rec)
         CALL MOVE_ALLOC(model%snap_wo_s, w_snap)
+        CALL MOVE_ALLOC(model%viv_amp, p_amp); CALL MOVE_ALLOC(model%viv_amp_n, p_ampn)
       END IF
     END SUBROUTINE move_viv
   END SUBROUTINE CD_HermiteCable_Dyn_Set_VIV
@@ -1474,6 +1525,9 @@ CONTAINS
     IF (ALLOCATED(model%vhh_k)) DEALLOCATE (model%vhh_cx, model%vhh_k)
     IF (ALLOCATED(model%wo_s)) DEALLOCATE (model%wo_st, model%wo_eps, model%wo_a, model%wo_s, model%wo_q_eval, &
                                            model%wo_ydd0, model%wo_om0, model%ws_recovery_wo_s, model%snap_wo_s)
+    IF (ALLOCATED(model%viv_amp)) DEALLOCATE (model%viv_amp)
+    IF (ALLOCATED(model%viv_amp_n)) DEALLOCATE (model%viv_amp_n)
+    model%has_viv_amp = .FALSE.
     model%has_viv = .FALSE.
     model%has_viv_il = .FALSE.
     model%viv_wake = .FALSE.
@@ -1503,6 +1557,65 @@ CONTAINS
       model%viv_dn(k) = model%viv_dn(k)/wsum
     END DO
   END SUBROUTINE viv_drag_terms
+
+  PURE REAL(wp) FUNCTION viv_elem_amplitude(model, e) RESULT(y0)
+    !! The smoothed cross-flow amplitude of element e [m]: the mean over its VIV end nodes (zero
+    !! without amplitude tables).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    INTEGER :: k, n
+    y0 = CD_ZERO
+    IF (.NOT. model%has_viv_amp) RETURN
+    n = 0
+    DO k = e, e + 1
+      IF (.NOT. model%viv_node(k)) CYCLE
+      y0 = y0 + model%viv_ms(5, k)
+      n = n + 1
+    END DO
+    IF (n > 1) y0 = y0/REAL(n, wp)
+  END FUNCTION viv_elem_amplitude
+
+  PURE REAL(wp) FUNCTION elem_viv_k(model, e) RESULT(k)
+    !! The lift scale of element e: viv_k = 1/2 rho D Cl, or with an amplitude table 1/2 rho D C_v
+    !! with the table's C_v at the element's smoothed amplitude over its diameter.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    INTEGER :: n
+    k = model%viv_k(e)
+    IF (.NOT. model%has_viv_amp) RETURN
+    n = model%viv_amp_n(e)
+    IF (n == 0) RETURN
+    k = 0.5_wp*model%rho_w*model%diam(e)*CD_VIV_Table(viv_elem_amplitude(model, e)/model%diam(e), &
+                                                      model%viv_amp(1, 1:n, e), model%viv_amp(2, 1:n, e))
+  END FUNCTION elem_viv_k
+
+  PURE REAL(wp) FUNCTION elem_cdn(model, e) RESULT(cdn)
+    !! The normal drag coefficient of element e: cdn, times the drag factor of its VIV amplitude
+    !! table at the element's smoothed amplitude where it has one.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: e
+    INTEGER :: n
+    cdn = model%cdn(e)
+    IF (.NOT. model%has_viv_amp) RETURN
+    n = model%viv_amp_n(e)
+    IF (n == 0) RETURN
+    cdn = cdn*CD_VIV_Table(viv_elem_amplitude(model, e)/model%diam(e), model%viv_amp(1, 1:n, e), &
+                           model%viv_amp(3, 1:n, e))
+  END FUNCTION elem_cdn
+
+  REAL(wp) FUNCTION viv_node_ambient_yd(model, k) RESULT(yd)
+    !! Cross-flow velocity of node k across the ambient flow (current plus a held field) normal to
+    !! its tangent (the slope DOFs) at the committed state, the y' of the amplitude estimate
+    !! (CD_VIV_Ambient_Crossflow_Rate).
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: k
+    REAL(wp) :: uu(3)
+    INTEGER :: i0
+    i0 = 6*(k - 1)
+    uu = model%current
+    IF (model%has_held_field) uu = uu + model%hf_u(:, k)
+    yd = CD_VIV_Ambient_Crossflow_Rate(model%q(i0 + 4:i0 + 6), model%v(i0 + 1:i0 + 3), uu)
+  END FUNCTION viv_node_ambient_yd
 
   REAL(wp) FUNCTION viv_node_ambient_speed(model, k) RESULT(ua)
     !! Speed of the ambient flow (current plus a held field) normal to node k's tangent (the slope
@@ -1623,7 +1736,7 @@ CONTAINS
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: dt
     INTEGER :: k
-    REAL(wp) :: w, yd, ydd, un, ms1, ms2, rate_end, xd, xdd, rate_end_x, sw(2)
+    REAL(wp) :: w, yd, ydd, un, ms1, ms2, rate_end, xd, xdd, rate_end_x, sw(2), st(4), yda
     LOGICAL :: ok, il
     IF (model%viv_wake) THEN
       ! the wake state over the step with the cross-flow acceleration linear from its step-start
@@ -1655,6 +1768,15 @@ CONTAINS
       rate_end_x = CD_ZERO
       IF (il) rate_end_x = model%vil_rate(k)
       CALL viv_node_motion(model, k, yd, ydd, un, ok, xd, xdd)
+      IF (model%has_viv_amp) THEN
+        ! the amplitude estimate over the step on the cross-flow velocity across the ambient flow;
+        ! a non-finite one holds y' (no crossing)
+        st = model%viv_ms(3:6, k)
+        yda = viv_node_ambient_yd(model, k)
+        IF (.NOT. CD_Is_Finite(yda)) yda = st(4)
+        CALL CD_VIV_Amplitude_Update(st, yda, dt)
+        model%viv_ms_next(3:6, k) = st
+      END IF
       IF (ok) THEN
         ms1 = CD_VIV_Mean_Square(model%viv_ms_next(1, k), yd, w)
         ms2 = CD_VIV_Mean_Square(model%viv_ms_next(2, k), ydd, w)
@@ -1712,7 +1834,7 @@ CONTAINS
     IF (model%viv_wake) THEN
       kn = model%viv_k(e)*[model%wo_q_eval(e), model%wo_q_eval(e + 1)]
     ELSE
-      kn = model%viv_k(e)*[COS(model%viv_phi_eval(e)), COS(model%viv_phi_eval(e + 1))]
+      kn = elem_viv_k(model, e)*[COS(model%viv_phi_eval(e)), COS(model%viv_phi_eval(e + 1))]
     END IF
     il = .FALSE.
     IF (model%has_viv_il) il = model%vil_k(e) > CD_ZERO
@@ -1750,7 +1872,7 @@ CONTAINS
     INTEGER :: es
     IF (model%has_wave .AND. model%wv_ncomp > 0) THEN
       CALL CD_HermiteCable_Drag_Element(qe, ve, l0, model%current, model%waterline_z, &
-                                        model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                        model%rho_w, model%diam(e), elem_cdn(model, e), model%cdt(e), &
                                         fdrag, ErrStat=es, ErrMsg=ErrMsg, &
                                         wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval, &
                                         wvc_amp=model%wv_ampc, wvc_om=model%wv_omc, &
@@ -1758,7 +1880,7 @@ CONTAINS
                                         wvc_e2kd=model%wv_e2kd)
     ELSE IF (model%has_wave) THEN
       CALL CD_HermiteCable_Drag_Element(qe, ve, l0, model%current, model%waterline_z, &
-                                        model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                        model%rho_w, model%diam(e), elem_cdn(model, e), model%cdt(e), &
                                         fdrag, ErrStat=es, ErrMsg=ErrMsg, &
                                         wv_h=model%wv_h, wv_om=model%wv_om, wv_k=model%wv_k, &
                                         wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval)
@@ -1766,11 +1888,11 @@ CONTAINS
       CALL CD_HermiteCable_Drag_Element(qe, ve, l0, &
                                         model%current + 0.5_wp*(model%hf_u(:, e) + model%hf_u(:, e + 1)), &
                                         0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1)), &
-                                        model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                        model%rho_w, model%diam(e), elem_cdn(model, e), model%cdt(e), &
                                         fdrag, ErrStat=es, ErrMsg=ErrMsg)
     ELSE
       CALL CD_HermiteCable_Drag_Element(qe, ve, l0, model%current, model%waterline_z, &
-                                        model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                        model%rho_w, model%diam(e), elem_cdn(model, e), model%cdt(e), &
                                         fdrag, ErrStat=es, ErrMsg=ErrMsg)
     END IF
     ErrStat = es
@@ -1803,6 +1925,27 @@ CONTAINS
       lift(:, e + 1) = lift(:, e + 1) + flift(7:9)
     END DO
   END SUBROUTINE CD_HermiteCable_Dyn_VIV_Node_Lift
+
+  SUBROUTINE CD_HermiteCable_Dyn_VIV_Amplitude(model, amp, ErrStat, ErrMsg)
+    !! The smoothed cross-flow amplitude estimate of every node at the committed state [m] (nn;
+    !! Thorsen et al. 2016, Eq. 9); zero on nodes without VIV and on a cable without amplitude
+    !! tables.
+    TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
+    REAL(wp), INTENT(OUT) :: amp(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    amp = CD_ZERO
+    ErrStat = CD_HCDYN_OK; ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_VIV_Amplitude: model not initialised'; RETURN
+    END IF
+    IF (SIZE(amp) /= model%nn) THEN
+      ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_VIV_Amplitude: amp must have one value per node'
+      RETURN
+    END IF
+    IF (.NOT. model%has_viv_amp) RETURN
+    amp = MERGE(model%viv_ms(5, :), CD_ZERO, model%viv_node)
+  END SUBROUTINE CD_HermiteCable_Dyn_VIV_Amplitude
 
   SUBROUTINE CD_HermiteCable_Dyn_Load_Power(model, p_viv, p_drag, p_damp, ErrStat, ErrMsg)
     !! The power [W] three loads deliver to the cable at the committed state, per node (nn): the
@@ -9498,7 +9641,7 @@ CONTAINS
         IF (want_tangent) THEN
           IF (model%has_wave .AND. model%wv_ncomp > 0) THEN
             CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
-                                              model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                              model%rho_w, model%diam(e), elem_cdn(model, e), model%cdt(e), &
                                               fdrag, djq, djv, es, em_e, &
                                               wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval, &
                                               wvc_amp=model%wv_ampc, wvc_om=model%wv_omc, &
@@ -9506,7 +9649,7 @@ CONTAINS
                                               wvc_e2kd=model%wv_e2kd)
           ELSE IF (model%has_wave) THEN
             CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
-                                              model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                              model%rho_w, model%diam(e), elem_cdn(model, e), model%cdt(e), &
                                               fdrag, djq, djv, es, em_e, &
                                               wv_h=model%wv_h, wv_om=model%wv_om, wv_k=model%wv_k, &
                                               wv_depth=model%wv_depth, wv_dir=model%wv_dir, wv_t=t_eval)
@@ -9517,11 +9660,11 @@ CONTAINS
             CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), &
                                               model%current + 0.5_wp*(model%hf_u(:, e) + model%hf_u(:, e + 1)), &
                                               0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1)), &
-                                              model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                              model%rho_w, model%diam(e), elem_cdn(model, e), model%cdt(e), &
                                               fdrag, djq, djv, es, em_e)
           ELSE
             CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
-                                              model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                              model%rho_w, model%diam(e), elem_cdn(model, e), model%cdt(e), &
                                               fdrag, djq, djv, es, em_e)
           END IF
         ELSE
@@ -11043,14 +11186,14 @@ CONTAINS
     IF (model%has_drag) THEN
       IF (model%has_wave .AND. model%wv_ncomp > 0) THEN
         CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
-                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                          model%rho_w, model%diam(e), elem_cdn(model, e), model%cdt(e), &
                                           fload, djq, djv, es, em, wv_depth=model%wv_depth, &
                                           wv_dir=model%wv_dir, wv_t=t_eval, wvc_amp=model%wv_ampc, &
                                           wvc_om=model%wv_omc, wvc_k=model%wv_kc, wvc_ph=model%wv_phc, &
                                           wvc_e2kd=model%wv_e2kd)
       ELSE IF (model%has_wave) THEN
         CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
-                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                          model%rho_w, model%diam(e), elem_cdn(model, e), model%cdt(e), &
                                           fload, djq, djv, es, em, wv_h=model%wv_h, wv_om=model%wv_om, &
                                           wv_k=model%wv_k, wv_depth=model%wv_depth, wv_dir=model%wv_dir, &
                                           wv_t=t_eval)
@@ -11058,10 +11201,10 @@ CONTAINS
         CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), &
                                           model%current + 0.5_wp*(model%hf_u(:, e) + model%hf_u(:, e + 1)), &
                                           0.5_wp*(model%hf_wl(e) + model%hf_wl(e + 1)), model%rho_w, &
-                                          model%diam(e), model%cdn(e), model%cdt(e), fload, djq, djv, es, em)
+                                          model%diam(e), elem_cdn(model, e), model%cdt(e), fload, djq, djv, es, em)
       ELSE
         CALL CD_HermiteCable_Drag_Element(qe, ve, model%l0(e), model%current, model%waterline_z, &
-                                          model%rho_w, model%diam(e), model%cdn(e), model%cdt(e), &
+                                          model%rho_w, model%diam(e), elem_cdn(model, e), model%cdt(e), &
                                           fload, djq, djv, es, em)
       END IF
       IF (es /= CD_HCDYN_OK) THEN

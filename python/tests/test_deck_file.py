@@ -4902,6 +4902,72 @@ def test_wake_oscillator_rows_follow_the_native_checks(base, rows, message):
         DeckFile.from_text(_with_section(text, "WAKE OSCILLATOR", *rows))
 
 
+_LIFT_ROW = "chain 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0"
+
+
+@pytest.mark.parametrize(
+    "rows, expected",
+    [
+        (("chain 0.0 0.8", "chain 0.5 0.0"), [(0.0, 0.8), (0.5, 0.0)]),
+        (
+            ("TypeName AD Cv CdAmp", "chain 0.0 0.8 1.0", "chain 0.4 0.9 1.5", "chain 1.0 0.0 2.0"),
+            [(0.0, 0.8, 1.0), (0.4, 0.9, 1.5), (1.0, 0.0, 2.0)],
+        ),
+    ],
+)
+def test_viv_amplitude_rows_are_read_and_kept(tmp_path, rows, expected):
+    from cabledyn import DeckModel
+
+    text = _with_section(_edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8")), "VIV AMPLITUDE", *rows)
+    DeckFile.from_text(text)
+    path = tmp_path / "amp.dat"
+    path.write_text(text, encoding="utf-8")
+    assert DeckModel.load(path).line_types["chain"].viv_amplitude == expected
+    saved = tmp_path / "saved.dat"
+    DeckModel.load(path).save(saved)
+    assert DeckModel.load(saved).line_types["chain"].viv_amplitude == expected
+
+
+@pytest.mark.parametrize(
+    "lift, rows, message",
+    [
+        (True, ("chain 0.0 0.8 1.0 2.0",), "rows must be: TypeName AD Cv [CdAmp]"),
+        (True, ("chain 0.0",), "rows must be: TypeName AD Cv [CdAmp]"),
+        (True, ("chain 0.0 x", "chain 1.0 0.8"), "must be plain numbers"),
+        (True, ("cable 0.0 0.8", "cable 1.0 0.8"), 'undefined LINE TYPE "cable"'),
+        (False, ("chain 0.0 0.8", "chain 1.0 0.8"), "give the type LINE TYPES Cl > 0"),
+        (True, ("chain 0.0 0.8 1.0", "chain 1.0 0.8"), "must all have the same columns"),
+        (True, ("chain 0.5 0.8", "chain 0.5 0.6"), "must increase strictly in AD"),
+        (True, ("chain -0.1 0.8", "chain 1.0 0.8"), "AD >= 0, Cv >= 0 and CdAmp > 0"),
+        (True, ("chain 0.0 -0.8", "chain 1.0 0.8"), "AD >= 0, Cv >= 0 and CdAmp > 0"),
+        (True, ("chain 0.0 0.8 0.0", "chain 1.0 0.8 1.0"), "AD >= 0, Cv >= 0 and CdAmp > 0"),
+        (True, ("chain 0.0 0.8",), "a table needs at least two"),
+        (True, tuple(f"chain {0.01 * k:.2f} 0.8" for k in range(33)), "more than 32 rows"),
+    ],
+)
+def test_viv_amplitude_rows_follow_the_native_checks(lift, rows, message):
+    text = _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8")) if lift else _DYNAMIC
+    with pytest.raises(DeckFormatError, match=re.escape(message)):
+        DeckFile.from_text(_with_section(text, "VIV AMPLITUDE", *rows))
+
+
+def test_viv_amplitude_channel_needs_a_table():
+    text = _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8"))
+    text = _edit(text, ("FairTen1\n", "FairTen1\nVIVAmp1N2\n"))
+    with pytest.raises(DeckFormatError, match="has no VIV AMPLITUDE table"):
+        DeckFile.from_text(text)
+    DeckFile.from_text(_with_section(text, "VIV AMPLITUDE", "chain 0.0 0.8", "chain 1.0 0.4"))
+    with pytest.raises(DeckFormatError, match="bad VIV amplitude channel"):
+        DeckFile.from_text(
+            _with_section(
+                _edit(text, ("VIVAmp1N2\n", "VIVAmp9N2\n")),
+                "VIV AMPLITUDE",
+                "chain 0.0 0.8",
+                "chain 1.0 0.4",
+            )
+        )
+
+
 def test_wake_oscillator_cl0_zero_is_off_and_needs_no_finite_line():
     # CL0 0 switches nothing on, so it is accepted on an EI = 0 line and next to a lift type
     text = _edit(_DYNAMIC, ("1.674e9 -1.0 1.0e4 1.37", "1.674e9 -1.0 0.0 1.37"))

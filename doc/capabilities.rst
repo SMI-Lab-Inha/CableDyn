@@ -155,6 +155,12 @@ Line and constitutive capability
      - the van der Pol wake oscillator of Facchinetti et al. (2004) with acceleration coupling,
        distributed along finite-EI cables in place of the synchronisation model
        (:ref:`theory-viv-wake`), its state in the checkpoint
+   * - Amplitude-dependent VIV coefficients (``VIV AMPLITUDE`` section ``AD``, ``Cv``, ``CdAmp``)
+     - Standalone and coupled
+     - a table over the cross-flow amplitude of the synchronisation coefficient and a drag
+       factor, read at the amplitude estimate of Thorsen et al. (2016) (``VIVAmp`` channel), on
+       ``EI = 0`` lines and finite-EI cables (:ref:`theory-viv-amplitude`), its state in the
+       checkpoint
 
 Loads and environment
 ---------------------

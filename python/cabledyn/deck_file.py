@@ -82,6 +82,8 @@ _SECTION_ALIASES = {
     "WAKE OSCILLATOR": "WAKE OSCILLATOR",
     "WAKE OSCILLATORS": "WAKE OSCILLATOR",
     "WAKE": "WAKE OSCILLATOR",
+    "VIV AMPLITUDE": "VIV AMPLITUDE",
+    "VIV AMPLITUDES": "VIV AMPLITUDE",
 }
 # Table sections whose rows the native reader takes through a Fortran
 # list-directed READ. Their descriptive and units rows are recognized by the
@@ -104,7 +106,16 @@ _LIST_DIRECTED_SECTIONS = frozenset(
 # Table sections the native reader splits on whitespace and parses column by
 # column (their comma-separated line lists are valid there).
 _WHITESPACE_TABLE_SECTIONS = frozenset(
-    {"FAILURE", "CONTROL", "SYROPE IC", "ATTACHMENTS", "STIFFENERS", "VIV", "WAKE OSCILLATOR"}
+    {
+        "FAILURE",
+        "CONTROL",
+        "SYROPE IC",
+        "ATTACHMENTS",
+        "STIFFENERS",
+        "VIV",
+        "WAKE OSCILLATOR",
+        "VIV AMPLITUDE",
+    }
 )
 _TABLE_SECTIONS = _LIST_DIRECTED_SECTIONS | _WHITESPACE_TABLE_SECTIONS
 _NATIVE_RECORD_LENGTH = 512
@@ -766,6 +777,7 @@ def _parse_line_node_channel(lowered: str) -> tuple[int, int, int, int]:
         ("curv", 5),
         ("bendmom", 6),
         ("stfmom", 12),
+        ("vivamp", 21),
     ):
         if lowered.startswith(keyword):
             prefix = len(keyword)
@@ -840,7 +852,19 @@ def _channel_identity_key(channel: str) -> str:
         component = ("s", "x", "y", "z", "lay", "exc", "grd").index(touchdown.group(2)) + 1
         return f"tdp:{int(touchdown.group(1))}:{component}"
     if lowered.startswith(
-        ("ten", "curv", "bendmom", "stfmom", "l", "torq", "twist", "vivpow", "dragpow", "damppow")
+        (
+            "ten",
+            "curv",
+            "bendmom",
+            "stfmom",
+            "l",
+            "torq",
+            "twist",
+            "vivpow",
+            "dragpow",
+            "damppow",
+            "vivamp",
+        )
     ):
         line_id, node_id, kind, component = _parse_line_node_channel(lowered)
         if line_id > 0 and node_id > 0 and kind > 0:
@@ -3320,6 +3344,81 @@ class DeckFile:
                 wake.add(name)
         return wake
 
+    def _check_viv_amp_section(self, lift_type_names: set[str]) -> set[str]:
+        """Native ``apply_type_viv_amp`` for the VIV AMPLITUDE section; the types with a table.
+
+        Rows ``TypeName AD Cv [CdAmp]`` build a line type's amplitude table: the rows of a type
+        in strictly increasing ``AD >= 0``, ``Cv >= 0`` replacing the type's LINE TYPES ``Cl``
+        and ``CdAmp > 0`` (default 1) multiplying its normal drag coefficient, each at most
+        1e15, all rows of a type with the same columns, 2 to 32 rows. The type needs the
+        synchronisation lift (LINE TYPES ``Cl > 0``).
+        """
+        types = {row.tokens[0].lower(): row.tokens[0] for row in self.line_types}
+        rows_of: dict[str, int] = {}
+        cols_of: dict[str, int] = {}
+        last_ad: dict[str, float] = {}
+        for row in self._rows("VIV AMPLITUDE"):
+            where = self._at(row)
+            if not 3 <= len(row.tokens) <= 4:
+                raise DeckFormatError(
+                    f"{where}: VIV AMPLITUDE rows must be: TypeName AD Cv [CdAmp]"
+                )
+            name = row.tokens[0].lower()
+            if name not in types:
+                raise DeckFormatError(
+                    f'{where}: VIV AMPLITUDE row names undefined LINE TYPE "{row.tokens[0]}"'
+                )
+            label = types[name]
+            if name not in lift_type_names:
+                raise DeckFormatError(
+                    f'{where}: VIV AMPLITUDE of LINE TYPE "{label}" scales its synchronisation '
+                    "lift: give the type LINE TYPES Cl > 0"
+                )
+            if name in rows_of and len(row.tokens) != cols_of[name]:
+                raise DeckFormatError(
+                    f'{where}: the VIV AMPLITUDE rows of LINE TYPE "{label}" must all have the '
+                    "same columns"
+                )
+            if rows_of.get(name, 0) >= 32:
+                raise DeckFormatError(
+                    f'{where}: VIV AMPLITUDE gives LINE TYPE "{label}" more than 32 rows'
+                )
+            values = [0.0, 0.0, 1.0]
+            try:
+                for index, token in enumerate(row.tokens[1:]):
+                    values[index] = _native_float(token)
+            except ValueError as exc:
+                raise DeckFormatError(
+                    f"{where}: VIV AMPLITUDE AD, Cv and CdAmp must be plain numbers"
+                ) from exc
+            if not all(math.isfinite(value) for value in values):
+                raise DeckFormatError(f"{where}: VIV AMPLITUDE AD, Cv and CdAmp must be finite")
+            ad, cv, cd_amp = values
+            if not (
+                0.0 <= ad <= _NATIVE_MAX_COEFFICIENT
+                and 0.0 <= cv <= _NATIVE_MAX_COEFFICIENT
+                and 0.0 < cd_amp <= _NATIVE_MAX_COEFFICIENT
+            ):
+                raise DeckFormatError(
+                    f"{where}: VIV AMPLITUDE needs AD >= 0, Cv >= 0 and CdAmp > 0, each at most "
+                    "1e15"
+                )
+            if name in last_ad and not ad > last_ad[name]:
+                raise DeckFormatError(
+                    f'{where}: the VIV AMPLITUDE rows of LINE TYPE "{label}" must increase '
+                    "strictly in AD"
+                )
+            rows_of[name] = rows_of.get(name, 0) + 1
+            cols_of[name] = len(row.tokens)
+            last_ad[name] = ad
+        for name, count in rows_of.items():
+            if count == 1:
+                raise DeckFormatError(
+                    f'{self._label}: VIV AMPLITUDE gives LINE TYPE "{types[name]}" one row: a '
+                    "table needs at least two"
+                )
+        return set(rows_of)
+
     def _legacy_rod_type_columns(self, record: DeckRecord) -> bool:
         """Return whether ``record`` sits under a legacy CableDyn ROD TYPES header.
 
@@ -4498,6 +4597,12 @@ class DeckFile:
         self._check_stiffeners(line_ids, section_types_by_line, line_type_meta, line_lengths)
         self._check_viv_section(line_type_meta, viv_type_names)
         wake_type_names = self._check_wake_section(viv_type_names)
+        amp_type_names = self._check_viv_amp_section(viv_type_names)
+        amp_lines = {
+            line_id
+            for line_id, section_types in section_types_by_line.items()
+            if {line_type.lower() for line_type in section_types} & amp_type_names
+        }
         # native build_one_hermite_cable and the EI = 0 line wiring: the wake oscillator acts
         # on finite-EI cables only, and a cable takes one VIV model
         for line_id, section_types in section_types_by_line.items():
@@ -5523,6 +5628,34 @@ class DeckFile:
                     raise DeckFormatError(
                         f"{self._label}: OUTPUT {channel!r}: line {line_id} is not torsionally "
                         "restrained (END CONNECTIONS TorsStiffness), so it carries no torque"
+                    )
+                continue
+            if lowered.startswith("vivamp"):
+                # native: VIVAmp<L>N<J>, the smoothed VIV amplitude estimate (VIV AMPLITUDE)
+                line_number, node_id, kind, _ = _parse_line_node_channel(lowered)
+                line_id = str(line_number)
+                if (
+                    node_id == 0
+                    and line_id in line_ids
+                    and re.search(r"[0-9]n0(?![0-9])", lowered) is not None
+                ):
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r}: node numbers start at 1 = End A "
+                        "(MoorDyn numbers from N0)"
+                    )
+                if line_id not in line_ids or kind == 0 or node_id < 1:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r}: bad VIV amplitude channel (use "
+                        "VIVAmp<L>N<J>, with a known line id)"
+                    )
+                if node_id > line_nelems[line_id] + 1:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r} node exceeds the line node count"
+                    )
+                if line_id not in amp_lines:
+                    raise DeckFormatError(
+                        f"{self._label}: OUTPUT {channel!r}: line {line_id} has no VIV AMPLITUDE "
+                        "table, so no amplitude estimate"
                     )
                 continue
             if lowered.startswith(("vivpow", "dragpow", "damppow")):
