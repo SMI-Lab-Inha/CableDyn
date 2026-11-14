@@ -1463,8 +1463,10 @@ with :math:`z_g` the height of the Gauss point and :math:`\eta` the local surfac
 deeper than :math:`D/2` has :math:`w = 1` exactly, so fully submerged elements, the regime of
 lazy-wave cables and moorings, are integrated as before to the bit; across the surface the load
 of a point is continuous in its height (with :math:`\partial w/\partial z_g = -1/D` in the
-tangent). A wet/dry switch per point made it jump, and a static equilibrium with a Gauss point at
-the surface then had no root: a 31 mm cable through the surface in a 0.400 m/s cross current
+tangent). In waves a point above the instantaneous surface inside the band takes the wave velocity
+and acceleration at the surface, where the Wheeler-stretched field vanishes above it. A wet/dry
+switch per point made the load jump, and a static equilibrium with a Gauss point at the surface
+then had no root: a 31 mm cable through the surface in a 0.400 m/s cross current
 failed every static route while 0.399 and 0.401 m/s solved. The Hermite buoyancy recovery is
 exact: the waterline crossings of the cubic
 centreline height are located on each element, and the load :math:`\rho g A` is integrated in

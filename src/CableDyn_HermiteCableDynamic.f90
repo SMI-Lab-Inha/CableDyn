@@ -11749,7 +11749,7 @@ CONTAINS
     REAL(wp), PARAMETER :: G3 = 0.7745966692414834_wp   ! sqrt(3/5)
     REAL(wp) :: gp(NGP), gw(NGP), H(4), dH(4)
     REAL(wp) :: rpos(3), vvel(3), rp(3), speed, tangent(3), urel(3), fpl(3), Jrel(3, 3), Jtan(3, 3)
-    REAL(wp) :: jq3(3, 3), scale, eta_w, uw(3), aw(3), uamb(3), wf, dwf, gww
+    REAL(wp) :: jq3(3, 3), scale, eta_w, uw(3), aw(3), uamb(3), wf, dwf, gww, zsurf
     LOGICAL :: has_wv, has_shared, has_trio, has_cmp, any_wv_arg, want_jac, split
     INTEGER :: g, s, c, sp, cp, a, b, es
     ! the message of a per-Gauss-point CableDyn_Hydro kinematics or Morison call (at most 154
@@ -11844,6 +11844,23 @@ CONTAINS
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Drag_Element: '//TRIM(em2); RETURN
         END IF
         CALL CD_HermiteCable_Immersion(waterline_z + eta_w - rpos(3), diam, wf, dwf)
+        IF (wf > CD_ZERO .AND. rpos(3) - waterline_z > eta_w) THEN
+          ! a centre above the surface inside the band: its immersed part takes the wave velocity at
+          ! the surface (the Wheeler kinematics vanish above it), so the drag stays continuous
+          IF (has_cmp) THEN
+            zsurf = eta_w
+            CALL CD_Component_Wave_Kinematics(rpos(1), rpos(2), zsurf, wv_t, wv_depth, wv_dir, .TRUE., wvc_om, &
+                                              wvc_k, wvc_amp, wvc_ph, eta_w, uw, aw, es, em2, &
+                                              inputs_validated=.TRUE., exp_m2kd=wvc_e2kd)
+          ELSE
+            zsurf = eta_w
+            CALL CD_Airy_Wave_Kinematics_Precomputed(rpos(1), rpos(2), zsurf, wv_t, wv_h, wv_om, wv_k, wv_depth, &
+                                                     wv_dir, .TRUE., eta_w, uw, aw, es, em2)
+          END IF
+          IF (es /= CD_HYDRO_OK) THEN
+            ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Drag_Element: '//TRIM(em2); RETURN
+          END IF
+        END IF
       ELSE
         CALL CD_HermiteCable_Immersion(waterline_z - rpos(3), diam, wf, dwf)
       END IF
@@ -12163,7 +12180,7 @@ CONTAINS
     REAL(wp), PARAMETER :: G3 = 0.7745966692414834_wp   ! sqrt(3/5)
     REAL(wp), PARAMETER :: PI_L = 3.14159265358979323846_wp
     REAL(wp) :: gp(NGP), gw(NGP), H(4), dH(4)
-    REAL(wp) :: rpos(3), rp(3), speed, tangent(3), eta_w, uw(3), aw(3), area, alpha
+    REAL(wp) :: rpos(3), rp(3), speed, tangent(3), eta_w, uw(3), aw(3), area, alpha, zsurf
     REAL(wp) :: fpl(3), Jtan(3, 3), proj(3, 3), projk(3), dalpha, jq3(3, 3), wf, dwf
     LOGICAL :: has_trio, has_cmp, has_held, want_jac
     INTEGER :: g, s, c, sp, cp, a, b, k, es
@@ -12277,6 +12294,23 @@ CONTAINS
       END IF
       CALL CD_HermiteCable_Immersion(waterline_z + eta_w - rpos(3), diam, wf, dwf)
       IF (.NOT. (wf > CD_ZERO)) CYCLE                  ! above the instantaneous surface: dry
+      IF (.NOT. has_held .AND. rpos(3) - waterline_z > eta_w) THEN
+        ! a centre above the surface inside the band: its immersed part takes the field at the
+        ! surface (the Wheeler kinematics vanish above it), so the load stays continuous
+        IF (has_cmp) THEN
+          zsurf = eta_w
+          CALL CD_Component_Wave_Kinematics(rpos(1), rpos(2), zsurf, wv_t, wv_depth, wv_dir, .TRUE., wvc_om, &
+                                            wvc_k, wvc_amp, wvc_ph, eta_w, uw, aw, es, em2, inputs_validated=.TRUE., &
+                                            exp_m2kd=wvc_e2kd)
+        ELSE
+          zsurf = eta_w
+          CALL CD_Airy_Wave_Kinematics_Precomputed(rpos(1), rpos(2), zsurf, wv_t, wv_h, wv_om, wv_k, wv_depth, &
+                                                   wv_dir, .TRUE., eta_w, uw, aw, es, em2)
+        END IF
+        IF (es /= CD_HYDRO_OK) THEN
+          ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_FK_Element: '//TRIM(em2); RETURN
+        END IF
+      END IF
       speed = SQRT(rp(1)**2 + rp(2)**2 + rp(3)**2)
       IF (speed <= 1.0e-12_wp) THEN
         ErrStat = CD_HCDYN_NOCONVERGE
