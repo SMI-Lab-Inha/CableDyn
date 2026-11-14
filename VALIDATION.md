@@ -82,6 +82,7 @@ article's methods, are compared in
 | **L3-H** | Holcombe static lazy-wave experiment | measured marker geometry | position RMSE 1.07–1.89% of suspended length; peak marker-curvature error 0.34–5.54% | end-restraint bracket | Pass |
 | **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.58 N; MAPE 3.11%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
 | **L3-C** | Chaplin Delta Flume riser, still-water natural frequencies | measured modes 1–7 at five tensions | mean error +1.87%, mean absolute 2.28%, largest 4.88% (34 of 35; one outlier reported) | full published table, no fitted parameter | Pass |
+| **L3-W** | SJTU steel catenary riser in 0.2 m/s current, cross-flow VIV | measured r.m.s. strain (25 stations) and dominant frequency | frequency 0.992 vs 1.00 Hz; max r.m.s. strain +7.3%, station mean +3.6% | published coefficient set, no fitted parameter | Pass |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
 | **L4-1** | Coupled platform + mooring | synthetic reference | bit-for-bit | — | Pass |
 | **L4-1b** | VolturnUS-S coupled platform + power cable | OpenFAST v5.0.0 (CompMooring 5 vs 3) | platform DOFs <0.6% (3-seed DLC-1.1); fairlead and anchor <0.001% static | <3% platform | Pass |
@@ -337,6 +338,18 @@ scripts, results, and source provenance are in
   its ratio to the first mode departs from that of every other series, and it is reported
   separately. 128 elements and ten times the unpublished axial stiffness change no frequency by
   more than 3e-6 and 1.2e-4.
+
+- **L3-W SJTU steel catenary riser, cross-flow VIV in uniform current**
+  ([Wang et al., 2014](https://cabledyn.readthedocs.io/en/latest/references.html#ref-wang2014);
+  [Thorsen et al., 2017](https://cabledyn.readthedocs.io/en/latest/references.html#ref-thorsen2017)):
+  the 23.71 m truncated catenary in a 0.2 m/s in-plane current, run with Thorsen et al.'s coefficient
+  set for this case (C_v 0.7, f̂0 0.18 ± 0.08, C_D 1.2, C_M 2). The dominant cross-flow strain
+  frequency 8.25 m from the lower end is 0.992 Hz against the measured 1.00 Hz (their model 1.02 Hz;
+  [Davies et al., 2026](https://cabledyn.readthedocs.io/en/latest/references.html#ref-davies2026),
+  1.04 Hz). The largest r.m.s. strain is 7.3% above the measured largest (theirs 0.4% below) and the
+  mean over the 25 stations 3.6% above. The response has one r.m.s. peak more along the span than
+  the test, as theirs, so the station-by-station ratio scatters. 400 elements and half the time step
+  change the largest r.m.s. strain by 0.2% and 0.1%.
 
 ## L4 coupled OpenFAST
 

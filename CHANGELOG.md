@@ -95,6 +95,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the Delta Flume vertical riser of Chaplin et al. (2005), modes 1-7 at five top tensions, from
   CableDyn's modal analysis with no fitted parameter: 1.87 % high on average over 34 of the 35
   measured values (largest 4.88 %), the 35th, an outlier in the measurements, reported apart.
+- Validation case L3-W (`validation/experiments/wang_scr`): cross-flow VIV of the SJTU truncated
+  steel catenary riser of Wang et al. (2014) in a 0.2 m/s uniform current, with the coefficient set
+  Thorsen et al. (2017) use for it: dominant strain frequency 0.992 Hz against the measured
+  1.00 Hz, largest r.m.s. strain 7.3 % above the measured largest, station mean 3.6 % above;
+  converged in mesh and time step to 0.2 %.
 
 ## [0.4.2] - 2026-11-09
 
