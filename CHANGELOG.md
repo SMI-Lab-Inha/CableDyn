@@ -10,6 +10,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- A finite-EI line may end on a `Free` point: the line's free End B, its position free in the
+  static equilibrium and the dynamics, with the point's Mass/Vol/CdA/Ca acting on the end node as
+  an attachment (a free-hanging cable or riser with a clump). The static solve holds the end on
+  the stretched chord first and then releases it; `Point<P>p…` channels read the end node.
+  Standalone decks of finite-EI lines without bodies, rods or Connect points, every Free point
+  such an end (pinned in bending at both ends, net heavy, from a Coupled/Vessel End A; a torsion
+  restraint at one end is noted and not solved); any other deck,
+  and host-driven decks, keep their behaviour. The Python deck reader takes the same rule.
 - Bending damping of finite-EI cables: the LINE TYPES EI column takes `EI|Bb`, a Kelvin-Voigt
   damping moment `Bb` [N m^2 s] times the curvature rate (in the frame carried with the tangent),
   or `EI|-zeta|f`, the damping ratio of a pure bending mode of frequency `f` (Bb = zeta EI/(pi f)).

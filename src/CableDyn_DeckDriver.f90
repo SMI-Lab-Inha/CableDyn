@@ -499,6 +499,10 @@ MODULE CableDyn_DeckDriver
     ! the Body<N> attachment of a Point3 BODY: stepped as a Free point with the BODY Mass/Vol/CdA/Ca
     ! (copied into mass, vol, cda, ca above), its seabed contact included
     LOGICAL :: point3 = .FALSE.
+    ! a Free point that ends exactly one finite-EI line (its End B) on a standalone deck of
+    ! finite-EI lines: the line's End B is free and the point's Mass/Volume/CdA/CA ride on it as
+    ! an end attachment (promote_free_cable_ends); ptype reads 'fixed' for the static seed only
+    LOGICAL :: free_cable_end = .FALSE.
     INTEGER :: deck_line = 0              ! deck file line of the row, for error messages
   END TYPE
 
@@ -596,6 +600,9 @@ MODULE CableDyn_DeckDriver
     ! the deck's written NodeB (MoorDyn's AttachB) is then End A, otherwise End B. Active line
     ! control reads it for a line with no single host-driven end.
     LOGICAL :: ends_swapped = .FALSE.
+    ! End B on a Free point (promote_free_cable_ends): its position is free in the static
+    ! equilibrium and the dynamics, the point's loads acting as an end attachment
+    LOGICAL :: free_end_b = .FALSE.
     ! ATTACHMENTS (finite-EI lines): one column per discrete attachment -- arc length from
     ! End A [m], mass [kg], displaced volume [m^3], drag area CdA [m^2], added-mass Ca [-],
     ! axial drag area CdAx [m^2] (rows 1-6).
@@ -3385,8 +3392,14 @@ CONTAINS
     ! collapse of the endpoint tangent norm.  Release the interior and tangent DOFs at
     ! dynamic hand-off; only the two endpoint translations remain constrained.  The
     ! planar equilibrium is still an exact three-dimensional initial state by symmetry.
-    ALLOCATE (dynamic_fixed_dofs(6))
-    dynamic_fixed_dofs = [1, 2, 3, ndof - 5, ndof - 4, ndof - 3]
+    IF (ln%free_end_b) THEN
+      ! a free End B (a Free point, promote_free_cable_ends): End A alone is held
+      ALLOCATE (dynamic_fixed_dofs(3))
+      dynamic_fixed_dofs = [ndof - 5, ndof - 4, ndof - 3]
+    ELSE
+      ALLOCATE (dynamic_fixed_dofs(6))
+      dynamic_fixed_dofs = [1, 2, 3, ndof - 5, ndof - 4, ndof - 3]
+    END IF
     IF (has_att) THEN
       w_bare = w_bare_deck
       IF (SIZE(l0) /= SIZE(l0_deck_att)) CALL remap_elem_by_reference_arc(w_bare, l0_deck_att, l0)
@@ -3474,6 +3487,36 @@ CONTAINS
       WRITE (note_text, '(A,I0,A,I0,A,ES10.3,A)') 'line ', ln%id, ': ', SIZE(att_node), &
         ' attachment(s) lumped at the nearest nodes (largest arc offset ', att_offset, ' m)'
       CALL report_note(note_text)
+    END IF
+    IF (ln%free_end_b) THEN
+      ! The static solve held End B at the Free point's deck position (the seed); release it: the
+      ! full-load equilibrium with End B's position free, its loads the end attachment's (the
+      ! point's weight, buoyancy and current drag) and the line's own.
+      BLOCK
+        INTEGER, ALLOCATABLE :: fixed_rel(:), node_rel(:)
+        REAL(wp), ALLOCATABLE :: att_rel(:, :)
+        REAL(wp) :: rel_floor
+        fixed_rel = PACK(fixed_dofs, fixed_dofs > 3)
+        IF (has_att) THEN
+          node_rel = att_node
+          att_rel = ln%att
+        ELSE
+          ALLOCATE (node_rel(0), att_rel(6, 0))
+        END IF
+        CALL attachment_static_polish(l0, ea, ei, w, w, diam, node_rel, att_rel, q_static, fixed_rel, &
+                                      contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0_local, &
+                                      endconn_mode, opts, static_tol, ErrStat, ErrMsg, bathymetry, cur_obj, &
+                                      tol_floor=COUPLED_STATIC_TOL, floor_res=rel_floor, release=.TRUE.)
+        IF (ErrStat /= CD_DECKDRV_OK) THEN
+          ErrMsg = 'CableDyn_DeckDriver: line '//TRIM(int_to_str(ln%id))//': static equilibrium of the free '// &
+                   'End B (released from the Free point''s deck position): '//TRIM(ErrMsg)
+          RETURN
+        END IF
+        fixed_dofs = fixed_rel
+        WRITE (note_text, '(A,I0,A,3ES12.4,A)') 'line ', ln%id, ': free End B at rest at (', &
+          q_static(1:3), ') m in the line frame'
+        CALL report_note(note_text)
+      END BLOCK
     END IF
     ! Dynamic step controls: the deck's dynamic_solver relative tolerance and iteration budget
     ! (default 1e-8 and 30) on every route, standalone or coupled, so that a cable driven by the
@@ -5729,7 +5772,7 @@ CONTAINS
   SUBROUTINE attachment_static_polish(l0, ea, ei, w_bare, w_smear, diam, node, att, q, fixed_dofs, &
                                       contact_enabled, contact_z, frame_cs, endconn_k, endconn_d0, endconn_mode, &
                                       opts, tol, ErrStat, ErrMsg, bathymetry, cur_obj, fell_back, cdn_bare, &
-                                      cdt_bare, tol_floor, floor_res)
+                                      cdt_bare, tol_floor, floor_res, release)
     !! Homotopy from the smeared-attachment equilibrium q to the discrete one: in warm-started
     !! Newton solves the element weights move from w_smear to w_bare while the lumped nodal
     !! forces -(m - rho V) g e_z (-m g e_z for an attachment above the still-water level,
@@ -5771,6 +5814,9 @@ CONTAINS
     !! the next update rule, as the line's own static solve accepts a floor at the coupled static
     !! tolerance; floor_res (optional out) is the relative residual of the returned state when it
     !! lies above tol, and 0 otherwise.
+    !! release (optional, default false) skips the homotopy: q is an equilibrium of the full loads
+    !! with more DOFs held than fixed_dofs holds (a free end seeded held), and the full-load solve
+    !! runs at once, at least once, then to the fixed point as above.
     REAL(wp), INTENT(IN) :: l0(:), ea(:), ei(:), w_bare(:), w_smear(:), diam(:), att(:, :)
     INTEGER, INTENT(IN) :: node(:), fixed_dofs(:), endconn_mode(2)
     REAL(wp), INTENT(INOUT) :: q(:)
@@ -5784,6 +5830,7 @@ CONTAINS
     LOGICAL, INTENT(OUT), OPTIONAL :: fell_back
     REAL(wp), INTENT(IN), OPTIONAL :: cdn_bare(:), cdt_bare(:), tol_floor
     REAL(wp), INTENT(OUT), OPTIONAL :: floor_res
+    LOGICAL, INTENT(IN), OPTIONAL :: release
     INTEGER, PARAMETER :: NSTEP = 8, MAX_FIXED_POINT = 60
     ! the update rules of a solve (solve_with, static_solve)
     INTEGER, PARAMETER :: NEWTON = 1, PSEUDO_TRANSIENT = 2, MERIT = 3
@@ -5797,7 +5844,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: f_att(:), f_drag(:), dry(:), knnode(:), wl(:), q_out(:), curv(:)
     REAL(wp) :: lam, lam_done, dlam, res, change
     INTEGER :: i, ne, fp, n_failed, n_ok, grow_after
-    LOGICAL :: has_drag, converged, newton_failed, grown
+    LOGICAL :: has_drag, converged, newton_failed, grown, release_
     ! which attachments are above the still-water level: in the state the last solve took its
     ! loads at, and in the state it returned
     LOGICAL, ALLOCATABLE :: att_dry(:), att_dry_now(:)
@@ -5855,6 +5902,10 @@ CONTAINS
     n_ok = 0
     grow_after = 2
     grown = .FALSE.
+    release_ = .FALSE.
+    IF (PRESENT(release)) release_ = release
+    IF (release_) lam_done = CD_ONE
+    wl = w_bare   ! the full-load weights (the homotopy sets its own per step)
     DO WHILE (lam_done < CD_ONE)
       lam = MIN(CD_ONE, lam_done + dlam)
       wl = w_bare + (CD_ONE - lam)*(w_smear - w_bare)
@@ -5902,7 +5953,7 @@ CONTAINS
     ! the weight of the other side: the full-load solve is repeated (below) until none does. A
     ! line below the surface (or wholly above it) without attachment drag is done.
     CALL attachment_static_weight(q, node, att, opts, f_att, att_dry_now)
-    IF (.NOT. has_drag .AND. ALL(att_dry_now .EQV. att_dry)) RETURN
+    IF (.NOT. release_ .AND. .NOT. has_drag .AND. ALL(att_dry_now .EQV. att_dry)) RETURN
     DO fp = 1, MAX_FIXED_POINT
       CALL solve_with(CD_ONE, converged, change)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
@@ -14403,6 +14454,7 @@ CONTAINS
       END IF
     END DO
     CALL normalize_stock_endpoint_order(points, lines, sections, types)
+    CALL promote_free_cable_ends(points, lines, sections, types, opts, SIZE(bodies), SIZE(rods), ext_march)
     tors_marched = ext_march
     IF (PRESENT(static_run)) tors_marched = ext_march .AND. .NOT. static_run
     ! A static check marches no step, so it needs no dtM: on the routes no caller marches
@@ -19309,6 +19361,114 @@ CONTAINS
     END FUNCTION finite_ei_by_name
   END SUBROUTINE normalize_stock_endpoint_order
 
+  SUBROUTINE promote_free_cable_ends(points, lines, sections, types, opts, n_bodies, n_rods, caller_driven)
+    !! A Free point that ends exactly one finite-EI line, as its End B, from a Coupled or Vessel
+    !! End A, on a standalone deck whose lines are all finite-EI and that has no other dynamic
+    !! object (BODIES, RODS, other Free/Connect points), becomes the line's free End B: the line's
+    !! End B position is free in the static equilibrium and the dynamics, and the point's Mass,
+    !! Volume, CdA and CA ride on it as an end attachment (ATTACHMENTS at the line's full arc
+    !! length). The line must be pinned in bending at both ends with at most one end restrained in
+    !! torsion, which is then not solved (a free end carries no moment or torque), and the end must
+    !! hang (the point and the line net heavy). The point's type reads 'fixed' from here
+    !! on, so the builder seeds the static solve with the end held, then releases it
+    !! (build_one_hermite_cable): the seed is on the chord from End A towards the deck position, at
+    !! the line's length stretched by its hanging weight (the taut straight line; a vertical span of
+    !! exactly the line's length has no catenary seed). A deck with any Free point that is not such
+    !! an end is left as it is, to the routes that take Free points or refuse them by name.
+    TYPE(DeckPoint), INTENT(INOUT) :: points(:)
+    TYPE(DeckLine), INTENT(INOUT) :: lines(:)
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    TYPE(DeckOptions), INTENT(IN) :: opts
+    INTEGER, INTENT(IN) :: n_bodies, n_rods
+    LOGICAL, INTENT(IN) :: caller_driven
+    INTEGER :: ip, j, nref, jl, ia, k, it
+    INTEGER :: cand_line(SIZE(points))
+    REAL(wp) :: seed(3, SIZE(points)), arc, wline, wpt, ea_min, chord(3), cl
+    REAL(wp), ALLOCATABLE :: att_new(:, :)
+    IF (caller_driven .OR. n_bodies > 0 .OR. n_rods > 0 .OR. SIZE(lines) < 1) RETURN
+    DO j = 1, SIZE(lines)
+      IF (.NOT. finite_ei_line(lines(j)%id)) RETURN
+    END DO
+    cand_line = 0
+    DO ip = 1, SIZE(points)
+      IF (TRIM(points(ip)%ptype) == 'connect') RETURN
+      IF (TRIM(points(ip)%ptype) /= 'free') CYCLE
+      nref = 0
+      jl = 0
+      DO j = 1, SIZE(lines)
+        IF (lines(j)%nodeA == points(ip)%id .OR. lines(j)%nodeB == points(ip)%id) THEN
+          nref = nref + 1
+          jl = j
+        END IF
+      END DO
+      IF (nref /= 1) RETURN
+      IF (lines(jl)%nodeB /= points(ip)%id) RETURN
+      ia = find_point(points, lines(jl)%nodeA)
+      IF (ia < 1) RETURN
+      ! End A must be the driven (or still) fairlead of a deck without dynamic points
+      IF (TRIM(points(ia)%ptype) /= 'coupled' .AND. TRIM(points(ia)%ptype) /= 'vessel') RETURN
+      ! pinned in bending at both ends; a torsion restraint at one end is not solved (a free end
+      ! carries no torque; resolve_one_end_torsion notes it), at both ends the deck is left as it is
+      IF (ANY(lines(jl)%endconn_mode /= CD_ENDCONN_PINNED) .OR. COUNT(lines(jl)%tors_mode /= TORS_FREE) > 1) RETURN
+      ! the hanging weight (line and point, in water) and the softest section
+      wline = CD_ZERO
+      ea_min = HUGE(CD_ONE)
+      arc = CD_ZERO
+      DO k = 1, SIZE(sections)
+        IF (sections(k)%line_id /= lines(jl)%id) CYCLE
+        it = find_type(types, sections(k)%ltype_name)
+        IF (it < 1) RETURN
+        wline = wline + (types(it)%mass - opts%rhoW*QUARTER_PI*types(it)%diam**2)*opts%g*sections(k)%length
+        IF (types(it)%ea > CD_ZERO) ea_min = MIN(ea_min, types(it)%ea)
+        arc = arc + sections(k)%length
+      END DO
+      wpt = (points(ip)%mass - opts%rhoW*points(ip)%vol)*opts%g
+      IF (.NOT. (wline + wpt > CD_ZERO .AND. wpt >= CD_ZERO) .OR. .NOT. ea_min < HUGE(CD_ONE)) RETURN
+      chord = points(ip)%pos - points(ia)%pos
+      cl = NORM2(chord)
+      IF (cl > CD_ZERO) THEN
+        chord = chord/cl
+      ELSE
+        chord = [CD_ZERO, CD_ZERO, -CD_ONE]
+      END IF
+      seed(:, ip) = points(ia)%pos + chord*arc*(CD_ONE + (wline + wpt)/ea_min + 1.0e-9_wp)
+      cand_line(ip) = jl
+    END DO
+    ! every Free point of the deck is a free cable end: promote them
+    DO ip = 1, SIZE(points)
+      jl = cand_line(ip)
+      IF (jl < 1) CYCLE
+      points(ip)%pos = seed(:, ip)
+      points(ip)%free_cable_end = .TRUE.
+      points(ip)%ptype = 'fixed'
+      lines(jl)%free_end_b = .TRUE.
+      IF (points(ip)%mass > CD_ZERO .OR. points(ip)%vol > CD_ZERO .OR. points(ip)%cda > CD_ZERO) THEN
+        arc = SUM(sections%length, MASK=sections%line_id == lines(jl)%id)
+        IF (ALLOCATED(lines(jl)%att)) THEN
+          ALLOCATE (att_new(6, SIZE(lines(jl)%att, 2) + 1))
+          att_new(:, 1:SIZE(lines(jl)%att, 2)) = lines(jl)%att
+        ELSE
+          ALLOCATE (att_new(6, 1))
+        END IF
+        att_new(:, SIZE(att_new, 2)) = [arc, points(ip)%mass, points(ip)%vol, points(ip)%cda, points(ip)%ca, CD_ZERO]
+        CALL MOVE_ALLOC(att_new, lines(jl)%att)
+      END IF
+    END DO
+  CONTAINS
+    LOGICAL FUNCTION finite_ei_line(line_id) RESULT(fin)
+      INTEGER, INTENT(IN) :: line_id
+      INTEGER :: kk, itt
+      fin = .FALSE.
+      DO kk = 1, SIZE(sections)
+        IF (sections(kk)%line_id /= line_id) CYCLE
+        itt = find_type(types, sections(kk)%ltype_name)
+        IF (itt < 1) CYCLE
+        IF (types(itt)%ei > CD_ZERO) fin = .TRUE.
+      END DO
+    END FUNCTION finite_ei_line
+  END SUBROUTINE promote_free_cable_ends
+
   SUBROUTINE reverse_line_sections(sections, line_id)
     !! Reverse the in-deck order of the SECTIONS rows belonging to one line (their
     !! positions in the global array are kept; only the payloads swap).
@@ -20045,9 +20205,11 @@ CONTAINS
       CASE ('fixed', 'coupled', 'vessel')
         ! Mass/Vol/CdA/Ca (clump weight, buoyancy, drag area, added mass) apply only to
         ! Connect/Free points; non-zero values on a held point would be silently ignored,
-        ! so fail closed rather than solve as if they were zero.
-        IF (ABS(points(i)%mass) > CD_ZERO .OR. ABS(points(i)%vol) > CD_ZERO .OR. &
-            ABS(points(i)%cda) > CD_ZERO .OR. ABS(points(i)%ca) > CD_ZERO) THEN
+        ! so fail closed rather than solve as if they were zero. (A free cable end keeps its Free
+        ! point's columns: they act as its end attachment, promote_free_cable_ends.)
+        IF ((ABS(points(i)%mass) > CD_ZERO .OR. ABS(points(i)%vol) > CD_ZERO .OR. &
+             ABS(points(i)%cda) > CD_ZERO .OR. ABS(points(i)%ca) > CD_ZERO) .AND. &
+            .NOT. points(i)%free_cable_end) THEN
           CALL fail(ErrStat, ErrMsg, 'POINT '//'(Fixed/Coupled/Vessel) must not carry '// &
                     'Mass/Vol/CdA/Ca load columns (those apply to Connect/Free points)'); RETURN
         END IF
@@ -33892,6 +34054,22 @@ CONTAINS
             CALL fail(ErrStat, ErrMsg, 'Hermite motion OUTPUT is missing its point'); RETURN
           END IF
           val = motion%q(comp, mi, motion_time_index)
+        ELSE IF (points(pp)%free_cable_end) THEN
+          ! a free cable end (promote_free_cable_ends): the End B node of its line
+          BLOCK
+            INTEGER :: lf
+            CHARACTER(NAMELEN) :: chf
+            CHARACTER(3), PARAMETER :: AXES = 'xyz'
+            DO lf = 1, SIZE(lines)
+              IF (lines(lf)%free_end_b .AND. lines(lf)%nodeB == pidx) EXIT
+            END DO
+            IF (lf > SIZE(lines)) THEN
+              CALL fail(ErrStat, ErrMsg, 'Hermite Point OUTPUT: free cable end without its line'); RETURN
+            END IF
+            WRITE (chf, '(A,I0,A,I0,A)') 'L', lines(lf)%id, 'N', cables(lf)%line%nn, 'p'//AXES(comp:comp)
+            CALL eval_cable_channel(cables(lf), chf, val, ErrStat, ErrMsg, mesh_node=.TRUE.)
+            IF (ErrStat /= CD_DECKDRV_OK) RETURN
+          END BLOCK
         ELSE
           val = points(pp)%pos(comp)
         END IF
@@ -41187,6 +41365,8 @@ CONTAINS
         why = 'its LINE TYPES rows give no GJ (the 14-column row; torsion has no EI/1.3 default)'
       ELSE IF (j < 1) THEN
         why = 'its End B point is undefined'
+      ELSE IF (points(j)%free_cable_end) THEN
+        why = 'its End B is a free end (a Free point)'
       ELSE IF (TRIM(points(j)%ptype) /= 'fixed') THEN
         why = 'it has two moving ends (torsion needs a Fixed End B)'
       ELSE IF (.NOT. opts%alpha_force_blend .AND. (caller_driven .OR. (opts%has_tmax .AND. opts%tmax > CD_ZERO))) THEN

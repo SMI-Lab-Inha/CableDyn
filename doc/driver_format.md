@@ -727,7 +727,7 @@ A POINTS row has 9 columns, `ID Type X Y Z Mass Vol CdA Ca`, or the short 5-colu
 | `Body<N>` | line end on body N; (X,Y,Z) is the attachment offset in the body frame | X,Y,Z offset; the body supplies Mass/Vol/CdA/Ca |
 | `Rod<N>A` / `Rod<N>B` | line end on rod N End A / End B; coordinates come from the `RODS` row | X,Y,Z placeholders; zero Mass/Vol/CdA/Ca |
 | `Connect` | free internal point where ≥ 2 lines meet; its static position is solved from force balance (lines, weight/buoyancy, current drag) starting at the deck seed, and the march starts there | X,Y,Z seed; Mass, Vol, CdA, Ca ≥ 0 |
-| `Free` | free line end (clump or float terminal); a one-line `Connect`, solved the same way | X,Y,Z seed; Mass, Vol, CdA, Ca ≥ 0 |
+| `Free` | free line end (clump or float terminal); a one-line `Connect`, solved the same way; as the End B of a finite-EI line, that line's free end ([below](#free-cable-end)) | X,Y,Z seed; Mass, Vol, CdA, Ca ≥ 0 |
 | `Turbine<J>` / `T<J>` | FAST.Farm coupled point on turbine J (turbine-local coordinates) | X,Y,Z; zero Mass/Vol/CdA/Ca |
 
 For dynamic `Connect`/`Free` points, `Mass` is inertial mass and `(rhoW·Vol − Mass)·g` is a
@@ -741,6 +741,25 @@ of its BODY `Mass`/`Vol` (see the theory manual, Seabed contact).
 `Connect`/`Free` points require `dtM`/`TMax` in the
 standalone driver. Non-zero `Mass`/`Vol`/`CdA`/`Ca` on `Fixed`, `Coupled`, `Vessel`, `Body<N>`,
 `Rod<N>A/B`, or `Turbine<J>` points is rejected.
+
+(free-cable-end)=
+**A free finite-EI cable end.** A `Free` point that ends exactly one finite-EI line, as its End B
+with a `Coupled` or `Vessel` End A (a still hang-off is a `Coupled` point without motion), is that
+line's free end on a standalone deck whose lines are all finite-EI and that has no BODIES,
+RODS or other `Connect`/`Free` point (a free-hanging cable or riser with a clump or a bare end).
+The point's `Mass`, `Vol`, `CdA` and `Ca` act on the line's End B node as an
+[ATTACHMENTS](#attachments-optional-finite-ei-lines) row at the line's full arc length (weight
+and buoyancy, added mass, and drag against current and waves). The static equilibrium is solved
+with the end first held on the chord from End A towards the deck position, at the line's length
+stretched by its hanging weight, then released, so the run starts at the end's rest position
+(the theory manual, Free cable ends); the dynamics leave the end's position free. `Point<P>p…`
+channels read the line's End B node. The line must be pinned in bending at both ends (no
+non-pinned `END CONNECTIONS` row), with at most one end restrained in torsion, which is then not
+solved (a free end carries no moment or torque; the initialisation note says why), and the point
+and the line must be net heavy (the end hangs). A deck in which any `Free` point is not such an end
+(a clamped or buoyant end, a second `Free` point, a `Connect` point), and a host-driven deck
+(OpenFAST, the C API), is left as it was: the routes that take `Free` points run it or refuse a
+finite-EI cable on a `Free` point by name.
 
 `Turbine<J>` points (J ≥ 1) need the turbine reference positions from one of two sources: the
 OpenFAST/FAST.Farm aggregate route, where the host supplies them, or a
@@ -789,6 +808,8 @@ rod end, and `Free`/`Connect`-to-`Coupled` lines are left as written.
   fails with `LINE End A fairlead (NodeA) must not be below End B anchor (NodeB)`. The exceptions
   are a FAST.Farm shared line with both ends on `Turbine<J>` points and a finite-EI line whose End
   B is also a `Coupled`/`Vessel` point (a line between two moving points, driven at both ends).
+- A finite-EI line may end on a `Free` point as its End B on a standalone deck of finite-EI lines
+  (its [free end](#free-cable-end)); that point does not count as a dynamic point.
 - In a deck with dynamic points, line ends may be `Fixed`, `Coupled`, `Vessel`, `Connect`, `Free`,
   `Body<N>`, or `Rod<N>A/B`.
 

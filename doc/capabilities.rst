@@ -128,6 +128,12 @@ Line and constitutive capability
      - Supported
      - lumped at nodes of a finite-EI cable, standalone and coupled, also on a line restrained in
        torsion (they add no polar inertia to its twist)
+   * - Free end of a finite-EI cable (a ``Free`` End B)
+     - Supported with limits
+     - a free-hanging cable or riser with a clump or a bare end, its static rest position solved
+       before the march, on a standalone deck of finite-EI lines without bodies, rods or
+       Connect points, from a Coupled/Vessel End A; host-driven decks refuse it
+       (:ref:`theory-free-cable-end`)
    * - Bend stiffeners (``STIFFENERS``)
      - Supported with limits
      - tapered linear-elastic sleeve over a finite-EI line end, adding bending stiffness, mass,

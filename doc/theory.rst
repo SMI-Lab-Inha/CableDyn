@@ -229,6 +229,35 @@ as closely. The local value is floored at 0.1 % of the root curvature, as the cu
 sign near the tip. On the same hang-off, the curvature along the stiffener follows OrcaFlex
 11.6d with its stiffener given as a line attachment within 0.5 % of the root curvature.
 
+.. _theory-free-cable-end:
+
+Free cable ends
+~~~~~~~~~~~~~~~
+
+A finite-EI line whose End B is a ``Free`` point (:doc:`driver_format`) has that end's position
+free: the dynamic march holds only End A's three positions, and the point's mass, volume, drag
+area and added-mass coefficient act on the End B node as a discrete attachment (the weight
+:math:`(M - \rho V)g`, the added mass :math:`C_a \rho V`, the fluid inertia and the drag of the
+attachment law). The end carries no moment (it is pinned, a natural boundary condition of the
+cubic-Hermite element) and no torque: the line is pinned in bending at both ends, and a torsion
+restraint at its other end is not solved (it is noted, as for a line with two moving ends).
+
+The static equilibrium starts from a held seed: the end is placed on the chord from End A towards
+the point's deck position, at the line's length stretched by its hanging weight,
+:math:`L\,(1 + (W_B + \sum w_i L_i)/EA_{\min})`, so that the seed is the taut straight line (a
+vertical span of exactly the line's length has no catenary seed). The line's static solve (with
+its attachments' homotopy) runs with that end held; the end is then released and the full-load
+equilibrium is solved again with its position free, by the attachment polish's warm-started
+Newton solve with its fallbacks, repeated to the drag and surface fixed point. The run starts at
+that rest position. The line and the point must be net heavy, so that the end hangs.
+
+On a 7 m cable (2.8 kg/m, EA 1e8 N) with a 200 kg clump the top tension is the submerged weight
+of both to 1e-6 relative and the end hangs one stretched length below the top to 1e-7 m; in a
+0.5 m/s current the end rests where the ``EI = 0`` route puts the same deck's ``Free`` point
+(within 2e-5 m at EI 3 N m², and converging to it as EI falls); and a 0.05 m sway of the top at
+0.05 Hz moves the end in phase with an amplitude ratio within 1 % of the Rayleigh estimate of the
+hanging string with its end mass (``tests/test_free_end_deck.f90``).
+
 .. _theory-output-recovery:
 
 Node tension, curvature and bend moment

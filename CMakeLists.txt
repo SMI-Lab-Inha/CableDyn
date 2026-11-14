@@ -1362,6 +1362,9 @@ set_tests_properties(viv_amplitude_deck PROPERTIES LABELS "fortran;integration;d
 add_executable(test_viv_diameter_deck tests/test_viv_diameter_deck.f90)
 target_link_libraries(test_viv_diameter_deck PRIVATE cabledyn_core)
 add_test(NAME viv_diameter_deck COMMAND test_viv_diameter_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+add_executable(test_free_end_deck tests/test_free_end_deck.f90)
+target_link_libraries(test_free_end_deck PRIVATE cabledyn_core)
+add_test(NAME free_end_deck COMMAND test_free_end_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(viv_diameter_deck PROPERTIES LABELS "fortran;integration;dynamic;viv" TIMEOUT 1200)
 
 add_executable(test_hermite_viv tests/test_hermite_viv.f90)
