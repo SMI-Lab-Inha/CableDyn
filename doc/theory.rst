@@ -249,7 +249,11 @@ vertical span of exactly the line's length has no catenary seed). The line's sta
 its attachments' homotopy) runs with that end held; the end is then released and the full-load
 equilibrium is solved again with its position free, by the attachment polish's warm-started
 Newton solve with its fallbacks, repeated to the drag and surface fixed point. The run starts at
-that rest position. The line and the point must be net heavy, so that the end hangs.
+that rest position. The line and the point must be net heavy, so that the end hangs. On a flat
+seabed a seed that would lie below the seabed (a line longer than the depth below End A) is placed
+on the seabed at the same stretched length, out along the deck chord's horizontal direction; an end
+whose point is net heavy and that comes to rest on the seabed is refused, since an attachment has no
+seabed contact of its own on a finite-EI line (a bare end rests on the line's contact).
 
 On a 7 m cable (2.8 kg/m, EA 1e8 N) with a 200 kg clump the top tension is the submerged weight
 of both to 1e-6 relative and the end hangs one stretched length below the top to 1e-7 m; in a

@@ -3513,6 +3513,15 @@ CONTAINS
           RETURN
         END IF
         fixed_dofs = fixed_rel
+        ! a net-heavy point at a free end that comes to rest on the seabed would sink into the line's
+        ! contact (an attachment has no seabed contact of its own): refused by name
+        IF (contact_enabled .AND. q_static(3) <= contact_z) THEN
+          IF (ANY(node_rel == 1 .AND. att_rel(2, :) - opts%rhoW*att_rel(3, :) > CD_ZERO)) THEN
+            CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(ln%id))//': the free End B comes to rest on '// &
+                      'the seabed with the net weight of its Free point, which has no seabed contact of its '// &
+                      'own on a finite-EI line; shorten the line, or end it on a Fixed point there'); RETURN
+          END IF
+        END IF
         WRITE (note_text, '(A,I0,A,3ES12.4,A)') 'line ', ln%id, ': free End B at rest at (', &
           q_static(1:3), ') m in the line frame'
         CALL report_note(note_text)
@@ -19387,6 +19396,8 @@ CONTAINS
     REAL(wp) :: seed(3, SIZE(points)), arc, wline, wpt, ea_min, chord(3), cl
     REAL(wp), ALLOCATABLE :: att_new(:, :)
     IF (caller_driven .OR. n_bodies > 0 .OR. n_rods > 0 .OR. SIZE(lines) < 1) RETURN
+    ! (a bathymetry deck keeps its behaviour: the seed is placed against the flat seabed only)
+    IF (opts%has_bathymetry_file) RETURN
     DO j = 1, SIZE(lines)
       IF (.NOT. finite_ei_line(lines(j)%id)) RETURN
     END DO
@@ -19433,6 +19444,27 @@ CONTAINS
         chord = [CD_ZERO, CD_ZERO, -CD_ONE]
       END IF
       seed(:, ip) = points(ia)%pos + chord*arc*(CD_ONE + (wline + wpt)/ea_min + 1.0e-9_wp)
+      ! a seed below a flat seabed (a line longer than the depth below End A) goes onto the seabed at
+      ! the same stretched length, out along the deck chord's horizontal direction (+x without one),
+      ! so the held seed is still the taut straight line; the release lays the end on the seabed
+      IF (opts%has_wtrdpth .AND. .NOT. opts%has_bathymetry_file) THEN
+        IF (seed(3, ip) < -opts%wtrdpth) THEN
+          BLOCK
+            REAL(wp) :: dlen, dz, hz(2), hn
+            dlen = NORM2(seed(:, ip) - points(ia)%pos)
+            dz = -opts%wtrdpth - points(ia)%pos(3)
+            hz = points(ip)%pos(1:2) - points(ia)%pos(1:2)
+            hn = NORM2(hz)
+            IF (hn > CD_ZERO) THEN
+              hz = hz/hn
+            ELSE
+              hz = [CD_ONE, CD_ZERO]
+            END IF
+            seed(1:2, ip) = points(ia)%pos(1:2) + hz*SQRT(MAX(dlen**2 - dz**2, CD_ZERO))
+            seed(3, ip) = -opts%wtrdpth
+          END BLOCK
+        END IF
+      END IF
       cand_line(ip) = jl
     END DO
     ! every Free point of the deck is a free cable end: promote them
@@ -19513,6 +19545,8 @@ CONTAINS
     REAL(wp) :: tol
 
     ErrStat = 0; ErrMsg = ''
+    ! a free cable end's position is a static seed, not an anchor (promote_free_cable_ends)
+    IF (pt%free_cable_end) RETURN
     tol = CD_Static_Anchor_Seabed_Tolerance(z_floor)
     ! (a relative round-off margin keeps an anchor written exactly one tolerance off inside)
     IF (ABS(pt%pos(3) - z_floor) <= tol*(CD_ONE + 1.0e-9_wp)) THEN

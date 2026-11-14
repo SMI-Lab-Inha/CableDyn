@@ -14,6 +14,10 @@ PROGRAM test_free_end_deck
   !!   F3 a prescribed 0.05 m sway of the top at 0.05 Hz moves the end in phase with an amplitude
   !!      ratio within 1 % of the Rayleigh estimate for a hanging string with a heavy end mass
   !!      (1.104: the end mass with its added mass, a third of the line's, the mean tension);
+  !!   F5 on a flat seabed above which the vertical seed would lie (7.3 m deep, the line 7 m from
+  !!      z = -0.5 m), a 5 kg end in a 0.8 m/s current rests above the seabed (the seed is placed on
+  !!      it, the release lifts the end), and the 200 kg clump, which comes to rest on the seabed
+  !!      (6 m deep), is refused by name (a Free point has no seabed contact on a finite-EI line);
   !!   F4 a Free point that is not such an end leaves the deck as it was, refused by the routes'
   !!      own messages: a clamped End B, a net-buoyant end, a second Free point.
   USE CableDyn_Precision, ONLY: wp
@@ -28,6 +32,7 @@ PROGRAM test_free_end_deck
   CALL check_current()
   CALL check_sway()
   CALL check_refusals()
+  CALL check_seabed()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -89,7 +94,7 @@ CONTAINS
     WRITE (u, '(A)') '---------------------- OPTIONS ----------------------------------------------'
     WRITE (u, '(A)') '1025 rhoW'
     WRITE (u, '(A)') '9.80665 g'
-    WRITE (u, '(A)') '20 WtrDpth'
+    IF (INDEX(opts_extra, 'WtrDpth') == 0) WRITE (u, '(A)') '20 WtrDpth'
     WRITE (u, '(ES12.5,A)') dt, ' dtM'
     WRITE (u, '(ES12.5,A)') tmax, ' TMax'
     CALL put_rows(u, opts_extra)
@@ -266,6 +271,28 @@ CONTAINS
       x(i) = (m(i, 4) - SUM(m(i, i + 1:3)*x(i + 1:3)))/m(i, i)
     END DO
   END SUBROUTINE solve3
+
+  SUBROUTINE check_seabed()
+    REAL(wp), ALLOCATABLE :: tab(:, :)
+    INTEGER :: n
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    CALL write_profile('current_profile.txt', 0.8_wp)
+    CALL write_deck('fed_lift.dat', '3000', 'Free 0.0 0.0 -7.5 5 0.000637 0.01 1.0', '', '', &
+                    '1 Currents;7.3 WtrDpth', 'Point2px;Point2pz', 0.005_wp, 0.2_wp)
+    CALL run('fed_lift.dat', 'fed_lift', ok, msg)
+    CALL require(ok, 'F5 a seed below the seabed, the end at rest above it: '//TRIM(msg))
+    IF (ok) THEN
+      CALL read_out('fed_lift.out', 3, tab, n)
+      IF (n > 0) CALL require(tab(3, n) > -7.3_wp + 0.5_wp .AND. tab(2, n) > 1.0_wp, 'F5 the end lifted and carried')
+    END IF
+    CALL write_profile('current_profile.txt', 0.5_wp)
+    CALL write_deck('fed_ground.dat', '3000', 'Free 0.0 0.0 -7.5 200 0.02548 0.06 1.0', '', '', &
+                    '1 Currents;6.0 WtrDpth', 'FairTen1', 0.005_wp, 0.1_wp)
+    CALL run('fed_ground.dat', 'fed_ground', ok, msg)
+    CALL require(.NOT. ok .AND. INDEX(msg, 'comes to rest on the seabed') > 0, &
+                 'F5 a clump at rest on the seabed refused: '//TRIM(msg))
+  END SUBROUTINE check_seabed
 
   SUBROUTINE check_refusals()
     LOGICAL :: ok

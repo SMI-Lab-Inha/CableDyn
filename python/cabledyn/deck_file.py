@@ -3731,6 +3731,7 @@ class DeckFile:
             self.caller_driven
             or self._rows("BODIES")
             or any(segments != 0 for _, segments in self._rod_rows_by_id().values())
+            or any(_option_key(option.keyword) == "bathymetry" for option in self.options)
         ):
             return set()
         sections: dict[str, list[tuple[str, float]]] = {}

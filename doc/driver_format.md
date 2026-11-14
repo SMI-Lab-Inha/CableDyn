@@ -758,8 +758,11 @@ non-pinned `END CONNECTIONS` row), with at most one end restrained in torsion, w
 solved (a free end carries no moment or torque; the initialisation note says why), and the point
 and the line must be net heavy (the end hangs). A deck in which any `Free` point is not such an end
 (a clamped or buoyant end, a second `Free` point, a `Connect` point), and a host-driven deck
-(OpenFAST, the C API), is left as it was: the routes that take `Free` points run it or refuse a
-finite-EI cable on a `Free` point by name.
+(OpenFAST, the C API) or a `bathymetryFile` deck, is left as it was: the routes that take `Free`
+points run it or refuse a finite-EI cable on a `Free` point by name. On a flat seabed a seed below
+the seabed is placed on it at the same stretched length; an end that comes to rest on the seabed
+with a net-heavy point is refused by name (the point has no seabed contact of its own on a
+finite-EI line), while a bare end rests on the line's own contact.
 
 `Turbine<J>` points (J ≥ 1) need the turbine reference positions from one of two sources: the
 OpenFAST/FAST.Farm aggregate route, where the host supplies them, or a
