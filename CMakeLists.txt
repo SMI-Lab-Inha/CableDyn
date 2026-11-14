@@ -1329,6 +1329,10 @@ add_executable(test_viv_wake_deck tests/test_viv_wake_deck.f90)
 target_link_libraries(test_viv_wake_deck PRIVATE cabledyn_core)
 add_test(NAME viv_wake_deck COMMAND test_viv_wake_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(viv_wake_deck PROPERTIES LABELS "fortran;integration;dynamic;viv" TIMEOUT 1200)
+add_executable(test_static_surface_crossing tests/test_static_surface_crossing.f90)
+target_link_libraries(test_static_surface_crossing PRIVATE cabledyn_core)
+add_test(NAME static_surface_crossing COMMAND test_static_surface_crossing WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(static_surface_crossing PROPERTIES LABELS "fortran;integration;static" TIMEOUT 600)
 
 # VIV amplitude estimate (Thorsen et al. 2016, Eq. 8 and 9) and the amplitude tables.
 add_executable(test_viv_amplitude_kernel tests/test_viv_amplitude_kernel.f90)

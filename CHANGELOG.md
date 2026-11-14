@@ -108,6 +108,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   with its source, its test data and the line-type columns it maps to, and Thorsen et al.'s
   excitation curve as a `VIV AMPLITUDE` table.
 
+### Fixed
+
+- The statics of a finite-EI line through the free surface could fail at isolated currents:
+  each Gauss point's hydrodynamic load switched on and off at the surface, so the residual
+  jumped and an equilibrium with a point at the waterline had no root (a light lazy-wave cable,
+  OD 31 mm, in a cross current solved at 0.399 and 0.401 m/s and failed every static route at
+  0.400 m/s, the load stepping stopping at a drag fraction of 0.997). The drag, added mass, wave
+  Froude-Krylov load and VIV lift of a Gauss point now carry the immersed fraction of its
+  section, linear across one diameter about the surface, with its derivative in the Jacobians.
+  Fully submerged points are unchanged to the bit; the full test suite passes unchanged.
+
 ## [0.4.2] - 2026-11-09
 
 ### Added

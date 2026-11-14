@@ -14,7 +14,12 @@ PROGRAM test_hermite_drag_dynamics
   !!      the same run with drag off conserves it: drag is dissipative and correctly wired,
   !!   C  IMPLICIT-TANGENT CORRECTNESS -- a drag-active step under prescribed motion converges in a
   !!      few Newton iterations; a wrong velocity Jacobian would degrade or break that convergence,
-  !!   D  fail-closed on a bad drag configuration.
+  !!   D  fail-closed on a bad drag configuration;
+  !!   E  SURFACE BAND -- an element through the free surface carries at each Gauss point the
+  !!      immersed fraction of its section (linear across one diameter): the load is continuous as
+  !!      the element moves through the surface in 0.1 mm steps (no jump where a Gauss point
+  !!      crosses it), the position Jacobian with points in the band matches central FD, and a
+  !!      fully submerged element is unchanged to the bit.
   !!
   !! Submerged straight beam along x (planar x-z), pinned ends, so the transverse (z) motion drives
   !! the normal drag. The beam sits well below the waterline, so the submerged fraction is 1.
@@ -39,6 +44,7 @@ PROGRAM test_hermite_drag_dynamics
 
   nfail = 0
   CALL check_drag_element_jacobian()
+  CALL check_drag_surface_band()
   CALL check_drag_arc_length_scaling()
   CALL check_set_drag_rollback()
   CALL check_fully_constrained_validation()
@@ -142,6 +148,54 @@ CONTAINS
     mmag = nan_max_abs(fd(4:6)) + nan_max_abs(fd(10:12))
     CALL require(mmag > 1.0e-6_wp, 'material-tangent (m) DOFs carry consistent drag load (interior motion damped)')
   END SUBROUTINE check_drag_element_jacobian
+
+  SUBROUTINE check_drag_surface_band()
+    !! E: the drag of an element through the free surface (gate E in the header).
+    REAL(wp) :: qe(12), ve(12), fluid(3), fd(12), jq(12, 12), jv(12, 12), f0(12), f1(12)
+    REAL(wp) :: qp(12), fp(12), fm(12), dfd(12, 12), dj(12, 12), djd(12, 12), fs(12), fs2(12)
+    REAL(wp) :: hstep, errq, dz, jump, fmax
+    INTEGER :: i, k, es
+    CHARACTER(300) :: em
+    ! a deformed, moving element from z 0 to 0.2 m (D 0.3 m: the band is +-0.15 m about the surface)
+    qe = [0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.10_wp, 1.02_wp, 0.0_wp, 0.20_wp, 1.0_wp, 0.0_wp, -0.10_wp]
+    ve = [0.10_wp, 0.0_wp, 0.30_wp, 0.20_wp, 0.0_wp, 0.10_wp, -0.10_wp, 0.0_wp, 0.40_wp, 0.05_wp, 0.0_wp, 0.20_wp]
+    fluid = [0.20_wp, 0.0_wp, -0.10_wp]
+    ! the surface at z 0.08: every Gauss point (z within about 0.02-0.18) lies in the band
+    CALL CD_HermiteCable_Drag_Element(qe, ve, 1.0_wp, fluid, 0.08_wp, RHOW, DIAM, CDN, CDT, fd, jq, jv, es, em)
+    CALL require(es == CD_HCDYN_OK, 'E: drag element through the surface accepted: '//TRIM(em))
+    DO i = 1, 12
+      hstep = 1.0e-7_wp*MAX(1.0_wp, ABS(qe(i)))
+      qp = qe; qp(i) = qe(i) + hstep
+      CALL CD_HermiteCable_Drag_Element(qp, ve, 1.0_wp, fluid, 0.08_wp, RHOW, DIAM, CDN, CDT, fp, dj, djd, es, em)
+      qp(i) = qe(i) - hstep
+      CALL CD_HermiteCable_Drag_Element(qp, ve, 1.0_wp, fluid, 0.08_wp, RHOW, DIAM, CDN, CDT, fm, dj, djd, es, em)
+      dfd(:, i) = (fp - fm)/(2.0_wp*hstep)
+    END DO
+    errq = nan_max_abs(jq - dfd)/MAX(1.0_wp, nan_max_abs(dfd))
+    WRITE (*, '(A,ES10.3)') '  [drag, surface band] position Jacobian vs central FD: err = ', errq
+    CALL require(errq < 1.0e-5_wp, 'E: drag position Jacobian in the surface band matches central FD')
+    ! the element moved down through the surface: the largest change between 0.1 mm steps against the
+    ! largest load (a wet/dry switch jumps by a Gauss weight, 5/18 or 8/18 of the element's load)
+    dz = 1.0e-4_wp
+    jump = 0.0_wp
+    fmax = 0.0_wp
+    CALL CD_HermiteCable_Drag_Element(qe, ve, 1.0_wp, fluid, -0.30_wp, RHOW, DIAM, CDN, CDT, f0, ErrStat=es, &
+                                      ErrMsg=em)
+    DO k = 1, 7000
+      CALL CD_HermiteCable_Drag_Element(qe, ve, 1.0_wp, fluid, -0.30_wp + k*dz, RHOW, DIAM, CDN, CDT, f1, &
+                                        ErrStat=es, ErrMsg=em)
+      jump = MAX(jump, nan_max_abs(f1 - f0))
+      fmax = MAX(fmax, nan_max_abs(f1))
+      f0 = f1
+    END DO
+    WRITE (*, '(A,ES10.3)') '  [drag, surface band] largest change per 0.1 mm / largest load = ', jump/fmax
+    CALL require(fmax > 0.0_wp .AND. jump < 2.0e-3_wp*fmax, 'E: the drag is continuous through the free surface')
+    ! fully submerged (every point more than D/2 below the surface at 1 m or at 100 m): the immersed
+    ! fraction is exactly 1, the load unchanged to the bit
+    CALL CD_HermiteCable_Drag_Element(qe, ve, 1.0_wp, fluid, 1.0_wp, RHOW, DIAM, CDN, CDT, fs, ErrStat=es, ErrMsg=em)
+    CALL CD_HermiteCable_Drag_Element(qe, ve, 1.0_wp, fluid, 100.0_wp, RHOW, DIAM, CDN, CDT, fs2, ErrStat=es, ErrMsg=em)
+    CALL require(ALL(fs == fs2), 'E: a fully submerged element is unchanged to the bit')
+  END SUBROUTINE check_drag_surface_band
 
   SUBROUTINE check_drag_arc_length_scaling()
     !! Drag integrates over the DEFORMED cable length, not the reference length: a straight element
