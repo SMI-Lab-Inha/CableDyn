@@ -2141,7 +2141,8 @@ def test_torsion_scope_rules_follow_the_native_checks():
         'point; line 1 ends on a "free" point',
     )
     # one restrained end only, or none, is ignored: the same verdict as the six-column rows (here
-    # the multibody march's, which ends no finite-EI cable on a Free point)
+    # both run: the Free End B is the line's free end, promote_free_cable_ends, and the one-end
+    # restraint is noted, not solved)
     one_end = _edit(_torsion_two_moving("1 A Pinned 1 0 0 Free 0 0 1 0\n"), _NO_TORSION_OUTPUTS)
     six = _edit(
         _torsion_two_moving("1 A Pinned 1 0 0\n"),
@@ -2149,7 +2150,7 @@ def test_torsion_scope_rules_follow_the_native_checks():
         _NO_TORSION_OUTPUTS,
     )
     for deck in (six, one_end):
-        _rejects(deck, "a cable end on a Free/Connect point or a Point3 buoy")
+        DeckFile.from_text(deck)
     both_free = _edit(
         _TORSION,
         (_TORSION_ROW_A, "1 A Rigid 1 0 0 Free 0 0 1 0\n"),
@@ -2985,3 +2986,87 @@ def test_dtm_bound_matches_the_driver(dt, accepted, ei, tmp_path):
     assert _accepted(deck) == accepted
     if not accepted:
         assert "dtM must be at least 1e-100 s" in completed.stderr
+
+
+# ------------------------------------------------------------------ a free cable end
+
+_FREE_END_DECK = """--------------------- CableDyn Input File ---------------------------------
+free cable end
+----------------------- LINE TYPES ------------------------------------------
+TypeName Diam Mass EA BA EI Cd_n Cd_t Ca_n Ca_t
+(-) (m) (kg/m) (N) (N-s) (N-m^2) (-) (-) (-) (-)
+cable 0.048 2.8 1.0e8 0.0 3000 1.2 0.0 1.0 0.0
+----------------------- POINTS ----------------------------------------------
+ID Attachment X Y Z M V CdA CA
+(-) (-) (m) (m) (m) (kg) (m^3) (m^2) (-)
+1 Coupled 0.0 0.0 -0.5 0 0 0 0
+2 Free 0.0 0.0 -7.5 {clump}
+{extra}----------------------- LINES -----------------------------------------------
+ID LineType AttachA AttachB UnstrLen NumSegs Outputs
+(-) (-) (-) (-) (m) (-) (-)
+1 cable 1 2 7.0 70 -
+{endconn}---------------------- OPTIONS ----------------------------------------------
+1025 rhoW
+9.80665 g
+20 WtrDpth
+0.005 dtM
+0.1 TMax
+---------------------- OUTPUTS -----------------------------------------------
+FairTen1
+Point2pz
+END
+------------------------- need this line --------------------------------------
+"""
+_CLAMPED_B = (
+    "--------------------- END CONNECTIONS ----------------------------------\n"
+    "LineID End Stiffness EzX EzY EzZ\n(-) (-) (N-m/rad) (-) (-) (-)\n1 B Rigid 0 0 1\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("clump", "extra", "endconn", "message"),
+    [
+        ("200 0.02548 0.06 1.0", "", "", None),
+        ("0 0 0 0", "", "", None),
+        (
+            "200 0.02548 0.06 1.0",
+            "",
+            _CLAMPED_B.replace("1 B Rigid 0 0 1", "1 B 0.0 0 0 1"),
+            None,
+        ),
+        ("200 0.02548 0.06 1.0", "", _CLAMPED_B, "non-pinned END CONNECTIONS need End B"),
+        ("10 0.5 0.06 1.0", "", "", "not supported on the multibody march"),
+        (
+            "200 0.02548 0.06 1.0",
+            "3 Free 5.0 0.0 -5.0 10 0 0 0\n",
+            "",
+            "not supported on the multibody march",
+        ),
+    ],
+)
+def test_free_cable_end_matches_the_driver(clump, extra, endconn, message, tmp_path):
+    # a finite-EI line on a Free End B: the line's free end, the point's loads an end attachment
+    text = _FREE_END_DECK.format(clump=clump, extra=extra, endconn=endconn)
+    if message is None:
+        DeckFile.from_text(text)
+    else:
+        _rejects(text, message)
+    if not _PARITY_DRIVER or not Path(_PARITY_DRIVER).is_file():
+        return
+    deck = tmp_path / "free_end.dat"
+    deck.write_text(text, encoding="utf-8")
+    completed = subprocess.run(
+        [_PARITY_DRIVER, str(deck), str(tmp_path / "free_end")],
+        capture_output=True,
+        text=True,
+        errors="replace",
+        cwd=tmp_path,
+        timeout=600,
+        env={**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"},
+        check=False,
+    )
+    if message is None:
+        assert completed.returncode == 0, completed.stderr[-600:]
+    else:
+        assert completed.returncode == 1, completed.stderr[-600:]
+        assert message in completed.stderr

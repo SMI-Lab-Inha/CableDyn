@@ -3720,6 +3720,102 @@ class DeckFile:
                 raise DeckFormatError(f"{exc}{_STATIC_CHECK_HINT}") from None
             raise
 
+    def _free_cable_ends(
+        self,
+        point_types: dict[str, str],
+        line_type_meta: dict[str, tuple[float, float, float, float]],
+        effective: Callable[[str, float], float],
+    ) -> set[str]:
+        """The Free points native promote_free_cable_ends makes free finite-EI cable ends."""
+        if (
+            self.caller_driven
+            or self._rows("BODIES")
+            or any(segments != 0 for _, segments in self._rod_rows_by_id().values())
+            or any(_option_key(option.keyword) == "bathymetry" for option in self.options)
+        ):
+            return set()
+        sections: dict[str, list[tuple[str, float]]] = {}
+        ends: dict[str, tuple[str, str]] = {}
+        try:
+            for section in self._rows("SECTIONS"):
+                sections.setdefault(str(_native_int(section.tokens[0])), []).append(
+                    (section.tokens[1].lower(), _native_float(section.tokens[2]))
+                )
+            for row in self.lines:
+                line_key = str(_native_int(row.tokens[0]))
+                a_tok, b_tok = (
+                    (row.tokens[2], row.tokens[3]) if len(row.tokens) == 7 else row.tokens[1:3]
+                )
+                ends[line_key] = (str(_native_int(a_tok)), str(_native_int(b_tok)))
+                if len(row.tokens) == 7:
+                    sections[line_key] = [(row.tokens[1].lower(), _native_float(row.tokens[4]))]
+        except (ValueError, IndexError):
+            return set()
+        if not ends or not all(
+            any(
+                line_type_meta.get(name, (0.0, 0.0, 0.0, 0.0))[3] > 0.0
+                for name, _ in sections.get(k, [])
+            )
+            for k in ends
+        ):
+            return set()
+
+        # pinned in bending at both ends, at most one end restrained in torsion; a numeric zero
+        # stiffness is pinned / free, as native append_end_connection reads it
+        def zero_or(token: str, keywords: frozenset[str]) -> bool:
+            word = _strip_quotes(token).lower()
+            if word in keywords:
+                return True
+            try:
+                return _native_float(word) == 0.0
+            except ValueError:
+                return False
+
+        clamped: set[str] = set()
+        twisted: dict[str, int] = {}
+        for row in self.end_connections:
+            with contextlib.suppress(ValueError, IndexError):
+                line_key = str(_native_int(row.tokens[0]))
+                if not zero_or(row.tokens[2], _PINNED_END_CONNECTIONS):
+                    clamped.add(line_key)
+                if len(row.tokens) >= 10 and not zero_or(row.tokens[6], _FREE_TORSION_KEYWORDS):
+                    twisted[line_key] = twisted.get(line_key, 0) + 1
+        clamped |= {line_key for line_key, count in twisted.items() if count > 1}
+        rho_w, grav = effective("water_density", 1025.0), effective("gravity", 9.80665)
+        rows = {str(_native_int(row.tokens[0])): row for row in self.points}
+        promoted: set[str] = set()
+        for point_id, point_type in point_types.items():
+            if point_type == "connect":
+                return set()
+            if point_type != "free":
+                continue
+            refs = [k for k, pair in ends.items() if point_id in pair]
+            if len(refs) != 1 or ends[refs[0]][1] != point_id:
+                return set()
+            line_key = refs[0]
+            if (
+                point_types.get(ends[line_key][0], "") not in {"coupled", "vessel"}
+                or line_key in clamped
+            ):
+                return set()
+            if any(name not in line_type_meta for name, _ in sections.get(line_key, [])):
+                return set()
+            values = [_native_float(tok) for tok in rows[point_id].tokens[2:]]
+            mass, vol = (values[3], values[4]) if len(values) == 7 else (0.0, 0.0)
+            w_line = sum(
+                (line_type_meta[name][1] - rho_w * 0.25 * math.pi * line_type_meta[name][0] ** 2)
+                * grav
+                * length
+                for name, length in sections.get(line_key, [])
+            )
+            w_point = (mass - rho_w * vol) * grav
+            if not (w_line + w_point > 0.0 and w_point >= 0.0):
+                return set()
+            if not any(line_type_meta[name][2] > 0.0 for name, _ in sections.get(line_key, [])):
+                return set()
+            promoted.add(point_id)
+        return promoted
+
     def _validate(self) -> None:
         required = {"LINE TYPES", "POINTS", "LINES"}
         if not self._rows("LINES") and (self._rows("RODS") or self._rows("BODIES")):
@@ -4383,6 +4479,15 @@ class DeckFile:
                         f"z = -WtrDpth = {z_floor:.10g} m by more than the {tolerance:.2e} m "
                         "seabed tolerance; place the anchor on (or above) the seabed"
                     )
+        # Native promote_free_cable_ends: a Free point that ends exactly one finite-EI line as its
+        # End B (from a Coupled/Vessel End A, pinned and free in torsion, net heavy), on a
+        # standalone deck of finite-EI lines with no BODIES, RODS or Connect point, is the line's
+        # free End B (its loads an end attachment) and reads Fixed from here on, when every Free
+        # point of the deck is such an end; otherwise the deck is left as it is.
+        free_cable_ends = self._free_cable_ends(point_types, line_type_meta, effective)
+        self._free_cable_end_points = free_cable_ends
+        for point_id in free_cable_ends:
+            point_types[point_id] = "fixed"
         has_dynamic_points = any(
             point_type in {"connect", "free"} or point_type.startswith(("body", "rod"))
             for point_type in point_types.values()
@@ -6379,6 +6484,8 @@ class DeckFile:
                         "its LINE TYPES rows give no GJ (the 14-column row; torsion has no "
                         "EI/1.3 default)"
                     )
+                elif end_b in getattr(self, "_free_cable_end_points", set()):
+                    note = "its End B is a free end (a Free point)"
                 elif point_types[end_b] != "fixed":
                     note = "it has two moving ends (torsion needs a Fixed End B)"
                 elif dynamic and not force_blend:
