@@ -159,7 +159,7 @@ Line and constitutive capability
    * - Wake-oscillator VIV (``WAKE OSCILLATOR`` section ``CL0``, ``St``, ``eps``, ``A``)
      - Standalone and coupled
      - the van der Pol wake oscillator of Facchinetti et al. (2004) with acceleration coupling,
-       distributed along finite-EI cables in place of the synchronisation model
+       on ``EI = 0`` lines and along finite-EI cables in place of the synchronisation model
        (:ref:`theory-viv-wake`), its state in the checkpoint
    * - Amplitude-dependent VIV coefficients (``VIV AMPLITUDE`` section ``AD``, ``Cv``, ``CdAmp``)
      - Standalone and coupled

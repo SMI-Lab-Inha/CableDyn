@@ -59,7 +59,7 @@ MODULE CableDyn_Model
   USE CableDyn_VIV, ONLY: CD_VIV_Node_Lift, CD_VIV_Crossflow_Motion, CD_VIV_Phase_Rate, CD_VIV_Mean_Square, &
                           CD_VIV_Wrap_Phase, CD_VIV_NM, CD_VIV_TWO_PI, CD_VIV_Node_Inline, CD_VIV_Inline_Phase_Rate, &
                           CD_VIV_NMS, CD_VIV_NMS_AMP, CD_VIV_AMP_MAXP, CD_VIV_Amplitude_Update, CD_VIV_Table, &
-                          CD_VIV_Check_Amp_Table, CD_VIV_Ambient_Crossflow_Rate
+                          CD_VIV_Check_Amp_Table, CD_VIV_Ambient_Crossflow_Rate, CD_VIV_Wake_Advance
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_CableGenAlphaWorkspace, CD_Clear_GenAlpha_Workspace, &
                               CD_Cable_Initial_Acceleration, CD_Cable_Gen_Alpha_Step, CD_Cable_Step_Loads, &
                               CD_DYN_OK, CD_DYN_ALLOCFAIL, &
@@ -438,6 +438,16 @@ MODULE CableDyn_Model
     LOGICAL :: has_viv_amp = .FALSE.
     REAL(wp), ALLOCATABLE :: viv_amp(:, :, :)
     INTEGER, ALLOCATABLE :: viv_amp_n(:)
+    ! Wake-oscillator VIV (CD_Set_Model_VIV wake; Facchinetti et al. 2004): the van der Pol wake
+    ! variable q = 2 C_L/C_L0 replaces the synchronisation phase of the whole line, the lift scale
+    ! taking viv_cl = C_L0/2. Per node the Strouhal number, van der Pol eps and coupling A
+    ! (length-weighted over its lifting elements). The state rides in the VIV state slots, so the
+    ! rollback, step-recovery, sub-step and checkpoint copies carry it unchanged: viv_phi holds q
+    ! (viv_phi_eval q at the step's evaluation point, viv_phi_next q at the step end) and row 1 of
+    ! viv_ms dq/dt; in a step, viv_rate holds the step-start wake frequency and row 2 of viv_ms_next
+    ! the step-start cross-flow acceleration (row 2 of viv_ms stays 0).
+    LOGICAL :: viv_wake = .FALSE.
+    REAL(wp), ALLOCATABLE :: wo_st(:), wo_eps(:), wo_a(:)
     TYPE(GenAlphaConfig) :: cfg
     ! Run audit of the committed host steps (CD_Audit_Model_Step), diagnostics only: never part
     ! of the state, of a copy, or of a result. audit_t holds the segment tensions of the last two
@@ -3947,7 +3957,7 @@ CONTAINS
   END SUBROUTINE CD_Set_Model_Syrope_State
 
   SUBROUTINE CD_Set_Model_VIV(model, rho, cl, diameter, cf, df, t_window, ErrStat, ErrMsg, phase_seed, &
-                              tangent_reversed, clx, il_alpha, chh, amp, amp_n)
+                              tangent_reversed, clx, il_alpha, chh, amp, amp_n, wake)
     !! Install the cross-flow VIV model (CableDyn_VIV) on an initialised line. Per element:
     !! the lift coefficient cl (0 = no lift on that element), hydrodynamic diameter, and the
     !! synchronisation centre cf and half-range df of the non-dimensional shedding frequency;
@@ -3974,6 +3984,11 @@ CONTAINS
     !! amplitude ratio A/D >= 0 (strictly increasing), the cross-flow coefficient C_v >= 0 that
     !! replaces cl, and the factor > 0 of the element's normal drag coefficient, at the smoothed
     !! amplitude estimate of Thorsen et al. (2016); piecewise linear, held beyond the end rows.
+    !! Wake oscillator (Facchinetti et al. 2004; not with in-line VIV or amplitude tables): wake
+    !! (3, n_elem), per element the Strouhal number St > 0, van der Pol eps > 0 and acceleration
+    !! coupling A >= 0 (each at most 1e15) where cl > 0, with cl then the reference lift
+    !! coefficient C_L0 of a fixed cylinder; cf and df are unused. The wake variable q of a node
+    !! starts on its limit cycle at the node's start phase, q = 2 cos(phi_0), with dq/dt = 0.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: rho, cl(:), diameter(:), cf(:), df(:), t_window
     INTEGER, INTENT(OUT) :: ErrStat
@@ -3986,9 +4001,10 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: clx(:), il_alpha(:), chh(:)
     REAL(wp), INTENT(IN), OPTIONAL :: amp(:, :, :)
     INTEGER, INTENT(IN), OPTIONAL :: amp_n(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: wake(:, :)
     INTEGER :: n_nodes, n_elem, e, nd, istat, k, nms
     REAL(wp) :: wsum
-    LOGICAL :: want_il, want_amp
+    LOGICAL :: want_il, want_amp, want_wake
     CHARACTER(160) :: amsg
 
     ErrStat = CD_MODEL_OK
@@ -4076,6 +4092,35 @@ CONTAINS
       END IF
       want_amp = ANY(amp_n > 0)
     END IF
+    want_wake = .FALSE.
+    IF (PRESENT(wake)) THEN
+      IF (SIZE(wake, 1) /= 3 .OR. SIZE(wake, 2) /= n_elem) THEN
+        CALL fail(ErrStat, ErrMsg, 'the VIV wake oscillator wake must have shape (3, n_elem)')
+        RETURN
+      END IF
+      IF (.NOT. CD_All_Finite(wake)) THEN
+        CALL fail(ErrStat, ErrMsg, 'the VIV wake oscillator St, eps and A must be finite')
+        RETURN
+      END IF
+      DO e = 1, n_elem
+        IF (.NOT. (cl(e) > CD_ZERO)) CYCLE
+        IF (.NOT. (wake(1, e) > CD_ZERO .AND. wake(2, e) > CD_ZERO .AND. wake(3, e) >= CD_ZERO .AND. &
+                   ALL(wake(:, e) <= 1.0e15_wp))) THEN
+          CALL fail(ErrStat, ErrMsg, 'the VIV wake oscillator needs St > 0, eps > 0 and A >= 0, each at most '// &
+                    '1e15, where cl > 0')
+          RETURN
+        END IF
+      END DO
+      want_wake = ANY(cl > CD_ZERO)
+      IF (want_wake .AND. want_il) THEN
+        CALL fail(ErrStat, ErrMsg, 'the VIV wake oscillator takes no in-line VIV (clx > 0)')
+        RETURN
+      END IF
+      IF (want_wake .AND. want_amp) THEN
+        CALL fail(ErrStat, ErrMsg, 'the VIV wake oscillator takes no amplitude tables')
+        RETURN
+      END IF
+    END IF
     CALL clear_viv(model)
     IF (.NOT. ANY(cl > CD_ZERO)) RETURN
     IF (.NOT. (CD_Is_Finite(rho) .AND. rho > CD_ZERO)) THEN
@@ -4088,6 +4133,7 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, 'VIV needs a positive diameter on every Cl > 0 element')
         RETURN
       END IF
+      IF (want_wake) CYCLE
       IF (.NOT. (cf(e) > CD_ZERO .AND. df(e) >= CD_ZERO .AND. df(e) < cf(e))) THEN
         CALL fail(ErrStat, ErrMsg, 'VIV synchronisation needs cF > 0 and 0 <= dF < cF (a positive '// &
                   'shedding frequency)')
@@ -4164,6 +4210,43 @@ CONTAINS
     model%viv_phi_next = model%viv_phi
     model%viv_phi_rest = 0.5_wp*CD_VIV_TWO_PI
     IF (PRESENT(tangent_reversed)) model%viv_phi_rest = MERGE(0.5_wp*CD_VIV_TWO_PI, CD_ZERO, tangent_reversed)
+    IF (want_wake) THEN
+      ALLOCATE (model%wo_st(n_nodes), model%wo_eps(n_nodes), model%wo_a(n_nodes), STAT=istat)
+      IF (istat /= 0) THEN
+        CALL clear_viv(model)
+        CALL alloc_fail(ErrStat, ErrMsg, 'VIV wake oscillator storage allocation failed')
+        RETURN
+      END IF
+      ! the node's lift scale (viv_node_coef, 1/2 rho D viv_cl over its tributary length) is then
+      ! that of 1/4 rho D C_L0, the lift per unit length 1/4 rho D C_L0 q U^2
+      model%viv_cl = 0.5_wp*model%viv_cl
+      model%wo_st = CD_ZERO
+      model%wo_eps = CD_ZERO
+      model%wo_a = CD_ZERO
+      DO nd = 2, n_nodes - 1
+        IF (.NOT. model%viv_node(nd)) CYCLE
+        wsum = CD_ZERO
+        DO k = nd - 1, nd
+          IF (.NOT. (cl(k) > CD_ZERO)) CYCLE
+          wsum = wsum + model%l0(k)
+          model%wo_st(nd) = model%wo_st(nd) + model%l0(k)*wake(1, k)
+          model%wo_eps(nd) = model%wo_eps(nd) + model%l0(k)*wake(2, k)
+          model%wo_a(nd) = model%wo_a(nd) + model%l0(k)*wake(3, k)
+        END DO
+        model%wo_st(nd) = model%wo_st(nd)/wsum
+        model%wo_eps(nd) = model%wo_eps(nd)/wsum
+        model%wo_a(nd) = model%wo_a(nd)/wsum
+        ! on the limit cycle at the node's start phase
+        model%viv_phi(nd) = 2.0_wp*COS(model%viv_phi(nd))
+      END DO
+      model%viv_cf = CD_ZERO
+      model%viv_df = CD_ZERO
+      model%viv_phi_rollback = model%viv_phi
+      model%recovery_viv_phi = model%viv_phi
+      model%viv_phi_eval = model%viv_phi
+      model%viv_phi_next = model%viv_phi
+      model%viv_wake = .TRUE.
+    END IF
     model%has_viv = .TRUE.
     IF (.NOT. want_il) RETURN
     ALLOCATE (model%vil_cx(n_elem), model%vil_alpha(n_nodes), model%vil_node(n_nodes), model%vil_phi(n_nodes), &
@@ -4224,7 +4307,8 @@ CONTAINS
     !! the running mean squares of the cross-flow velocity and acceleration (2, n_nodes), and
     !! the averaging time (0 while unlatched). A model without VIV returns zeros. phi_x and ms_x
     !! (both or neither, same shapes) take the in-line phase and mean squares, zero without
-    !! in-line VIV.
+    !! in-line VIV. On a wake-oscillator line phi is the wake variable q and row 1 of ms its rate
+    !! dq/dt (row 2 zero).
     TYPE(CD_ModelType), INTENT(IN) :: model
     REAL(wp), INTENT(OUT) :: phi(:), ms(:, :), t_window
     INTEGER, INTENT(OUT) :: ErrStat
@@ -4298,7 +4382,12 @@ CONTAINS
     END IF
     ! the mean squares (rows 1:2) and the amplitudes y0, y0s (rows 4:5) cannot be negative; the
     ! travel and the last cross-flow velocity of the amplitude estimate (rows 3, 6) are signed
-    neg = ANY(ms(1:2, :) < CD_ZERO)
+    ! (a wake-oscillator line holds dq/dt in row 1, signed, and 0 in row 2)
+    IF (model%viv_wake) THEN
+      neg = ANY(ms(2, :) < CD_ZERO)
+    ELSE
+      neg = ANY(ms(1:2, :) < CD_ZERO)
+    END IF
     IF (SIZE(ms, 1) >= 5) neg = neg .OR. ANY(ms(4:5, :) < CD_ZERO)
     IF (neg .OR. t_window < CD_ZERO) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV mean squares, amplitudes and averaging time must be non-negative')
@@ -4479,6 +4568,11 @@ CONTAINS
     ia = 3*nd - 2
     phi = model%viv_phi(nd)
     IF (in_step) phi = model%viv_phi_eval(nd)
+    IF (model%viv_wake) THEN
+      ! the wake lift: the scale times the wake variable q (held in the phase slot)
+      coef = coef*phi
+      phi = CD_ZERO
+    END IF
     IF (PRESENT(jac_v)) THEN
       CALL CD_VIV_Node_Lift(q(ia - 3:ia - 1), q(ia + 3:ia + 5), smoothed(v, ia), uu, coef, phi, force, ok, &
                             jac_v, jac_prev, jac_next)
@@ -4642,7 +4736,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: nd, ia
-    REAL(wp) :: w, alpha_f, yd, ydd, un, coef, uu(3), xd, xdd
+    REAL(wp) :: w, alpha_f, yd, ydd, un, coef, uu(3), xd, xdd, sw(2)
     LOGICAL :: ok
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -4667,6 +4761,18 @@ CONTAINS
       IF (.NOT. ok) THEN
         CALL fail(ErrStat, ErrMsg, 'VIV phase: the neighbours of a node coincide (no line tangent)')
         RETURN
+      END IF
+      IF (model%viv_wake) THEN
+        ! the wake frequency of the ambient flow normal to the line (the free stream of the
+        ! paper), not of the relative flow, which the line's own cross-flow motion modulates; the
+        ! wake state predicted at the step's evaluation point under the step-start forcing
+        model%viv_rate(nd) = CD_VIV_TWO_PI*model%wo_st(nd)*viv_node_ambient_speed(model%q, ia, uu)/model%viv_dn(nd)
+        model%viv_ms_next(2, nd) = ydd
+        sw = [model%viv_phi(nd), model%viv_ms(1, nd)]
+        CALL CD_VIV_Wake_Advance(sw, model%viv_rate(nd), model%wo_eps(nd), model%wo_a(nd)/model%viv_dn(nd), &
+                                 ydd, ydd, (CD_ONE - alpha_f)*dt)
+        model%viv_phi_eval(nd) = sw(1)
+        CYCLE
       END IF
       model%viv_ms_next(1, nd) = CD_VIV_Mean_Square(model%viv_ms(1, nd), yd, w)
       model%viv_ms_next(2, nd) = CD_VIV_Mean_Square(model%viv_ms(2, nd), ydd, w)
@@ -4694,7 +4800,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: nd, ia
-    REAL(wp) :: w, yd, ydd, un, coef, uu(3), ms1, ms2, rate_end, xd, xdd, rate_end_x, st(4)
+    REAL(wp) :: w, yd, ydd, un, coef, uu(3), ms1, ms2, rate_end, xd, xdd, rate_end_x, st(4), sw(2), ydd0
     LOGICAL :: ok
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -4708,6 +4814,24 @@ CONTAINS
       CALL CD_VIV_Crossflow_Motion(model%q_step(ia - 3:ia - 1), model%q_step(ia + 3:ia + 5), &
                                    smoothed(model%v_step, ia), smoothed(model%a_step, ia), uu, yd, ydd, un, ok, &
                                    xd, xdd)
+      IF (model%viv_wake) THEN
+        ! the wake state over the step with the cross-flow acceleration linear from its step-start
+        ! value to the converged end one (held where the end tangent is degenerate), at the
+        ! step-start wake frequency; a non-finite result keeps the step-start forcing alone
+        ydd0 = model%viv_ms_next(2, nd)
+        IF (.NOT. (ok .AND. CD_Is_Finite(ydd))) ydd = ydd0
+        sw = [model%viv_phi(nd), model%viv_ms(1, nd)]
+        CALL CD_VIV_Wake_Advance(sw, model%viv_rate(nd), model%wo_eps(nd), model%wo_a(nd)/model%viv_dn(nd), &
+                                 ydd0, ydd, dt)
+        IF (.NOT. (CD_Is_Finite(sw(1)) .AND. CD_Is_Finite(sw(2)))) THEN
+          sw = [model%viv_phi(nd), model%viv_ms(1, nd)]
+          CALL CD_VIV_Wake_Advance(sw, model%viv_rate(nd), model%wo_eps(nd), model%wo_a(nd)/model%viv_dn(nd), &
+                                   ydd0, ydd0, dt)
+        END IF
+        model%viv_phi_next(nd) = sw(1)
+        model%viv_ms_next(1, nd) = sw(2)
+        CYCLE
+      END IF
       IF (.NOT. ok) THEN
         CALL fail(ErrStat, ErrMsg, 'VIV phase: the neighbours of a node coincide (no line tangent)')
         RETURN
@@ -4735,6 +4859,14 @@ CONTAINS
                                             rate_end, model%vil_alpha(nd))
       model%vil_phi_next(nd) = CD_VIV_Wrap_Phase(model%vil_phi(nd) + 0.5_wp*dt*(model%vil_rate(nd) + rate_end_x))
     END DO
+    IF (model%viv_wake) THEN
+      ! row 2 held the step-start acceleration (scratch); the committed row stays 0
+      model%viv_ms_next(2, :) = CD_ZERO
+      IF (.NOT. (CD_All_Finite(model%viv_phi_next) .AND. CD_All_Finite(model%viv_ms_next))) THEN
+        CALL fail(ErrStat, ErrMsg, 'VIV wake oscillator update produced a non-finite state')
+      END IF
+      RETURN
+    END IF
     IF (.NOT. CD_All_Finite(model%viv_phi_next)) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV phase update produced a non-finite phase')
     END IF
@@ -4744,6 +4876,18 @@ CONTAINS
       END IF
     END IF
   END SUBROUTINE viv_step_end
+
+  PURE REAL(wp) FUNCTION viv_node_ambient_speed(q, ia, uu) RESULT(ua)
+    !! Speed of the ambient flow uu normal to the tangent of the node whose x component is ia (the
+    !! chord of its two neighbours at positions q); 0 for a degenerate tangent.
+    REAL(wp), INTENT(IN) :: q(:), uu(3)
+    INTEGER, INTENT(IN) :: ia
+    REAL(wp) :: yd, ydd
+    LOGICAL :: ok
+    CALL CD_VIV_Crossflow_Motion(q(ia - 3:ia - 1), q(ia + 3:ia + 5), [CD_ZERO, CD_ZERO, CD_ZERO], &
+                                 [CD_ZERO, CD_ZERO, CD_ZERO], uu, yd, ydd, ua, ok)
+    IF (.NOT. ok) ua = CD_ZERO
+  END FUNCTION viv_node_ambient_speed
 
   PURE FUNCTION smoothed(x, ia) RESULT(xs)
     !! Node kinematics for the VIV phase and lift: the node value averaged with its two
@@ -4796,6 +4940,10 @@ CONTAINS
     IF (ALLOCATED(model%vil_phi_next)) DEALLOCATE (model%vil_phi_next)
     IF (ALLOCATED(model%viv_amp)) DEALLOCATE (model%viv_amp)
     IF (ALLOCATED(model%viv_amp_n)) DEALLOCATE (model%viv_amp_n)
+    IF (ALLOCATED(model%wo_st)) DEALLOCATE (model%wo_st)
+    IF (ALLOCATED(model%wo_eps)) DEALLOCATE (model%wo_eps)
+    IF (ALLOCATED(model%wo_a)) DEALLOCATE (model%wo_a)
+    model%viv_wake = .FALSE.
     model%has_viv_amp = .FALSE.
     model%has_viv_il = .FALSE.
     model%has_viv = .FALSE.
@@ -7556,6 +7704,13 @@ CONTAINS
     IF (ErrStat /= CD_MODEL_OK) RETURN
     CALL copy_real1(src%viv_phi_next, work%viv_phi_next, 'viv_phi_next', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
+    work%viv_wake = src%viv_wake
+    CALL copy_real1(src%wo_st, work%wo_st, 'wo_st', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%wo_eps, work%wo_eps, 'wo_eps', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%wo_a, work%wo_a, 'wo_a', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
     work%has_viv_amp = src%has_viv_amp
     CALL copy_real3(src%viv_amp, work%viv_amp, 'viv_amp', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
@@ -7746,6 +7901,10 @@ CONTAINS
     CALL MOVE_ALLOC(from%viv_rate, to%viv_rate)
     CALL MOVE_ALLOC(from%viv_ms_next, to%viv_ms_next)
     CALL MOVE_ALLOC(from%viv_phi_next, to%viv_phi_next)
+    to%viv_wake = from%viv_wake
+    CALL MOVE_ALLOC(from%wo_st, to%wo_st)
+    CALL MOVE_ALLOC(from%wo_eps, to%wo_eps)
+    CALL MOVE_ALLOC(from%wo_a, to%wo_a)
     to%has_viv_amp = from%has_viv_amp
     CALL MOVE_ALLOC(from%viv_amp, to%viv_amp)
     CALL MOVE_ALLOC(from%viv_amp_n, to%viv_amp_n)

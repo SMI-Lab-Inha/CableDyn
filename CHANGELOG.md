@@ -44,11 +44,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - Wake-oscillator VIV: an optional `WAKE OSCILLATOR` section row `TypeName CL0 [St [eps [A]]]`
   replaces the synchronisation lift of a type (which keeps `Cl` 0) by the van der Pol wake
   oscillator of Facchinetti et al. (2004) with acceleration coupling (defaults St 0.2, eps 0.3,
-  A 12), distributed along finite-EI cables, standalone and coupled. The kernel follows the
+  A 12), distributed along finite-EI cables and at the nodes of `EI = 0` lines, standalone and
+  coupled. The kernel follows the
   published forced-wake lift magnification within 2 %; on the taut example cable the wake locks
   the cable in at its first mode (A/D 0.58 against 0.10 uncoupled) and the drag and damping take
-  out the wake lift's power within 0.3 %. Its state is in the step-recovery, snapshot and
-  checkpoint state; the Python deck reader and builder take the section.
+  out the wake lift's power within 0.3 %; the same line with `EI = 0` locks in within 0.1 % of
+  the cable's A/D at the same frequency. Its state is in the step-recovery, snapshot and
+  checkpoint state (on an `EI = 0` line, in the slots of the VIV phase and first motion
+  statistic); the Python deck reader and builder take the section.
 - Amplitude-dependent VIV coefficients: an optional `VIV AMPLITUDE` section, rows
   `TypeName AD Cv [CdAmp]`, gives a line type a table over the cross-flow amplitude ratio of the
   coefficient `Cv` that replaces its `Cl` and a factor `CdAmp` of its normal drag coefficient, read

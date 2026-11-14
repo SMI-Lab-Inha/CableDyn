@@ -10498,6 +10498,8 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: ve_ead(:), ve_bas(:), ve_bad(:), ve_ambl(:), ve_vbet(:)
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:), viv_hh(:)
     REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :), viv_dia(:)
+    ! the WAKE OSCILLATOR rows per element (C_L0, St, eps, A; C_L0 0 where none)
+    REAL(wp), ALLOCATABLE :: viv_wo(:, :)
     INTEGER, ALLOCATABLE :: viv_ampn(:)
     LOGICAL, ALLOCATABLE :: syr_el(:)
     REAL(wp) :: anchor(3), fairlead(3), mode1_omega
@@ -10538,8 +10540,9 @@ CONTAINS
               hydro_can(SIZE(l0)), hydro_cat(SIZE(l0)), ve_ead(SIZE(l0)), ve_bas(SIZE(l0)), &
               ve_bad(SIZE(l0)), ve_ambl(SIZE(l0)), ve_vbet(SIZE(l0)), viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), &
               viv_df(SIZE(l0)), syr_el(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)), viv_hh(SIZE(l0)), &
-              viv_tix(SIZE(l0)), viv_dia(SIZE(l0)))
+              viv_tix(SIZE(l0)), viv_dia(SIZE(l0)), viv_wo(4, SIZE(l0)))
     viv_tix = CD_ZERO
+    viv_wo = CD_ZERO
     viv_dia = CD_ZERO
     viv_cl = CD_ZERO
     viv_cf = CD_ZERO
@@ -10604,8 +10607,10 @@ CONTAINS
         hydro_cat(e) = types(line_section_type(sections, ln%id, i))%cat
         viv_cl(e) = types(line_section_type(sections, ln%id, i))%cl
         IF (types(line_section_type(sections, ln%id, i))%wo_cl0 > CD_ZERO) THEN
-          CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(ln%id))//': the wake oscillator (WAKE '// &
-                    'OSCILLATOR section) acts on finite-EI cables (EI > 0) only'); RETURN
+          viv_wo(:, e) = [types(line_section_type(sections, ln%id, i))%wo_cl0, &
+                          types(line_section_type(sections, ln%id, i))%wo_st, &
+                          types(line_section_type(sections, ln%id, i))%wo_eps, &
+                          types(line_section_type(sections, ln%id, i))%wo_a]
         END IF
         IF (types(line_section_type(sections, ln%id, i))%cdy_a >= CD_ZERO) THEN
           CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(ln%id))//': the cross-flow damping (VIV '// &
@@ -10633,6 +10638,14 @@ CONTAINS
     viv_hh = viv_hh(SIZE(viv_hh):1:-1)
     viv_tix = viv_tix(SIZE(viv_tix):1:-1)
     viv_dia = viv_dia(SIZE(viv_dia):1:-1)
+    viv_wo = viv_wo(:, SIZE(viv_wo, 2):1:-1)
+    IF (ANY(viv_wo(1, :) > CD_ZERO) .AND. ANY(viv_cl > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(ln%id))//': a line takes one VIV model, but its '// &
+                'types mix the synchronisation lift (LINE TYPES Cl > 0) and the wake oscillator (WAKE '// &
+                'OSCILLATOR section)'); RETURN
+    END IF
+    ! the wake oscillator: the lift coefficient passed on is C_L0
+    IF (ANY(viv_wo(1, :) > CD_ZERO)) viv_cl = viv_wo(1, :)
     ba = ba(SIZE(ba):1:-1)
     ve_ead = ve_ead(SIZE(ve_ead):1:-1)
     ve_bas = ve_bas(SIZE(ve_bas):1:-1)
@@ -10925,7 +10938,11 @@ CONTAINS
           ! the VIV AMPLITUDE tables, left unallocated (absent below) on a line without one
           CALL viv_amp_tables(types, viv_tix, viv_amp3, viv_ampn)
           ! with the in-line VIV of the VIV section where a type has ClX > 0
-          IF (ANY(viv_clx > CD_ZERO)) THEN
+          IF (ANY(viv_wo(1, :) > CD_ZERO)) THEN
+            ! the wake oscillator: cl is C_L0, the band unused
+            CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, viv_dia, viv_cf, viv_df, tw, es, em, &
+                                  phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, wake=viv_wo(2:4, :))
+          ELSE IF (ANY(viv_clx > CD_ZERO)) THEN
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, viv_dia, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, &
                                   il_alpha=viv_al, chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn)

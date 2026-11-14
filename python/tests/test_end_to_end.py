@@ -280,7 +280,7 @@ _WAKE_PARITY = [
     (
         "wake-ei0-line",
         [_WAKE_LIFT, _WAKE_SECTION, ("-0.8       1.0      1.2", "-0.8       0.0      1.2")],
-        False,
+        True,
     ),
 ]
 
