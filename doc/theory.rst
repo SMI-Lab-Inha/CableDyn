@@ -1451,11 +1451,22 @@ On the ``EI = 0`` path, an element crossing the free surface uses its wetted fra
 Drag, added mass, and fluid inertia act on the wetted part (drag with the wet-weighted relative
 velocity), and a recovery load :math:`-(1 - f)\,\tfrac{1}{2}\rho A g L_0` on each end node removes
 the buoyancy of the dry part; the derivatives of :math:`f` with respect to the nodal heights are
-included in the tangent. On the Hermite path the hydrodynamic loads are integrated over the
-deformed element length at three Gauss points, and a Gauss point above the local surface
-carries no load. This is exact for fully submerged elements, the regime of lazy-wave cables and
-moorings, and approximates the wetted length of a surface-piercing element by the Gauss
-sampling. The Hermite buoyancy recovery is exact: the waterline crossings of the cubic
+included in the tangent. On the Hermite path the hydrodynamic loads (drag, added mass, the wave
+Froude-Krylov load and the VIV lift) are integrated over the deformed element length at the
+Gauss points, each weighted by the immersed fraction of its section, linear across one diameter:
+
+.. math::
+
+   w = \min\left(1, \max\left(0, \tfrac12 + \frac{\eta - z_g}{D}\right)\right),
+
+with :math:`z_g` the height of the Gauss point and :math:`\eta` the local surface. A point
+deeper than :math:`D/2` has :math:`w = 1` exactly, so fully submerged elements, the regime of
+lazy-wave cables and moorings, are integrated as before to the bit; across the surface the load
+of a point is continuous in its height (with :math:`\partial w/\partial z_g = -1/D` in the
+tangent). A wet/dry switch per point made it jump, and a static equilibrium with a Gauss point at
+the surface then had no root: a 31 mm cable through the surface in a 0.400 m/s cross current
+failed every static route while 0.399 and 0.401 m/s solved. The Hermite buoyancy recovery is
+exact: the waterline crossings of the cubic
 centreline height are located on each element, and the load :math:`\rho g A` is integrated in
 closed form against the Hermite shape functions over the dry intervals,
 
