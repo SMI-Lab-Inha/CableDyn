@@ -1437,6 +1437,89 @@ with :math:`C_v = 0` and factor 2 the line settles at the static in-line offset 
 printed digits; Thorsen's form raises the steady cross-flow amplitude from :math:`A/D` 0.68 to 1.02;
 and the drag, damping and VIV powers balance within 0.2 %.
 
+.. _theory-viv-coefficients:
+
+Published coefficient sets
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The VIV coefficients are empirical, and the published sets differ by test, Reynolds number range
+and model form. The table gives each set with its source and the line-type columns it maps to.
+``Cl dF cF`` are the cross-flow columns of the line type, with the synchronisation band
+:math:`c_F \pm d_F` in non-dimensional frequency; ``ClX alpha`` is the ``VIV`` section row.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 34 36
+
+   * - Source and data
+     - Values
+     - In CableDyn
+   * - :ref:`Thorsen et al. (2016) <ref-thorsen2016>`: excitation curve fitted to the 44 NDP
+       riser tests (uniform and sheared flow, Re 8 000–65 000), their Fig. 7
+     - :math:`C_v(y_0/D)`: 0.35 at 0, a maximum of 1.00 at 0.46, zero from 0.66; cross-flow
+       damping :math:`C_{d,y} = 0.31 + 0.89\,y_0/D` (their Eq. 1)
+     - a ``VIV AMPLITUDE`` table (below); ``VIV DAMPING`` ``0.31 0.89 0``
+   * - :ref:`Thorsen et al. (2017) <ref-thorsen2017>`: the truncated catenary riser of
+       :ref:`Wang et al. (2014) <ref-wang2014>` in uniform current (Re about 3 000)
+     - :math:`C_v` 0.7, :math:`\hat f_0` 0.18, :math:`\Delta\hat f` 0.08, :math:`C_D` 1.2,
+       :math:`C_M` 2
+     - ``Cl dF cF`` = ``0.7 0.08 0.18``, ``Cd_n`` 1.2, ``Ca_n`` 1.0 (validation case L3-W)
+   * - :ref:`Ulveseter et al. (2018) <ref-ulveseter2018>`: in-line force at twice the
+       cross-flow frequency
+     - :math:`C_x` 0.85, :math:`\alpha` 0.15, with a cross-flow :math:`C_L` of 0.65
+     - ``VIV`` row ``0.85 0.15``; ``Cl`` 0.65
+   * - :ref:`Andersen et al. (2024a) <ref-andersen2024a>`, Table 3: the set calibrated to
+       low-Re forced-oscillation tests that they quote as the model's fixed values
+     - :math:`C_v` 1.2, :math:`C_D` 1.1, :math:`C_a` 1.0, :math:`\hat f_0` 0.18, band
+       0.11–0.26
+     - ``Cl`` 1.2, ``Cd_n`` 1.1, ``Ca_n`` 1.0; the band here is symmetric about ``cF``:
+       ``dF cF`` = ``0.075 0.185`` spans 0.11–0.26
+   * - :ref:`Andersen et al. (2024a) <ref-andersen2024a>`: Bayesian optimisation against seven
+       tests of a rigid cylinder on a spring-supported pendulum rig (Re 4.2e4–1.2e5)
+     - unified :math:`C_v` "very close to 2.0"; the per-case optima scatter with flow speed
+     - ``Cl`` 2.0 (no unified band is tabulated)
+   * - :ref:`Andersen et al. (2024b) <ref-andersen2024b>`, Table 3: average of the per-case
+       optima for the 22 sheared-flow NDP tests
+     - cross-flow :math:`C_{v,y}` 1.28, :math:`\hat f_{0,y}` 0.131, :math:`\Delta\hat f_y` 0.066;
+       :math:`C_D` 1.16, :math:`C_a` 1.0
+     - ``Cl dF cF`` = ``1.28 0.066 0.131``, ``Cd_n`` 1.16; their in-line set (:math:`C_{v,x}`
+       1.09, :math:`\hat f_{0,x}` 0.321) belongs to an independent in-line synchronisation, not
+       the ``VIV`` row's form
+   * - :ref:`Facchinetti et al. (2004) <ref-facchinetti2004>`: wake oscillator with
+       acceleration coupling, fitted to forced-cylinder lift and lock-in data
+     - :math:`C_{L0}` 0.3, St 0.2 (sub-critical, :math:`300 < Re < 1.5\times10^5`),
+       :math:`\varepsilon` 0.3, :math:`A` 12
+     - ``WAKE OSCILLATOR`` row ``0.3 0.2 0.3 12``
+
+Thorsen et al. (2016)'s curve, read from the vector figure and sampled every 0.05 in
+:math:`y_0/D`, as a ``VIV AMPLITUDE`` table for a type ``riser`` (its ``Cv`` replaces ``Cl``;
+the drag factor stays 1):
+
+.. code-block:: text
+
+   --------------------- VIV AMPLITUDE ------------------------------------
+   TypeName  AD    Cv
+   (-)       (-)   (-)
+   riser     0.00  0.35
+   riser     0.05  0.48
+   riser     0.10  0.60
+   riser     0.15  0.70
+   riser     0.20  0.79
+   riser     0.25  0.86
+   riser     0.30  0.92
+   riser     0.35  0.96
+   riser     0.40  0.99
+   riser     0.45  1.00
+   riser     0.50  0.98
+   riser     0.55  0.82
+   riser     0.60  0.53
+   riser     0.65  0.10
+   riser     0.70  0.00
+
+The sets do not transfer between structures without checking: Andersen et al. find optima that
+scatter between tests with no trend in Reynolds number, and Thorsen et al. state that their curve
+holds only in the Reynolds number range of the tests it was fitted to.
+
 .. _theory-dry-buoyancy:
 
 Buoyancy and wetting

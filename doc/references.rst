@@ -107,6 +107,19 @@ Hydrodynamics and ocean environment
   and higher harmonic VIV of slender structures. *Applied Ocean Research* **90**, 101856.
   https://doi.org/10.1016/j.apor.2019.101856
 
+.. _ref-andersen2024a:
+
+- **Andersen, M. L., Sævik, S., Wu, J., Leira, B. J. & Langseth, H. (2024a).** Applying Bayesian
+  optimization to predict parameters in a time-domain model for cross-flow vortex-induced
+  vibrations. *Marine Structures* **94**, 103571. https://doi.org/10.1016/j.marstruc.2023.103571
+
+.. _ref-andersen2024b:
+
+- **Andersen, M. L., Sævik, S., Wu, J., Leira, B. J. & Langseth, H. (2024b).** Simulating
+  vortex-induced vibrations in sheared current by using an empirical time-domain model with
+  adaptive parameters. *Applied Ocean Research* **153**, 104284.
+  https://doi.org/10.1016/j.apor.2024.104284
+
 .. _ref-feeny2008:
 
 - **Feeny, B. F. (2008).** A complex orthogonal decomposition for wave motion analysis.
