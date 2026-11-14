@@ -508,6 +508,8 @@ MODULE CableDyn_HermiteCableDynamic
     REAL(wp), ALLOCATABLE :: att_w(:), att_b(:), att_fk(:), att_cda(:), att_cdax(:)
     ! a point's isotropic drag (a Free point ending the line) in place of the normal/axial split
     LOGICAL, ALLOCATABLE :: att_iso(:)
+    ! the point a free end carries: in the equations of motion, not in the end force
+    LOGICAL, ALLOCATABLE :: att_point(:)
     ! The two nodal mass terms each attachment adds to Mgb, the dry mass m and the added mass
     ! Ca rho V, kept so that a length change rebuilds Mgb in the order initialisation used.
     REAL(wp), ALLOCATABLE :: att_mass(:), att_madd(:)
@@ -2220,7 +2222,7 @@ CONTAINS
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Friction_Anchors
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_Attachments(model, node, mass, volume, cda, cdax, ca, rho_w, gravity, &
-                                                 ErrStat, ErrMsg, isotropic)
+                                                 ErrStat, ErrMsg, isotropic, point_load)
     !! Install discrete point attachments (clumps, buoyancy modules) lumped at nodes. Each
     !! carries its weight and buoyancy (m - rho V) g downward, isotropic added mass
     !! Ca rho V (with the dry mass m, a constant nodal mass on the translational DOFs), the
@@ -2233,13 +2235,16 @@ CONTAINS
     !! kinetic energy (CD_HermiteCable_Dyn_Energy) then includes the attachment mass and its
     !! added mass Ca rho V. isotropic (optional, default false) makes an attachment's drag a
     !! point's, rho CdA |w| w / 2 on the whole relative velocity (CdAx unused), as a Free point
-    !! that ends the line carries it.
+    !! that ends the line carries it. point_load (optional, default false) marks the attachment
+    !! that is the point itself on a free end: it stays in the equations of motion, but
+    !! CD_HermiteCable_Dyn_End_Force leaves its loads out, so the end force is the line load
+    !! the point balances (its submerged weight for a clump at rest).
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: node(:)
     REAL(wp), INTENT(IN) :: mass(:), volume(:), cda(:), cdax(:), ca(:), rho_w, gravity
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    LOGICAL, INTENT(IN), OPTIONAL :: isotropic(:)
+    LOGICAL, INTENT(IN), OPTIONAL :: isotropic(:), point_load(:)
     INTEGER :: n, k, d, dof, es
     REAL(wp), ALLOCATABLE :: a_old(:), mgb_old(:, :)
     CHARACTER(1024) :: em
@@ -2271,6 +2276,13 @@ CONTAINS
         RETURN
       END IF
     END IF
+    IF (PRESENT(point_load)) THEN
+      IF (SIZE(point_load) /= n) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_Attachments: point_load must have one entry per attachment'
+        RETURN
+      END IF
+    END IF
     IF (ANY(node < 1) .OR. ANY(node > model%nn)) THEN
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Set_Attachments: node out of range'; RETURN
     END IF
@@ -2291,9 +2303,12 @@ CONTAINS
     a_old = model%a
     mgb_old = model%Mgb
     ALLOCATE (model%att_node(n), model%att_w(n), model%att_b(n), model%att_fk(n), model%att_cda(n), &
-              model%att_cdax(n), model%att_mass(n), model%att_madd(n), model%att_iso(n))
+              model%att_cdax(n), model%att_mass(n), model%att_madd(n), model%att_iso(n), &
+              model%att_point(n))
     model%att_iso = .FALSE.
     IF (PRESENT(isotropic)) model%att_iso = isotropic
+    model%att_point = .FALSE.
+    IF (PRESENT(point_load)) model%att_point = point_load
     model%att_node = node
     model%att_w = (mass - rho_w*volume)*gravity
     model%att_b = rho_w*gravity*volume
@@ -2313,7 +2328,7 @@ CONTAINS
     CALL solve_consistent_acceleration(model, es, em)
     IF (es /= CD_HCDYN_OK) THEN
       DEALLOCATE (model%att_node, model%att_w, model%att_b, model%att_fk, model%att_cda, model%att_cdax, &
-                  model%att_mass, model%att_madd, model%att_iso)
+                  model%att_mass, model%att_madd, model%att_iso, model%att_point)
       model%has_attach = .FALSE.
       model%Mgb = mgb_old
       model%a = a_old
@@ -7557,9 +7572,10 @@ CONTAINS
     END IF
     IF (model%has_attach) THEN
       ! A clump or buoy on the end node loads the point holding it, exactly as it loads the
-      ! end node in the residual (assemble_attachments).
+      ! end node in the residual (assemble_attachments). The point a free end carries
+      ! (att_point) is the body this force acts on, so its own loads stay out.
       DO k = 1, SIZE(model%att_node)
-        IF (model%att_node(k) /= node) CYCLE
+        IF (model%att_node(k) /= node .OR. model%att_point(k)) CYCLE
         CALL attachment_residual(model, k, model%q, model%v, .FALSE., rk, has_jac, jrel, jtan, es, em2)
         IF (es /= CD_HCDYN_OK) THEN
           ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_End_Force: '//TRIM(em2); RETURN
@@ -9286,6 +9302,7 @@ CONTAINS
                                                model%att_cda, model%att_cdax)
     IF (ALLOCATED(model%att_mass)) DEALLOCATE (model%att_mass, model%att_madd)
     IF (ALLOCATED(model%att_iso)) DEALLOCATE (model%att_iso)
+    IF (ALLOCATED(model%att_point)) DEALLOCATE (model%att_point)
     model%has_attach = .FALSE.
     IF (ALLOCATED(model%l0_dot)) DEALLOCATE (model%l0_dot, model%l0_c, model%l0_dot_c, model%ws_recovery_l0_c, &
                                              model%ws_recovery_l0_dot_c)

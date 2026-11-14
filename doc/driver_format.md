@@ -754,7 +754,8 @@ and buoyancy, added mass, and drag against current and waves), with the point's 
 with the end first held on the chord from End A towards the deck position, at the line's length
 stretched by its hanging weight, then released, so the run starts at the end's rest position
 (the theory manual, Free cable ends); the dynamics leave the end's position free. `Point<P>p…`
-channels read the line's End B node. The line must be pinned in bending at both ends (no
+channels read the line's End B node, and the End B force (`AnchTen`, `Point<P>F…`) is the line load
+the point balances, without the point's own loads (a clump at rest reads its submerged weight). The line must be pinned in bending at both ends (no
 non-pinned `END CONNECTIONS` row), with at most one end restrained in torsion, which is then not
 solved (a free end carries no moment or torque; the initialisation note says why), and the point
 and the line must be net heavy (the end hangs). A deck in which any `Free` point is not such an end

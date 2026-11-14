@@ -7,7 +7,9 @@ PROGRAM test_free_end_deck
   !! 0.06 m^2, CA 1) on its Free End B, 70 elements:
   !!   F1 in still water the run holds the static state: the top tension is the submerged weight of
   !!      the line and the clump (to 1e-6 relative), the end hangs one stretched line length below
-  !!      the top (the stretch (W_B L + w L^2/2)/EA, to 1e-7 m), and nothing moves over the run;
+  !!      the top (the stretch (W_B L + w L^2/2)/EA, to 1e-7 m), nothing moves over the run, and
+  !!      the force the line exerts on the point (AnchTen1, Point2Fz) is the clump's submerged weight
+  !!      (to 1e-6 relative), as the EI = 0 Free point reads it: the point's own loads stay out;
   !!   F2 in a 0.5 m/s current along x the end rests where the same deck as an EI = 0 line on the
   !!      point-system route puts its Free point (EI 3 N m^2: within 2e-5 m), and the Point
   !!      channels of the free end read its line's End B node;
@@ -160,17 +162,17 @@ CONTAINS
   END SUBROUTINE read_out
 
   SUBROUTINE check_still()
-    REAL(wp), ALLOCATABLE :: tab(:, :)
+    REAL(wp), ALLOCATABLE :: tab(:, :), t0(:, :)
     REAL(wp) :: w, wb, stretch
-    INTEGER :: n
+    INTEGER :: n, n0
     LOGICAL :: ok
     CHARACTER(1024) :: msg
     CALL write_deck('fed_still.dat', '3000', 'Free 0.0 0.0 -7.5 200 0.02548 0.06 1.0', '', '', '', &
-                    'FairTen1;Point2px;Point2pz', 0.005_wp, 2.0_wp)
+                    'FairTen1;Point2px;Point2pz;AnchTen1;Point2Fz;Point2Fx', 0.005_wp, 2.0_wp)
     CALL run('fed_still.dat', 'fed_still', ok, msg)
     CALL require(ok, 'F1 still-water run: '//TRIM(msg))
     IF (.NOT. ok) RETURN
-    CALL read_out('fed_still.out', 4, tab, n)
+    CALL read_out('fed_still.out', 7, tab, n)
     CALL require(n > 10, 'F1 output rows')
     IF (n <= 10) RETURN
     w = (M - RHO*0.25_wp*PI*D**2)*G
@@ -179,6 +181,17 @@ CONTAINS
     CALL require(ABS(tab(2, 1)/(w*L + wb) - 1.0_wp) < 1.0e-6_wp, 'F1 top tension = submerged weight')
     CALL require(ABS(tab(4, 1) - (-0.5_wp - L - stretch)) < 1.0e-7_wp, 'F1 end one stretched length below')
     CALL require(MAXVAL(ABS(tab(3:4, 1:n) - SPREAD(tab(3:4, 1), 2, n))) < 1.0e-10_wp, 'F1 nothing moves')
+    CALL require(ABS(tab(5, n)/wb - 1.0_wp) < 1.0e-6_wp, 'F1 AnchTen = the clump''s submerged weight')
+    CALL require(ABS(tab(6, n)/wb - 1.0_wp) < 1.0e-6_wp .AND. ABS(tab(7, n)) < 1.0e-6_wp*wb, &
+                 'F1 Point2Fz = the clump''s submerged weight')
+    CALL write_deck('fed_still0.dat', '0', 'Free 0.0 0.0 -7.5 200 0.02548 0.06 1.0', '', '', '', &
+                    'AnchTen1;Point2Fz', 0.005_wp, 0.1_wp)
+    CALL run('fed_still0.dat', 'fed_still0', ok, msg)
+    CALL require(ok, 'F1 EI = 0 still-water run: '//TRIM(msg))
+    IF (.NOT. ok) RETURN
+    CALL read_out('fed_still0.out', 3, t0, n0)
+    IF (n0 > 0) CALL require(ABS(tab(5, n) - t0(2, n0)) < 1.0e-6_wp*wb .AND. &
+                             ABS(tab(6, n) - t0(3, n0)) < 1.0e-6_wp*wb, 'F1 the end force = the EI = 0 Free point''s')
   END SUBROUTINE check_still
 
   SUBROUTINE check_current()

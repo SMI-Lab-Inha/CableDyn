@@ -3743,7 +3743,7 @@ CONTAINS
     IF (has_att) THEN
       CALL CD_HFMF_Set_Attachments(cable, att_node, ln%att(2, :), ln%att(3, :), ln%att(4, :), &
                                    MAX(ln%att(6, :), CD_ZERO), ln%att(5, :), opts%rhoW, opts%g, es, em, &
-                                   isotropic=ln%att(6, :) < CD_ZERO)
+                                   isotropic=ln%att(6, :) < CD_ZERO, point_load=ln%att(6, :) < CD_ZERO)
       IF (es /= CD_HFMF_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'finite-EI cable attachment wiring failed: '//TRIM(em)); RETURN
       END IF

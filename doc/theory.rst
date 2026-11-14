@@ -239,7 +239,9 @@ free: the dynamic march holds only End A's three positions, and the point's mass
 area and added-mass coefficient act on the End B node as a discrete attachment (the weight
 :math:`(M - \rho V)g`, the added mass :math:`C_a \rho V`, the fluid inertia), with the point's
 isotropic drag :math:`\tfrac12 \rho\, C_dA\, |\mathbf w|\,\mathbf w` on the whole relative velocity,
-as a ``Free`` point carries it, rather than the attachment's normal/axial split. The end carries no moment (it is pinned, a natural boundary condition of the
+as a ``Free`` point carries it, rather than the attachment's normal/axial split. The point's loads
+stay out of the End B force (``AnchTen``, ``Point<P>F``): it is the force the line exerts on the
+point, the line load the point balances, as on the ``EI = 0`` route. The end carries no moment (it is pinned, a natural boundary condition of the
 cubic-Hermite element) and no torque: the line is pinned in bending at both ends, and a torsion
 restraint at its other end is not solved (it is noted, as for a line with two moving ends).
 
