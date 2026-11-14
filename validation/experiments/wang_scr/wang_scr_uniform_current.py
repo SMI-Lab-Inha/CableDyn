@@ -29,6 +29,7 @@ import csv
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -141,11 +142,17 @@ def main() -> None:
         help="directory for the comparison CSV and summary JSON",
     )
     a = ap.parse_args()
+    # the run starts in the case folder: resolve the executable against the invocation directory
+    # (or PATH, for a bare name) first
+    found = a.exe if Path(a.exe).is_file() else shutil.which(a.exe)
+    if found is None:
+        raise SystemExit(f"CableDyn executable not found: {a.exe}")
+    exe = Path(found).resolve()
     case = Path(a.workdir) / f"wang_scr_n{a.segments}_dt{a.dt:g}"
     deck = write_deck(case, a.segments, a.dt, a.tmax)
     env = dict(os.environ, OMP_NUM_THREADS="1")
     proc = subprocess.run(
-        [a.exe, deck.name, "out"],
+        [str(exe), deck.name, "out"],
         cwd=case,
         capture_output=True,
         text=True,
@@ -178,7 +185,7 @@ def main() -> None:
         "rms_log_error_at_stations": float(np.sqrt(np.mean(np.log(at / em) ** 2))),
         "dominant_frequency_hz": f_dom,
         "measured_dominant_frequency_hz": MEASURED_FREQUENCY,
-        "executable_sha256": hashlib.sha256(Path(a.exe).read_bytes()).hexdigest(),
+        "executable_sha256": hashlib.sha256(exe.read_bytes()).hexdigest(),
     }
     print(json.dumps(summary, indent=2))
     if a.summary:
