@@ -1,0 +1,19 @@
+{
+  "source": "Wang, Fu, Baarholm, Wu & Larsen (2014), Marine Structures 39, 131-156 (the model riser, Table 2); Thorsen, Saevik & Larsen (2017), Marine Structures 51, 134-151 (Table 1, Sec. 5.1, Figs. 17-18)",
+  "doi": ["10.1016/j.marstruc.2014.07.002", "10.1016/j.marstruc.2016.10.007"],
+  "data_used": "the model riser properties; the 25 measured r.m.s. dynamic cross-flow strains of Fig. 17 (read from the vector figure, axes calibrated on its tick marks; the simulated maximum of the same figure reads 99.6 % of the measured one, as the text states); the measured dominant frequency 1.00 Hz 8.25 m from the lower end",
+  "coefficients": "Thorsen et al. (2017) for this case, not tuned: Cv 0.7, f0 0.18, df 0.08 (cross-flow only), CD 1.2, CM 2",
+  "CableDyn_commit": "1847a0d (dev)",
+  "validation_date": "2026-11-14",
+  "executable_name": "cabledyn.exe",
+  "executable_sha256": "see summary.json",
+  "compiler": "GNU Fortran 16.2.0",
+  "build_type": "Release",
+  "platform": "Windows 11 x86-64",
+  "segments": 200,
+  "dt_s": 0.005,
+  "sensitivity": {
+    "segments_400": {"max_ratio": 1.0753, "mean_ratio_at_stations": 1.0367, "dominant_frequency_hz": 0.9917},
+    "dt_0p0025": {"max_ratio": 1.0742, "mean_ratio_at_stations": 1.0366, "dominant_frequency_hz": 0.9917}
+  }
+}

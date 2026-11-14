@@ -1,0 +1,17 @@
+{
+  "segments": 200,
+  "dt_s": 0.005,
+  "analysis_window_s": [
+    30.0,
+    150.0
+  ],
+  "frequency_resolution_hz": 0.00833333333332907,
+  "max_rms_strain": 5.777620876413861e-05,
+  "measured_max_rms_strain": 5.3852e-05,
+  "max_ratio": 1.072870251135308,
+  "mean_ratio_at_stations": 1.0361663237798966,
+  "rms_log_error_at_stations": 0.3385758147803219,
+  "dominant_frequency_hz": 0.9916666666661592,
+  "measured_dominant_frequency_hz": 1.0,
+  "executable_sha256": "dd80f0b2b0ba5a526b46da7961b8ea7e18ed8c650c42583107b4df6eee3a8a74"
+}

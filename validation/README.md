@@ -16,7 +16,7 @@ redistributed.
 | [`RELEASE_0_1_1.md`](RELEASE_0_1_1.md) | The same for v0.1.1 |
 | [`RELEASE_0_1_0.md`](RELEASE_0_1_0.md) | The same for v0.1.0 |
 | [`bodies/`](bodies/README.md) | Rigid-body, rod and shared-anchor cases with MoorDyn-C twins, stored references and pass limits |
-| [`experiments/`](experiments/README.md) | Holcombe et al. (2025) static lazy-wave, Bergdahl et al. (2016) dynamic-chain and Chaplin et al. (2005) riser natural-frequency comparisons |
+| [`experiments/`](experiments/README.md) | Holcombe et al. (2025) static lazy-wave, Bergdahl et al. (2016) dynamic-chain, Chaplin et al. (2005) riser natural-frequency and Wang et al. (2014) catenary-riser VIV comparisons |
 | [`PERFORMANCE_0_1_0.md`](PERFORMANCE_0_1_0.md) | Wall time of CableDyn 0.1.0, MoorDyn-C and MoorDyn-F at equal accuracy on five mooring, cable, buoy and coupled cases |
 | [`performance/`](performance/README.md) | Same-host wall-clock records of the L5 cases: the resolved lazy-wave spans, the one-hour VolturnUS-S mooring and the tension-only chain |
 | [`PAPER_REPRODUCTION.md`](PAPER_REPRODUCTION.md) | Every CableDyn result in the journal article, re-run with the release defaults and in paper mode |

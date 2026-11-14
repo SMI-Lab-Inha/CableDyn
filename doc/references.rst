@@ -89,6 +89,12 @@ Hydrodynamics and ocean environment
   vortex-induced vibrations in stationary and oscillating flows. *Journal of Fluids and
   Structures* **61**, 1–19. https://doi.org/10.1016/j.jfluidstructs.2015.11.006
 
+.. _ref-thorsen2017:
+
+- **Thorsen, M. J., Sævik, S. & Larsen, C. M. (2017).** Non-linear time domain analysis of
+  cross-flow vortex-induced vibrations. *Marine Structures* **51**, 134–151.
+  https://doi.org/10.1016/j.marstruc.2016.10.007
+
 .. _ref-ulveseter2018:
 
 - **Ulveseter, J. V., Thorsen, M. J., Sævik, S. & Larsen, C. M. (2018).** Time domain
@@ -246,6 +252,19 @@ Verification and validation references
 - **Bergdahl, L., Palm, J., Eskilsson, C. & Lindahl, J. (2016).** Dynamically scaled model
   experiment of a mooring cable. *Journal of Marine Science and Engineering* **4**\ (1), 5.
   https://doi.org/10.3390/jmse4010005
+
+.. _ref-wang2014:
+
+- **Wang, J., Fu, S., Baarholm, R., Wu, J. & Larsen, C. M. (2014).** Fatigue damage of a steel
+  catenary riser from vortex-induced vibration caused by vessel motions. *Marine Structures*
+  **39**, 131–156. https://doi.org/10.1016/j.marstruc.2014.07.002
+
+.. _ref-davies2026:
+
+- **Davies, R., Lekkala, M. R., Michaloliakos, A., Wong, W.-Y., Hall, M., Vakakis, A. & Zuo, L.
+  (2026).** Time-domain vortex induced vibration modeling of reference dynamic power cable for the
+  Gulf of Maine. *Journal of Fluids and Structures* **146**, 104651.
+  https://doi.org/10.1016/j.jfluidstructs.2026.104651
 
 .. _ref-chaplin2005:
 
