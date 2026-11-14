@@ -30,10 +30,11 @@ PROGRAM test_viv_coupled
   !! * in-line VIV (a VIV section, ClX 0.85, on both lines): the checkpoint blocks grow by the
   !!   in-line phase and mean squares (3 per node), the restarted run continues bit for bit with
   !!   both phases, a rebuild without the VIV state does not, and a rewound step repeats;
-  !! * wake oscillator (a WAKE OSCILLATOR row, C_L0 0.3, on the cable, whose type has Cl 0; the
-  !!   EI = 0 riser keeps its synchronisation lift): the cable's checkpoint block grows by the wake
-  !!   state (2 per node), the restarted run continues bit for bit with it, a rebuild without the
-  !!   VIV state does not, and a rewound step repeats;
+  !! * wake oscillator (a WAKE OSCILLATOR row, C_L0 0.3, on both types, which have Cl 0): the
+  !!   cable's checkpoint block grows by the wake state (2 per node), the EI = 0 riser carries it in
+  !!   its VIV block (q in the phase, dq/dt in the first motion statistic), the restarted run
+  !!   continues bit for bit with both, a rebuild without the VIV state does not, and a rewound step
+  !!   repeats;
   !! * amplitude tables (a VIV AMPLITUDE table on both types, Cv falling from 0.8 at A/D 0 to 0.4 at
   !!   1, CdAmp from 1 to 1.5): both checkpoint blocks grow by the amplitude estimate (4 per node),
   !!   the restarted run continues bit for bit with it, a rebuild without the VIV state does not,
@@ -404,7 +405,10 @@ CONTAINS
            MAXVAL(ABS(a%cables(1)%line%q - b%cables(1)%line%q)) <= 0.0_wp .AND. &
            MAXVAL(ABS(a%cables(1)%line%viv_phi - b%cables(1)%line%viv_phi)) <= 0.0_wp
     IF (same .AND. wake_case) same = a%cables(1)%line%viv_wake .AND. &
-                                     MAXVAL(ABS(a%cables(1)%line%wo_s - b%cables(1)%line%wo_s)) <= 0.0_wp
+                                     MAXVAL(ABS(a%cables(1)%line%wo_s - b%cables(1)%line%wo_s)) <= 0.0_wp .AND. &
+                                     a%sys%fast%system%lines(1)%viv_wake .AND. &
+                                     MAXVAL(ABS(a%sys%fast%system%lines(1)%viv_ms - &
+                                                b%sys%fast%system%lines(1)%viv_ms)) <= 0.0_wp
     IF (same .AND. amp_case) THEN
       ! the motion statistics with the amplitude estimate (rows 3-6) on both lines
       same = a%sys%fast%system%lines(1)%has_viv_amp .AND. a%cables(1)%line%has_viv_amp .AND. &
@@ -443,8 +447,8 @@ CONTAINS
   SUBROUTINE write_deck(path, cl, window, dtm, anchor_first, inline, wake, amp)
     !! The EI = 0 riser (line 1) and the finite-EI cable (line 2), 20 m apart across the current;
     !! VIVrmsWindow 0.25 s unless window is given (0: none), and a deck dtM when dtm is given;
-    !! inline adds the in-line VIV of both types (a VIV section, ClX 0.85); wake gives the cable
-    !! the wake oscillator instead of its lift (Cl 0 and a WAKE OSCILLATOR row, C_L0 0.3); amp a VIV
+    !! inline adds the in-line VIV of both types (a VIV section, ClX 0.85); wake gives both types
+    !! the wake oscillator instead of their lift (Cl 0 and WAKE OSCILLATOR rows, C_L0 0.3); amp a VIV
     !! AMPLITUDE table on both types.
     CHARACTER(*), INTENT(IN) :: path
     REAL(wp), INTENT(IN) :: cl
@@ -466,7 +470,7 @@ CONTAINS
     WRITE (u, '(A)') '--------------------- LINE TYPES ---'
     WRITE (u, '(A)') 'TypeName Diam Mass/m EA BA/-zeta EI Cd Ca CdAx CaAx Cl dF cF'
     WRITE (u, '(A)') '(name) (m) (kg/m) (N) (N-s/-) (-) (-) (-) (-) (-) (-) (-) (-)'
-    WRITE (u, '(A)') 'riser 0.10 10.0 5.0e7 -0.8 0.0 1.2 1.0 0.0 0.0 '//TRIM(cl_txt)//' 0.08 0.18'
+    WRITE (u, '(A)') 'riser 0.10 10.0 5.0e7 -0.8 0.0 1.2 1.0 0.0 0.0 '//TRIM(clc_txt)//' 0.08 0.18'
     WRITE (u, '(A)') 'cable 0.10 10.0 5.0e7 -0.8 1.0 1.2 1.0 0.0 0.0 '//TRIM(clc_txt)//' 0.08 0.18'
     WRITE (u, '(A)') '--------------------- POINTS ---'
     WRITE (u, '(A)') 'ID Attachment X Y Z M V CdA CA'
@@ -500,6 +504,7 @@ CONTAINS
     IF (wo) THEN
       WRITE (u, '(A)') '--------------------- WAKE OSCILLATOR ---'
       WRITE (u, '(A)') 'TypeName CL0 St eps A'
+      WRITE (u, '(A)') 'riser 0.3 0.2 0.3 12'
       WRITE (u, '(A)') 'cable 0.3 0.2 0.3 12'
     END IF
     IF (PRESENT(amp)) THEN

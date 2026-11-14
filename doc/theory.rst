@@ -1314,7 +1314,11 @@ oscillation and the van der Pol damping rate at the start of the interval, so a 
 :math:`\varepsilon` stays resolved; should the rate exceed :math:`0.2/\delta t` on the way, or the
 result not be finite, the interval is redone with twice the sub-steps. The lift is integrated on a finite-EI cable at the Gauss
 points of the synchronisation lift, :math:`q` interpolated between the element's end nodes, with
-its exact position and velocity derivatives in the tangent at fixed :math:`q`. :math:`q` starts on
+its exact position and velocity derivatives in the tangent at fixed :math:`q`. On an ``EI = 0``
+line it acts at the free nodes as the synchronisation lift does, over the node's tributary length,
+with the node's smoothed cross-flow acceleration (the average with its two neighbours) as the
+forcing, and :math:`(q, \dot q)` takes the place of the phase and the first motion statistic in
+the line's VIV state. :math:`q` starts on
 its limit cycle at the node's phase seed, :math:`q = 2\cos\phi_0`, :math:`\dot q = 0`, and the
 state is part of the step-recovery, snapshot and checkpoint state.
 
@@ -1326,7 +1330,9 @@ one-harmonic balance leaves out. On the taut cable of ``viv_taut_cable_inline.da
 ``Cl`` 0 and ``CL0`` 0.3 the cable locks in at 0.282 Hz, below the wake's own 0.30 Hz, at a
 steady mid-span A/D of 0.58; with :math:`A` = 0 the uncoupled wake drives it at 0.298 Hz at A/D
 0.10, and over the lock-in the drag and damping take out the wake lift's power within 0.3 %. The
-wake oscillator acts on finite-EI cables, cross-flow only.
+same line with ``EI = 0`` locks in at the same 0.282 Hz and A/D 0.586 (0.1 % from the finite-EI
+cable), and 0.099 uncoupled (0.3 %). The wake oscillator acts on finite-EI cables and ``EI = 0``
+lines, cross-flow only.
 
 .. _theory-viv-amplitude:
 

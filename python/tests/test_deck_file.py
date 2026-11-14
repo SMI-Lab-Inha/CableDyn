@@ -4888,15 +4888,15 @@ def test_wake_oscillator_rows_are_read_and_kept(tmp_path, rows, expected):
         (None, ("chain 0.3 0.2 0.0",), "St > 0, eps > 0 and A >= 0"),
         (None, ("chain 0.3 0.2 0.3 -1",), "St > 0, eps > 0 and A >= 0"),
         ("lift", ("chain 0.3",), "give the type LINE TYPES Cl 0"),
-        ("ei0", ("chain 0.3",), "acts on finite-EI cables (EI > 0) only"),
+        ("lift ei0", ("chain 0.3",), "give the type LINE TYPES Cl 0"),
     ],
 )
 def test_wake_oscillator_rows_follow_the_native_checks(base, rows, message):
     text = _DYNAMIC
-    if base == "lift":
+    if base and "lift" in base:
         row = "chain 0.252 390.0 1.674e9 -1.0 1.0e4 1.37 0.64 1.0 0.0"
         text = _edit(text, (row, row + " 0.8"))
-    elif base == "ei0":
+    if base and "ei0" in base:
         text = _edit(text, ("1.674e9 -1.0 1.0e4 1.37", "1.674e9 -1.0 0.0 1.37"))
     with pytest.raises(DeckFormatError, match=re.escape(message)):
         DeckFile.from_text(_with_section(text, "WAKE OSCILLATOR", *rows))
@@ -5064,6 +5064,12 @@ def test_wake_oscillator_cl0_zero_is_off_and_needs_no_finite_line():
     # CL0 0 switches nothing on, so it is accepted on an EI = 0 line and next to a lift type
     text = _edit(_DYNAMIC, ("1.674e9 -1.0 1.0e4 1.37", "1.674e9 -1.0 0.0 1.37"))
     DeckFile.from_text(_with_section(text, "WAKE OSCILLATOR", "chain 0.0"))
+
+
+def test_wake_oscillator_acts_on_an_ei0_line():
+    # native init_one_model installs the wake oscillator on EI = 0 lines as on finite-EI cables
+    text = _edit(_DYNAMIC, ("1.674e9 -1.0 1.0e4 1.37", "1.674e9 -1.0 0.0 1.37"))
+    DeckFile.from_text(_with_section(text, "WAKE OSCILLATOR", "chain 0.3 0.2 0.3 12"))
 
 
 def test_viv_is_accepted_on_the_coupled_route():

@@ -227,7 +227,7 @@ class LineType:
         reference lift coefficient, the Strouhal number, the van der Pol
         parameter and the acceleration coupling. It replaces the
         synchronisation lift, so ``cl`` stays ``None`` or 0, and acts on
-        finite-EI cables. ``None`` leaves a trailing value out of the row (the
+        ``EI = 0`` lines and finite-EI cables. ``None`` leaves a trailing value out of the row (the
         solver takes 0.2, 0.3 and 12); a value given writes the ones before it.
     viv_amplitude : list of tuples | None
         Optional amplitude-dependent VIV coefficients of a type (Thorsen et al.

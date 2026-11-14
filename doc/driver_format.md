@@ -1240,7 +1240,7 @@ Wake-oscillator vortex-induced vibration of a line type, the model of Facchinett
 a van der Pol oscillator per node stands for the near wake and drives the cross-flow lift, coupled
 to the cable's cross-flow acceleration (see [Wake oscillator](theory.rst)). It replaces the
 synchronisation model of the LINE TYPES `Cl` column for that type, so the type keeps `Cl = 0`, and
-it acts on finite-EI cables.
+it acts on finite-EI cables and `EI = 0` lines alike.
 
 ```text
 --------------------- WAKE OSCILLATOR ----------------------------------
@@ -1270,7 +1270,7 @@ Behaviour:
   `VIVPow` carry the wake lift. A row with `CL0 = 0` leaves the run exactly as without it.
 - A row fails if it is not `TypeName CL0 [St [eps [A]]]`, names an undefined or already named
   type, or holds a value out of range; `CL0 > 0` fails on a type with `Cl > 0`. A line whose types
-  mix the two models fails, and so does an `EI = 0` line with the wake oscillator.
+  mix the two models fails.
 
 ### VIV AMPLITUDE (optional)
 

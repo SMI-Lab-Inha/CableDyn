@@ -4789,8 +4789,8 @@ class DeckFile:
             for line_id, section_types in section_types_by_line.items()
             if {line_type.lower() for line_type in section_types} & amp_type_names
         }
-        # native build_one_hermite_cable and the EI = 0 line wiring: the wake oscillator and the
-        # cross-flow damping act on finite-EI cables only, and a cable takes one VIV model
+        # native build_one_hermite_cable and the EI = 0 line wiring: the cross-flow damping acts on
+        # finite-EI cables only, and a line takes one VIV model
         for line_id, section_types in section_types_by_line.items():
             types_used = {line_type.lower() for line_type in section_types}
             if types_used & damp_type_names and line_id not in finite_line_ids:
@@ -4800,11 +4800,6 @@ class DeckFile:
                 )
             if not types_used & wake_type_names:
                 continue
-            if line_id not in finite_line_ids:
-                raise DeckFormatError(
-                    f"{self._label}: line {line_id}: the wake oscillator (WAKE OSCILLATOR "
-                    "section) acts on finite-EI cables (EI > 0) only"
-                )
             if types_used & viv_type_names:
                 raise DeckFormatError(
                     f"{self._label}: line {line_id}: a line takes one VIV model, but its types mix "
