@@ -3741,8 +3741,9 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'finite-EI cable added-mass wiring failed: '//TRIM(em)); RETURN
     END IF
     IF (has_att) THEN
-      CALL CD_HFMF_Set_Attachments(cable, att_node, ln%att(2, :), ln%att(3, :), ln%att(4, :), ln%att(6, :), &
-                                   ln%att(5, :), opts%rhoW, opts%g, es, em)
+      CALL CD_HFMF_Set_Attachments(cable, att_node, ln%att(2, :), ln%att(3, :), ln%att(4, :), &
+                                   MAX(ln%att(6, :), CD_ZERO), ln%att(5, :), opts%rhoW, opts%g, es, em, &
+                                   isotropic=ln%att(6, :) < CD_ZERO)
       IF (es /= CD_HFMF_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'finite-EI cable attachment wiring failed: '//TRIM(em)); RETURN
       END IF
@@ -5774,7 +5775,8 @@ CONTAINS
       INTEGER, INTENT(IN) :: e
       REAL(wp), INTENT(IN) :: share
       cdn(e) = cdn(e) + share*att(4, k)/(diam(e)*l0(e))
-      cdt(e) = cdt(e) + share*att(6, k)/(4.0_wp*QUARTER_PI*diam(e)*l0(e))
+      ! (a point's isotropic drag, CdAx < 0, smears with CdAx = CdA for the continuation start)
+      cdt(e) = cdt(e) + share*MERGE(att(4, k), att(6, k), att(6, k) < CD_ZERO)/(4.0_wp*QUARTER_PI*diam(e)*l0(e))
     END SUBROUTINE add_share
   END SUBROUTINE smear_attachment_drag
 
@@ -6131,7 +6133,8 @@ CONTAINS
         CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
       END IF
       ul = [frame_cs(1)*ug(1) + frame_cs(2)*ug(2), -frame_cs(2)*ug(1) + frame_cs(1)*ug(2), ug(3)]
-      CALL CD_HermiteCable_Attachment_Drag(ul, q(base + 4:base + 6), opts%rhoW, att(4, k), att(6, k), fd, es, em)
+      CALL CD_HermiteCable_Attachment_Drag(ul, q(base + 4:base + 6), opts%rhoW, att(4, k), MAX(att(6, k), CD_ZERO), &
+                                           fd, es, em, isotropic=att(6, k) < CD_ZERO)
       IF (es /= CD_HCDYN_OK) THEN
         CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
       END IF
@@ -19483,7 +19486,9 @@ CONTAINS
         ELSE
           ALLOCATE (att_new(6, 1))
         END IF
-        att_new(:, SIZE(att_new, 2)) = [arc, points(ip)%mass, points(ip)%vol, points(ip)%cda, points(ip)%ca, CD_ZERO]
+        ! CdAx -1: the internal marker of a point's isotropic drag rho CdA |w| w / 2 (a deck
+        ! ATTACHMENTS row cannot give a negative CdAx)
+        att_new(:, SIZE(att_new, 2)) = [arc, points(ip)%mass, points(ip)%vol, points(ip)%cda, points(ip)%ca, -CD_ONE]
         CALL MOVE_ALLOC(att_new, lines(jl)%att)
       END IF
     END DO

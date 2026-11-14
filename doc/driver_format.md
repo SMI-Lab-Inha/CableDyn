@@ -749,7 +749,8 @@ line's free end on a standalone deck whose lines are all finite-EI and that has 
 RODS or other `Connect`/`Free` point (a free-hanging cable or riser with a clump or a bare end).
 The point's `Mass`, `Vol`, `CdA` and `Ca` act on the line's End B node as an
 [ATTACHMENTS](#attachments-optional-finite-ei-lines) row at the line's full arc length (weight
-and buoyancy, added mass, and drag against current and waves). The static equilibrium is solved
+and buoyancy, added mass, and drag against current and waves), with the point's isotropic drag
+`½ rhoW CdA ‖w‖ w` on the whole relative velocity rather than the attachment's normal/axial split. The static equilibrium is solved
 with the end first held on the chord from End A towards the deck position, at the line's length
 stretched by its hanging weight, then released, so the run starts at the end's rest position
 (the theory manual, Free cable ends); the dynamics leave the end's position free. `Point<P>p…`

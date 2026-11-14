@@ -3028,6 +3028,12 @@ _CLAMPED_B = (
     [
         ("200 0.02548 0.06 1.0", "", "", None),
         ("0 0 0 0", "", "", None),
+        (
+            "200 0.02548 0.06 1.0",
+            "",
+            _CLAMPED_B.replace("1 B Rigid 0 0 1", "1 B 0.0 0 0 1"),
+            None,
+        ),
         ("200 0.02548 0.06 1.0", "", _CLAMPED_B, "non-pinned END CONNECTIONS need End B"),
         ("10 0.5 0.06 1.0", "", "", "not supported on the multibody march"),
         (

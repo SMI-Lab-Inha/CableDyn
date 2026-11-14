@@ -14,6 +14,9 @@ PROGRAM test_free_end_deck
   !!   F3 a prescribed 0.05 m sway of the top at 0.05 Hz moves the end in phase with an amplitude
   !!      ratio within 1 % of the Rayleigh estimate for a hanging string with a heavy end mass
   !!      (1.104: the end mass with its added mass, a third of the line's, the mean tension);
+  !!   F6 the point keeps its isotropic drag rho CdA |w| w / 2: in a vertical 0.5 m/s current along
+  !!      the hanging line (axial flow at the end) the top tension grows by the clump's drag
+  !!      rho CdA w^2 / 2 = 7.69 N (to 1e-3 N; the line's own axial drag is zero here);
   !!   F5 on a flat seabed above which the vertical seed would lie (7.3 m deep, the line 7 m from
   !!      z = -0.5 m), a 5 kg end in a 0.8 m/s current rests above the seabed (the seed is placed on
   !!      it, the release lifts the end), and the 200 kg clump, which comes to rest on the seabed
@@ -33,6 +36,7 @@ PROGRAM test_free_end_deck
   CALL check_sway()
   CALL check_refusals()
   CALL check_seabed()
+  CALL check_axial_drag()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -271,6 +275,30 @@ CONTAINS
       x(i) = (m(i, 4) - SUM(m(i, i + 1:3)*x(i + 1:3)))/m(i, i)
     END DO
   END SUBROUTINE solve3
+
+  SUBROUTINE check_axial_drag()
+    REAL(wp), ALLOCATABLE :: tab(:, :)
+    REAL(wp) :: w, wb
+    INTEGER :: n, k
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    OPEN (NEWUNIT=k, FILE='current_profile.txt', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (k, '(A)') 'z ux uy uz'
+    WRITE (k, '(A)') '(m) (m/s) (m/s) (m/s)'
+    WRITE (k, '(A)') '-20 0 0 -0.5'
+    WRITE (k, '(A)') '0 0 0 -0.5'
+    CLOSE (k)
+    CALL write_deck('fed_axial.dat', '3000', 'Free 0.0 0.0 -7.5 200 0.02548 0.06 1.0', '', '', '1 Currents', &
+                    'FairTen1', 0.005_wp, 0.05_wp)
+    CALL run('fed_axial.dat', 'fed_axial', ok, msg)
+    CALL require(ok, 'F6 axial current: '//TRIM(msg))
+    IF (.NOT. ok) RETURN
+    CALL read_out('fed_axial.out', 2, tab, n)
+    w = (M - RHO*0.25_wp*PI*D**2)*G
+    wb = (MB - RHO*VB)*G
+    IF (n > 0) CALL require(ABS(tab(2, 1) - (w*L + wb + 0.5_wp*RHO*0.06_wp*0.25_wp)) < 1.0e-3_wp, &
+                            'F6 the clump''s isotropic drag in axial flow')
+  END SUBROUTINE check_axial_drag
 
   SUBROUTINE check_seabed()
     REAL(wp), ALLOCATABLE :: tab(:, :)

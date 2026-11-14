@@ -3759,18 +3759,26 @@ class DeckFile:
             for k in ends
         ):
             return set()
-        # pinned in bending at both ends, at most one end restrained in torsion
+
+        # pinned in bending at both ends, at most one end restrained in torsion; a numeric zero
+        # stiffness is pinned / free, as native append_end_connection reads it
+        def zero_or(token: str, keywords: frozenset[str]) -> bool:
+            word = _strip_quotes(token).lower()
+            if word in keywords:
+                return True
+            try:
+                return _native_float(word) == 0.0
+            except ValueError:
+                return False
+
         clamped: set[str] = set()
         twisted: dict[str, int] = {}
         for row in self.end_connections:
             with contextlib.suppress(ValueError, IndexError):
                 line_key = str(_native_int(row.tokens[0]))
-                if _strip_quotes(row.tokens[2]).lower() not in _PINNED_END_CONNECTIONS:
+                if not zero_or(row.tokens[2], _PINNED_END_CONNECTIONS):
                     clamped.add(line_key)
-                if (
-                    len(row.tokens) >= 10
-                    and _strip_quotes(row.tokens[6]).lower() not in _FREE_TORSION_KEYWORDS
-                ):
+                if len(row.tokens) >= 10 and not zero_or(row.tokens[6], _FREE_TORSION_KEYWORDS):
                     twisted[line_key] = twisted.get(line_key, 0) + 1
         clamped |= {line_key for line_key, count in twisted.items() if count > 1}
         rho_w, grav = effective("water_density", 1025.0), effective("gravity", 9.80665)

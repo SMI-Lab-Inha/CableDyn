@@ -330,7 +330,8 @@ CONTAINS
     END IF
   END SUBROUTINE CD_HFMF_Set_Drag
 
-  SUBROUTINE CD_HFMF_Set_Attachments(self, node, mass, volume, cda, cdax, ca, rho_w, gravity, ErrStat, ErrMsg)
+  SUBROUTINE CD_HFMF_Set_Attachments(self, node, mass, volume, cda, cdax, ca, rho_w, gravity, ErrStat, ErrMsg, &
+                                     isotropic)
     !! Install discrete point attachments lumped at cable nodes (internal node order,
     !! anchor = node 1); see CD_HermiteCable_Dyn_Set_Attachments.
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: self
@@ -338,6 +339,7 @@ CONTAINS
     REAL(wp), INTENT(IN) :: mass(:), volume(:), cda(:), cdax(:), ca(:), rho_w, gravity
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    LOGICAL, INTENT(IN), OPTIONAL :: isotropic(:)
     INTEGER :: es
     CHARACTER(1024) :: em
     ErrStat = CD_HFMF_OK; ErrMsg = ''
@@ -345,7 +347,7 @@ CONTAINS
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = 'CD_HFMF_Set_Attachments: module not initialised'; RETURN
     END IF
     CALL CD_HermiteCable_Dyn_Set_Attachments(self%line, node, mass, volume, cda, cdax, ca, rho_w, gravity, &
-                                             es, em)
+                                             es, em, isotropic=isotropic)
     IF (es /= CD_HCDYN_OK) THEN
       ErrStat = CD_HFMF_BADINPUT; ErrMsg = TRIM(em)
     END IF
