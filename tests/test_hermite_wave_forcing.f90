@@ -18,7 +18,10 @@ PROGRAM test_hermite_wave_forcing
   !!      warmup), with bounded nonzero amplitude, every step converging, and the model clock
   !!      advancing by n dt,
   !!   D  fail-closed: Set_Waves pre-init / without any hydro config / bad height/period/depth /
-  !!      mismatched drag-vs-added-mass waterlines; partial wave arguments to the drag element.
+  !!      mismatched drag-vs-added-mass waterlines; partial wave arguments to the drag element;
+  !!   E  SURFACE BAND IN WAVES: a short vertical element moved through the instantaneous surface
+  !!      in steps of D/2000: the FK load and the wave drag change by under 0.2 % of their largest
+  !!      value per step (a point above the surface inside the band takes the field at the surface).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_Hydro, ONLY: CD_Airy_Wave_Kinematics_Precomputed, CD_Solve_Dispersion_Wavenumber, CD_HYDRO_OK
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
@@ -42,6 +45,7 @@ PROGRAM test_hermite_wave_forcing
   CALL check_crest_wetting()
   CALL check_wave_response()
   CALL check_fail_closed()
+  CALL check_band_continuity()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -61,6 +65,40 @@ CONTAINS
     CALL CD_Solve_Dispersion_Wavenumber(om, WVDEP, GRAV, k, es, em)
     CALL require(es == CD_HYDRO_OK, 'dispersion solve: '//TRIM(em))
   END SUBROUTINE wave_omk
+
+  SUBROUTINE check_band_continuity()
+    !! E: the FK load and the wave drag of an element moved through the instantaneous surface.
+    REAL(wp) :: qe(12), ve(12), om, k, eta, uw(3), aw(3), f0(12), f1(12), d0(12), d1(12), fj(12, 12)
+    REAL(wp) :: dz, z0, jfk, jdr, mfk, mdr
+    INTEGER :: es, i
+    CHARACTER(300) :: em
+    CALL wave_omk(om, k)
+    CALL CD_Airy_Wave_Kinematics_Precomputed(0.0_wp, 0.0_wp, -1.0_wp, 0.9_wp, WVH, om, k, WVDEP, 0.0_wp, .TRUE., &
+                                             eta, uw, aw, es, em)
+    ve = 0.0_wp
+    dz = DIAM/2000.0_wp
+    jfk = 0.0_wp; jdr = 0.0_wp; mfk = 0.0_wp; mdr = 0.0_wp
+    DO i = 0, 16000
+      ! a straight vertical element of length 0.2 m, its foot at z0 (from eta - 0.3 to eta + 0.1)
+      z0 = eta - 0.3_wp + REAL(i, wp)*dz   ! 16000 steps of D/2000 = 0.4 m
+      qe = [0.0_wp, 0.0_wp, z0, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, z0 + 0.2_wp, 0.0_wp, 0.0_wp, 1.0_wp]
+      CALL CD_HermiteCable_FK_Element(qe, 0.2_wp, 0.0_wp, RHOW, DIAM, CAN, CAT, WVH, om, k, WVDEP, 0.0_wp, 0.9_wp, &
+                                      f1, fj, es, em)
+      CALL CD_HermiteCable_Drag_Element(qe, ve, 0.2_wp, [0.0_wp, 0.0_wp, 0.0_wp], 0.0_wp, RHOW, DIAM, CDN, CDT, d1, &
+                                        ErrStat=es, ErrMsg=em, wv_h=WVH, wv_om=om, wv_k=k, wv_depth=WVDEP, &
+                                        wv_dir=0.0_wp, wv_t=0.9_wp)
+      IF (i > 0) THEN
+        jfk = MAX(jfk, nan_max_abs(f1 - f0))
+        jdr = MAX(jdr, nan_max_abs(d1 - d0))
+      END IF
+      mfk = MAX(mfk, nan_max_abs(f1)); mdr = MAX(mdr, nan_max_abs(d1))
+      f0 = f1; d0 = d1
+    END DO
+    WRITE (*, '(A,2ES10.3)') '  [surface band, waves] largest change per step / largest load, FK and drag: ', &
+      jfk/mfk, jdr/mdr
+    CALL require(mfk > 0.0_wp .AND. jfk < 2.0e-3_wp*mfk, 'E: the FK load is continuous through the wave surface')
+    CALL require(mdr > 0.0_wp .AND. jdr < 2.0e-3_wp*mdr, 'E: the wave drag is continuous through the wave surface')
+  END SUBROUTINE check_band_continuity
 
   SUBROUTINE check_fk_element_quadrature()
     !! FK element vs an independent 400-point trapezoid integral of the analytic per-length FK force

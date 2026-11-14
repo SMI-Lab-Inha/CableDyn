@@ -1971,16 +1971,17 @@ CONTAINS
       knx = model%vil_k(e)*[COS(model%vil_phi_eval(e)), COS(model%vil_phi_eval(e + 1))]
       IF (PRESENT(djq)) THEN
         CALL CD_HermiteCable_VIV_Lift_Element(qe, ve, model%l0(e), uu, wl, kn, flift, djq, djv, ErrStat, ErrMsg, &
-                                              kx_node=knx)
+                                              kx_node=knx, diam=model%diam(e))
       ELSE
         CALL CD_HermiteCable_VIV_Lift_Element(qe, ve, model%l0(e), uu, wl, kn, flift, ErrStat=ErrStat, &
-                                              ErrMsg=ErrMsg, kx_node=knx)
+                                              ErrMsg=ErrMsg, kx_node=knx, diam=model%diam(e))
       END IF
     ELSE IF (PRESENT(djq)) THEN
-      CALL CD_HermiteCable_VIV_Lift_Element(qe, ve, model%l0(e), uu, wl, kn, flift, djq, djv, ErrStat, ErrMsg)
+      CALL CD_HermiteCable_VIV_Lift_Element(qe, ve, model%l0(e), uu, wl, kn, flift, djq, djv, ErrStat, ErrMsg, &
+                                            diam=model%diam(e))
     ELSE
       CALL CD_HermiteCable_VIV_Lift_Element(qe, ve, model%l0(e), uu, wl, kn, flift, ErrStat=ErrStat, &
-                                            ErrMsg=ErrMsg)
+                                            ErrMsg=ErrMsg, diam=model%diam(e))
     END IF
   END SUBROUTINE viv_element_lift
 
@@ -8349,7 +8350,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER, PARAMETER :: NGP = 4
     REAL(wp), PARAMETER :: PI_L = 3.14159265358979323846_wp
-    REAL(wp) :: gp(NGP), gw(NGP), H(4), dH(4), rpos(3), rp(3), acc(3), speed, tangent(3), fa(3), area
+    REAL(wp) :: gp(NGP), gw(NGP), H(4), dH(4), rpos(3), rp(3), acc(3), speed, tangent(3), fa(3), area, wf, dwf
     INTEGER :: g, sh, c
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
@@ -8366,14 +8367,15 @@ CONTAINS
         rp(c) = dH(1)*qe(c) + dH(2)*qe(3 + c) + dH(3)*qe(6 + c) + dH(4)*qe(9 + c)
         acc(c) = H(1)*ae(c) + H(2)*ae(3 + c) + H(3)*ae(6 + c) + H(4)*ae(9 + c)
       END DO
-      IF (rpos(3) > waterline_z) CYCLE                 ! dry Gauss point: no added mass
+      CALL CD_HermiteCable_Immersion(waterline_z - rpos(3), diam, wf, dwf)
+      IF (.NOT. (wf > CD_ZERO)) CYCLE                  ! dry Gauss point: no added mass
       speed = SQRT(rp(1)**2 + rp(2)**2 + rp(3)**2)
       IF (speed <= 1.0e-12_wp) THEN
         ErrStat = CD_HCDYN_NOCONVERGE
         ErrMsg = 'added-mass force: degenerate centreline (|dr/dxi| ~ 0)'; RETURN
       END IF
       tangent = rp/speed
-      fa = gw(g)*speed*rho*area*(can*acc + (cat - can)*DOT_PRODUCT(tangent, acc)*tangent)
+      fa = (gw(g)*wf)*speed*rho*area*(can*acc + (cat - can)*DOT_PRODUCT(tangent, acc)*tangent)
       DO sh = 1, 4
         f(3*(sh - 1) + 1:3*sh) = f(3*(sh - 1) + 1:3*sh) + H(sh)*fa
       END DO
@@ -11671,6 +11673,30 @@ CONTAINS
     END SUBROUTINE fail
   END SUBROUTINE CD_HermiteCable_Axial_Damping_Element
 
+  PURE SUBROUTINE CD_HermiteCable_Immersion(depth, diam, wf, dwf)
+    !! Immersed fraction wf of a cable section whose centre lies depth below the free surface
+    !! (negative above it), linear across one diameter: 0 from D/2 above the surface, 1 from D/2
+    !! below, 1/2 at the surface, and its derivative dwf = d wf/d z with respect to the height of
+    !! the centre (-1/D in the band, 0 outside). A fully submerged point has wf exactly 1; across
+    !! the surface the hydrodynamic load of a Gauss point is continuous in the position, where a
+    !! wet/dry switch made it jump (a static equilibrium with a Gauss point at the surface then had
+    !! no root and the solve stalled).
+    REAL(wp), INTENT(IN) :: depth, diam
+    REAL(wp), INTENT(OUT) :: wf, dwf
+    REAL(wp) :: x
+    x = 0.5_wp + depth/diam
+    IF (x >= CD_ONE) THEN
+      wf = CD_ONE
+      dwf = CD_ZERO
+    ELSE IF (x <= CD_ZERO) THEN
+      wf = CD_ZERO
+      dwf = CD_ZERO
+    ELSE
+      wf = x
+      dwf = -CD_ONE/diam
+    END IF
+  END SUBROUTINE CD_HermiteCable_Immersion
+
   SUBROUTINE CD_HermiteCable_Drag_Element(qe, ve, l0, fluid, waterline_z, rho, diam, cdn, cdt, &
                                           fdrag, djq, djv, ErrStat, ErrMsg, &
                                           wv_h, wv_om, wv_k, wv_depth, wv_dir, wv_t, &
@@ -11684,13 +11710,13 @@ CONTAINS
     !! rel-velocity / tangent Jacobians come from the analytical Morison primitive, so djq/djv are
     !! exact (FD-verified) and vanish smoothly at zero relative velocity (fixed-point safe).
     !!
-    !! Submergence is evaluated per Gauss point (a point with r_z above waterline_z contributes no
-    !! drag). For a FULLY submerged element -- the production regime for a lazy-wave power cable or a
-    !! mooring, which hangs entirely below the free surface -- every Gauss point is wet and the
-    !! integral is exact. For an element that STRADDLES the waterline this is a bounded Gauss-sampling
-    !! approximation (the wetted length is quantised to the abscissae and the crossing-point
-    !! derivative is dropped); surface-piercing elements do not get an exact wet-portion
-    !! integration, which fully-submerged cables do not need.
+    !! Submergence is evaluated per Gauss point as the immersed fraction of its section, linear
+    !! across one diameter about the surface (CD_HermiteCable_Immersion), with its derivative in
+    !! djq. For a FULLY submerged element -- the production regime for a lazy-wave power cable or a
+    !! mooring, which hangs entirely below the free surface -- every fraction is exactly 1 and the
+    !! integral is exact. For an element that STRADDLES the waterline the load stays continuous in
+    !! the position (a wet/dry switch per point made it jump, and a static equilibrium with a point
+    !! at the surface had no root); the wetted length is still sampled at the abscissae.
     !! OPTIONAL WAVES: supplying a wave family adds the wave velocity at each wet Gauss point
     !! (Wheeler-stretched, z measured from waterline_z) to the fluid velocity the drag sees.
     !! Exactly one family with the shared wv_depth/wv_dir/wv_t: the scalar REGULAR trio
@@ -11723,7 +11749,7 @@ CONTAINS
     REAL(wp), PARAMETER :: G3 = 0.7745966692414834_wp   ! sqrt(3/5)
     REAL(wp) :: gp(NGP), gw(NGP), H(4), dH(4)
     REAL(wp) :: rpos(3), vvel(3), rp(3), speed, tangent(3), urel(3), fpl(3), Jrel(3, 3), Jtan(3, 3)
-    REAL(wp) :: jq3(3, 3), scale, eta_w, uw(3), aw(3), uamb(3)
+    REAL(wp) :: jq3(3, 3), scale, eta_w, uw(3), aw(3), uamb(3), wf, dwf, gww, zsurf
     LOGICAL :: has_wv, has_shared, has_trio, has_cmp, any_wv_arg, want_jac, split
     INTEGER :: g, s, c, sp, cp, a, b, es
     ! the message of a per-Gauss-point CableDyn_Hydro kinematics or Morison call (at most 154
@@ -11817,10 +11843,28 @@ CONTAINS
         IF (es /= CD_HYDRO_OK) THEN
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Drag_Element: '//TRIM(em2); RETURN
         END IF
-        IF (rpos(3) - waterline_z > eta_w) CYCLE       ! above the instantaneous surface: dry
+        CALL CD_HermiteCable_Immersion(waterline_z + eta_w - rpos(3), diam, wf, dwf)
+        IF (wf > CD_ZERO .AND. rpos(3) - waterline_z > eta_w) THEN
+          ! a centre above the surface inside the band: its immersed part takes the wave velocity at
+          ! the surface (the Wheeler kinematics vanish above it), so the drag stays continuous
+          IF (has_cmp) THEN
+            zsurf = eta_w
+            CALL CD_Component_Wave_Kinematics(rpos(1), rpos(2), zsurf, wv_t, wv_depth, wv_dir, .TRUE., wvc_om, &
+                                              wvc_k, wvc_amp, wvc_ph, eta_w, uw, aw, es, em2, &
+                                              inputs_validated=.TRUE., exp_m2kd=wvc_e2kd)
+          ELSE
+            zsurf = eta_w
+            CALL CD_Airy_Wave_Kinematics_Precomputed(rpos(1), rpos(2), zsurf, wv_t, wv_h, wv_om, wv_k, wv_depth, &
+                                                     wv_dir, .TRUE., eta_w, uw, aw, es, em2)
+          END IF
+          IF (es /= CD_HYDRO_OK) THEN
+            ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Drag_Element: '//TRIM(em2); RETURN
+          END IF
+        END IF
       ELSE
-        IF (rpos(3) > waterline_z) CYCLE               ! dry Gauss point: no drag, no Jacobian
+        CALL CD_HermiteCable_Immersion(waterline_z - rpos(3), diam, wf, dwf)
       END IF
+      IF (.NOT. (wf > CD_ZERO)) CYCLE                  ! dry Gauss point: no drag, no Jacobian
       speed = SQRT(rp(1)**2 + rp(2)**2 + rp(3)**2)     ! |dr/dxi| = deformed arc length per unit xi
       IF (speed <= 1.0e-12_wp) THEN
         ErrStat = CD_HCDYN_NOCONVERGE
@@ -11854,7 +11898,10 @@ CONTAINS
       IF (es /= CD_HYDRO_OK) THEN
         ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Drag_Element: '//TRIM(em2); RETURN
       END IF
-      scale = gw(g)*speed                              ! ds = |dr/dxi| dxi (deformed cable length)
+      ! ds = |dr/dxi| dxi (deformed cable length), times the immersed fraction of the section
+      ! (exactly 1 at a fully submerged point, so its products are unchanged)
+      gww = gw(g)*wf
+      scale = gww*speed
       DO s = 1, 4
         DO c = 1, 3
           a = 3*(s - 1) + c
@@ -11879,9 +11926,17 @@ CONTAINS
               b = 3*(sp - 1) + cp
               ! velocity: d urel/d ve(b) = -H(sp), scaled by the deformed length measure
               djv(a, b) = djv(a, b) - scale*H(s)*H(sp)*Jrel(c, cp)
-              djq(a, b) = djq(a, b) + gw(g)*H(s)*dH(sp)*jq3(c, cp)
+              djq(a, b) = djq(a, b) + gww*H(s)*dH(sp)*jq3(c, cp)
             END DO
           END DO
+          ! the immersed fraction moves with the height of the point (in the surface band only):
+          ! d wf/d qe(b) = dwf H(sp) for the vertical DOFs, dwf = d wf/d z
+          IF (dwf /= CD_ZERO) THEN
+            DO sp = 1, 4
+              b = 3*sp
+              djq(a, b) = djq(a, b) + gw(g)*speed*H(s)*fpl(c)*dwf*H(sp)
+            END DO
+          END IF
         END DO
       END DO
     END DO
@@ -11898,7 +11953,7 @@ CONTAINS
   END SUBROUTINE CD_HermiteCable_Drag_Element
 
   SUBROUTINE CD_HermiteCable_VIV_Lift_Element(qe, ve, l0, fluid, waterline_z, k_node, flift, djq, djv, &
-                                              ErrStat, ErrMsg, kx_node)
+                                              ErrStat, ErrMsg, kx_node, diam)
     !! Consistent Gauss-integrated cross-flow VIV lift on one cubic-Hermite element: the load
     !! integral N^T f ds of the per-length lift f = k(xi) U (t x v_r) (CD_VIV_Lift_Per_Length),
     !! with k = 1/2 rho D Cl cos(phi) interpolated linearly between the element's end nodes
@@ -11912,10 +11967,14 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     REAL(wp), INTENT(IN), OPTIONAL :: kx_node(2)
+    !! diam (optional): the section diameter; with it a Gauss point carries the immersed fraction of
+    !! its section (CD_HermiteCable_Immersion) across the free surface, without it a point above
+    !! waterline_z carries no load
+    REAL(wp), INTENT(IN), OPTIONAL :: diam
     INTEGER, PARAMETER :: NGP = 3
     REAL(wp), PARAMETER :: G3 = 0.7745966692414834_wp   ! sqrt(3/5)
     REAL(wp) :: gp(NGP), gw(NGP), H(4), dH(4), rpos(3), vvel(3), rp(3), speed, tangent(3), fpl(3)
-    REAL(wp) :: jrel(3, 3), jtan(3, 3), scale, kg, fx(3), jrx(3, 3), jtx(3, 3)
+    REAL(wp) :: jrel(3, 3), jtan(3, 3), scale, kg, fx(3), jrx(3, 3), jtx(3, 3), wf, dwf, gww
     LOGICAL :: want_jac, ok
     INTEGER :: g, s, c, sp, cp, a, b
 
@@ -11934,7 +11993,13 @@ CONTAINS
         vvel(c) = H(1)*ve(c) + H(2)*ve(3 + c) + H(3)*ve(6 + c) + H(4)*ve(9 + c)
         rp(c) = dH(1)*qe(c) + dH(2)*qe(3 + c) + dH(3)*qe(6 + c) + dH(4)*qe(9 + c)
       END DO
-      IF (rpos(3) > waterline_z) CYCLE                 ! dry Gauss point: no lift
+      IF (PRESENT(diam)) THEN
+        CALL CD_HermiteCable_Immersion(waterline_z - rpos(3), diam, wf, dwf)
+      ELSE
+        wf = MERGE(CD_ZERO, CD_ONE, rpos(3) > waterline_z)
+        dwf = CD_ZERO
+      END IF
+      IF (.NOT. (wf > CD_ZERO)) CYCLE                  ! dry Gauss point: no lift
       kg = (CD_ONE - gp(g))*k_node(1) + gp(g)*k_node(2)
       IF (want_jac) THEN
         CALL CD_VIV_Lift_Per_Length(fluid - vvel, rp, kg, fpl, ok, jrel, jtan)
@@ -11958,7 +12023,8 @@ CONTAINS
       END IF
       speed = SQRT(rp(1)**2 + rp(2)**2 + rp(3)**2)
       tangent = rp/speed
-      scale = gw(g)*speed
+      gww = gw(g)*wf
+      scale = gww*speed
       DO s = 1, 4
         DO c = 1, 3
           a = 3*(s - 1) + c
@@ -11973,9 +12039,15 @@ CONTAINS
             DO cp = 1, 3
               b = 3*(sp - 1) + cp
               djv(a, b) = djv(a, b) - scale*H(s)*H(sp)*jrel(c, cp)
-              djq(a, b) = djq(a, b) + gw(g)*H(s)*dH(sp)*(speed*jtan(c, cp) + fpl(c)*tangent(cp))
+              djq(a, b) = djq(a, b) + gww*H(s)*dH(sp)*(speed*jtan(c, cp) + fpl(c)*tangent(cp))
             END DO
           END DO
+          IF (dwf /= CD_ZERO) THEN  ! the immersed fraction moves with the height of the point
+            DO sp = 1, 4
+              b = 3*sp
+              djq(a, b) = djq(a, b) + gw(g)*speed*H(s)*fpl(c)*dwf*H(sp)
+            END DO
+          END IF
         END DO
       END DO
     END DO
@@ -12001,7 +12073,7 @@ CONTAINS
     INTEGER, PARAMETER :: NGP = 4
     REAL(wp), PARAMETER :: PI_L = 3.14159265358979323846_wp
     REAL(wp) :: gp(NGP), gw(NGP), H(4), dH(4)
-    REAL(wp) :: rpos(3), rp(3), speed, tangent(3), ma3(3, 3), area, scale
+    REAL(wp) :: rpos(3), rp(3), speed, tangent(3), ma3(3, 3), area, scale, wf, dwf
     INTEGER :: g, s, c, sp, cp, a, b
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
@@ -12029,7 +12101,8 @@ CONTAINS
         rpos(c) = H(1)*qe(c) + H(2)*qe(3 + c) + H(3)*qe(6 + c) + H(4)*qe(9 + c)
         rp(c) = dH(1)*qe(c) + dH(2)*qe(3 + c) + dH(3)*qe(6 + c) + dH(4)*qe(9 + c)
       END DO
-      IF (rpos(3) > waterline_z) CYCLE                 ! dry Gauss point: no added mass
+      CALL CD_HermiteCable_Immersion(waterline_z - rpos(3), diam, wf, dwf)
+      IF (.NOT. (wf > CD_ZERO)) CYCLE                  ! dry Gauss point: no added mass
       speed = SQRT(rp(1)**2 + rp(2)**2 + rp(3)**2)
       IF (speed <= 1.0e-12_wp) THEN
         ErrStat = CD_HCDYN_NOCONVERGE
@@ -12043,7 +12116,8 @@ CONTAINS
         END DO
         ma3(cp, cp) = ma3(cp, cp) + rho*area*can
       END DO
-      scale = gw(g)*speed                              ! ds = |dr/dxi| dxi (deformed cable length)
+      ! ds = |dr/dxi| dxi (deformed cable length), times the immersed fraction of the section
+      scale = (gw(g)*wf)*speed
       DO s = 1, 4
         DO c = 1, 3
           a = 3*(s - 1) + c
@@ -12106,8 +12180,8 @@ CONTAINS
     REAL(wp), PARAMETER :: G3 = 0.7745966692414834_wp   ! sqrt(3/5)
     REAL(wp), PARAMETER :: PI_L = 3.14159265358979323846_wp
     REAL(wp) :: gp(NGP), gw(NGP), H(4), dH(4)
-    REAL(wp) :: rpos(3), rp(3), speed, tangent(3), eta_w, uw(3), aw(3), area, alpha
-    REAL(wp) :: fpl(3), Jtan(3, 3), proj(3, 3), projk(3), dalpha, jq3(3, 3)
+    REAL(wp) :: rpos(3), rp(3), speed, tangent(3), eta_w, uw(3), aw(3), area, alpha, zsurf
+    REAL(wp) :: fpl(3), Jtan(3, 3), proj(3, 3), projk(3), dalpha, jq3(3, 3), wf, dwf
     LOGICAL :: has_trio, has_cmp, has_held, want_jac
     INTEGER :: g, s, c, sp, cp, a, b, k, es
     ! the message of a per-Gauss-point CableDyn_Hydro kinematics call (at most 154 characters): a
@@ -12218,7 +12292,25 @@ CONTAINS
       IF (es /= CD_HYDRO_OK) THEN
         ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_FK_Element: '//TRIM(em2); RETURN
       END IF
-      IF (rpos(3) - waterline_z > eta_w) CYCLE         ! above the instantaneous surface: dry
+      CALL CD_HermiteCable_Immersion(waterline_z + eta_w - rpos(3), diam, wf, dwf)
+      IF (.NOT. (wf > CD_ZERO)) CYCLE                  ! above the instantaneous surface: dry
+      IF (.NOT. has_held .AND. rpos(3) - waterline_z > eta_w) THEN
+        ! a centre above the surface inside the band: its immersed part takes the field at the
+        ! surface (the Wheeler kinematics vanish above it), so the load stays continuous
+        IF (has_cmp) THEN
+          zsurf = eta_w
+          CALL CD_Component_Wave_Kinematics(rpos(1), rpos(2), zsurf, wv_t, wv_depth, wv_dir, .TRUE., wvc_om, &
+                                            wvc_k, wvc_amp, wvc_ph, eta_w, uw, aw, es, em2, inputs_validated=.TRUE., &
+                                            exp_m2kd=wvc_e2kd)
+        ELSE
+          zsurf = eta_w
+          CALL CD_Airy_Wave_Kinematics_Precomputed(rpos(1), rpos(2), zsurf, wv_t, wv_h, wv_om, wv_k, wv_depth, &
+                                                   wv_dir, .TRUE., eta_w, uw, aw, es, em2)
+        END IF
+        IF (es /= CD_HYDRO_OK) THEN
+          ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_FK_Element: '//TRIM(em2); RETURN
+        END IF
+      END IF
       speed = SQRT(rp(1)**2 + rp(2)**2 + rp(3)**2)
       IF (speed <= 1.0e-12_wp) THEN
         ErrStat = CD_HCDYN_NOCONVERGE
@@ -12246,7 +12338,7 @@ CONTAINS
       DO s = 1, 4
         DO c = 1, 3
           a = 3*(s - 1) + c
-          ffk(a) = ffk(a) + gw(g)*speed*H(s)*fpl(c)
+          ffk(a) = ffk(a) + (gw(g)*wf)*speed*H(s)*fpl(c)
         END DO
       END DO
       IF (.NOT. want_jac) CYCLE
@@ -12263,9 +12355,15 @@ CONTAINS
           DO sp = 1, 4
             DO cp = 1, 3
               b = 3*(sp - 1) + cp
-              fjq(a, b) = fjq(a, b) + gw(g)*H(s)*dH(sp)*jq3(c, cp)
+              fjq(a, b) = fjq(a, b) + (gw(g)*wf)*H(s)*dH(sp)*jq3(c, cp)
             END DO
           END DO
+          IF (dwf /= CD_ZERO) THEN  ! the immersed fraction moves with the height of the point
+            DO sp = 1, 4
+              b = 3*sp
+              fjq(a, b) = fjq(a, b) + gw(g)*speed*H(s)*fpl(c)*dwf*H(sp)
+            END DO
+          END IF
         END DO
       END DO
     END DO
