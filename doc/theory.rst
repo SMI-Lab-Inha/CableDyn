@@ -2918,7 +2918,17 @@ of the axial and bending forces (:math:`x_\text{ref}` the largest coordinate mag
 length; the axial and bending damping take the strain and curvature rates from the Newmark
 velocity, whose rounding is :math:`\gamma/(\beta\,\Delta t)` times that of the coordinates). The
 bending term is the larger on a soft line (a tensioner in series, a fine mesh) with bending
-damping at a small time step. The
+damping at a small time step. The inertia takes the acceleration
+:math:`(\mathbf q - \mathbf q_n)/(\beta\,\Delta t^2) - \dots` from the coordinates, so a row's
+inertial force cannot be resolved finer than about
+:math:`\epsilon\,\sum_j \lvert M_{ij}\rvert\,\lvert q_j\rvert/(\beta\,\Delta t^2)`, a floor that grows
+like :math:`\Delta t^{-2}` and stands above the tolerance on a line near rest at a small time step
+(its inertia then sets no force scale), where a smaller step only raises it. As on the
+:math:`EI = 0` path, a residual on it is converged: when no step length of a fresh Newton
+correction reduces the residual, the residual is below :math:`10^{-4}` of the force scale, and
+the correction moves no free coordinate by more than :math:`16\,\epsilon` times its scale
+(:math:`x_\text{ref}` for the positions, the largest of 1 and the tangent or twist magnitudes for
+the tangents and twist angles), the iterate is accepted. The
 deck defaults are relative tolerance :math:`10^{-8}`, absolute tolerance :math:`10^{-14}`, 30
 iterations, and 12 backtracks (option ``dynamic_solver``). Option ``modified_newton`` reuses the
 factorised tangent within a step while each iterate reduces the residual to at most a quarter

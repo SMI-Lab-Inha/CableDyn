@@ -19,7 +19,14 @@ PROGRAM test_hermite_viv
   !! * at 60 s the mid-span cross-flow amplitude is above 0.3 D with the lift and below 0.01 D
   !!   without it;
   !! * a snapshot taken mid-run and restored replays the following steps bit for bit (state and
-  !!   phase), and the recovering step equals the plain step when no step fails.
+  !!   phase), and the recovering step equals the plain step when no step fails;
+  !! * the residual's round-off floor: the same line hung vertically from 50 m to 150 m depth,
+  !!   from rest with the lift, at dt 2.5e-5 s. The inertia takes the acceleration
+  !!   (q - q_n)/(beta dt^2) - ... from coordinates stored to their last bits, so its residual
+  !!   cannot be settled below their rounding, which grows like 1/dt^2: the first step stagnated
+  !!   at 2.4 times the tolerance 1e-8 through its 50-iteration budget and failed. Each step stops
+  !!   on that floor, and the cross-flow displacement at 0.02 s matches the same line's at
+  !!   dt 1e-3 s within 1 %.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
                                           CD_HermiteCable_Dyn_Set_Drag, CD_HermiteCable_Dyn_Set_AddedMass, &
@@ -132,6 +139,9 @@ PROGRAM test_hermite_viv
   CALL require(k > 100, 'the recovering step equals the plain step')
   CALL CD_HermiteCable_Dyn_End(model)
 
+  ! ---- the inertia's round-off floor at a small time step ----
+  CALL check_inertia_floor()
+
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -199,6 +209,54 @@ CONTAINS
     END DO
     amp = 0.5_wp*(zmax - zmin)
   END FUNCTION run_amplitude
+
+  SUBROUTINE check_inertia_floor()
+    !! The line hung vertically from 50 m to 150 m depth in the cross current along y (its lift
+    !! along x), from rest: 800 steps of 2.5e-5 s against 20 of 1e-3 s, the mid-span cross-flow
+    !! displacement at 0.02 s.
+    REAL(wp), PARAMETER :: T_END = 0.02_wp
+    REAL(wp) :: dx(2), step_dt(2), res, seed(6*(NE + 1)), l0(NE), eav(NE), eiv(NE), wv(NE), rhoa(NE), &
+                hd(NE), hn(NE), ht(NE)
+    INTEGER :: run, n, it, i, xmid
+    step_dt = [2.5e-5_wp, 1.0e-3_wp]
+    xmid = 6*(NE/2) + 1   ! r_x of the mid-span node
+    seed = 0.0_wp
+    DO i = 1, NE + 1
+      seed(6*(i - 1) + 3) = -50.0_wp - SPAN*REAL(i - 1, wp)/REAL(NE, wp)
+      seed(6*(i - 1) + 6) = -1.0_wp
+    END DO
+    l0 = SPAN/REAL(NE, wp)/(1.0_wp + TENS/EA)
+    eav = EA; eiv = EI; rhoa = MLIN
+    wv = (MLIN - RHOW*0.25_wp*PI*D**2)*GACC
+    hd = D; ht = 0.0_wp
+    DO run = 1, 2
+      CALL CD_HermiteCable_Dyn_Init(model, l0, eav, eiv, rhoa, wv, seed, [1, 2, 3, 6*NE + 1, 6*NE + 2, 6*NE + 3], &
+                                    -200.0_wp, 0.0_wp, 0.5_wp, es, em)
+      CALL require(es == CD_HCDYN_OK, 'round-off floor, init: '//TRIM(em))
+      hn = 1.2_wp
+      CALL CD_HermiteCable_Dyn_Set_Drag(model, RHOW, hd, hn, ht, 0.0_wp, [0.0_wp, U, 0.0_wp], es, em)
+      CALL require(es == CD_HCDYN_OK, 'round-off floor, drag: '//TRIM(em))
+      hn = 1.0_wp
+      CALL CD_HermiteCable_Dyn_Set_AddedMass(model, RHOW, hd, hn, ht, 0.0_wp, es, em)
+      CALL require(es == CD_HCDYN_OK, 'round-off floor, added mass: '//TRIM(em))
+      CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 0.25_wp, es, em)
+      CALL require(es == CD_HCDYN_OK, 'round-off floor, VIV: '//TRIM(em))
+      dx(run) = model%q(xmid)
+      DO n = 1, NINT(T_END/step_dt(run))
+        CALL CD_HermiteCable_Dyn_Step(model, step_dt(run), 50, 1.0e-8_wp, es, em, it, res)
+        IF (es /= CD_HCDYN_OK) THEN
+          CALL require(.FALSE., 'round-off floor: step failed: '//TRIM(em))
+          CALL CD_HermiteCable_Dyn_End(model)
+          RETURN
+        END IF
+      END DO
+      dx(run) = model%q(xmid) - dx(run)
+      CALL CD_HermiteCable_Dyn_End(model)
+    END DO
+    WRITE (*, '(A,ES11.4,A,ES11.4,A)') '  round-off floor: mid-span cross-flow displacement at 0.02 s ', dx(1), &
+      ' m at dt 2.5e-5 s, ', dx(2), ' m at dt 1e-3 s'
+    CALL require(ABS(dx(1) - dx(2)) <= 0.01_wp*ABS(dx(2)), 'round-off floor: the small steps follow the large ones')
+  END SUBROUTINE check_inertia_floor
 
   SUBROUTINE require(cond, label)
     LOGICAL, INTENT(IN) :: cond
