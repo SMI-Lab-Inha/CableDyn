@@ -118,6 +118,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   Froude-Krylov load and VIV lift of a Gauss point now carry the immersed fraction of its
   section, linear across one diameter about the surface, with its derivative in the Jacobians.
   Fully submerged points are unchanged to the bit; the full test suite passes unchanged.
+- A buoyancy module (an `ATTACHMENTS` row) on a finite-EI line that floats had no static
+  position: its buoyancy switched off at its node's height, so its weight in air took it below
+  the surface and its weight in water above it, and the static start stopped with an error. Its
+  buoyancy, Froude-Krylov force and drag now carry the immersed fraction of the sphere of its
+  volume (of its drag area without one), as a Rigid6 body's buoyancy does, continuous with its
+  slope through the surface; the statics solve for it in each Newton iterate with its stiffness.
+  A 200 kg, 2 m^3 module on a slack cable now floats 0.35 m below the surface and holds that
+  height in the march, and rides 1.5 m waves. A module deeper than its sphere's radius is
+  unchanged to the bit. In deck waves a node above the instantaneous surface takes the wave
+  kinematics at the surface (they were zero there), as a cable's internal waves already did.
 
 ## [0.4.2] - 2026-11-09
 

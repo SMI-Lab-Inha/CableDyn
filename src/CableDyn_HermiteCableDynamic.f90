@@ -120,6 +120,8 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Set_AddedMass
   PUBLIC :: CD_HermiteCable_Dyn_Set_Waves
   PUBLIC :: CD_HermiteCable_Dyn_Set_Held_Fluid
+  PUBLIC :: CD_HermiteCable_Point_Immersion
+  PUBLIC :: CD_HermiteCable_Point_Radius
   PUBLIC :: CD_HermiteCable_Dyn_Set_Contact
   PUBLIC :: CD_HermiteCable_Dyn_Set_Attachments
   PUBLIC :: CD_HermiteCable_Attachment_Drag
@@ -498,14 +500,17 @@ MODULE CableDyn_HermiteCableDynamic
     ! [N] it loses above the free surface, the fluid-inertia coefficient att_fk(k) =
     ! rho V (1 + Ca) [kg], and the drag areas normal (att_cda) and axial (att_cdax) to the
     ! line tangent at the node [m^2] with the fluid density att_rho. Its mass
-    ! plus added mass m + Ca rho V is part of the constant mass Mgb.
+    ! plus added mass m + Ca rho V is part of the constant mass Mgb. Across the free surface
+    ! its buoyancy, Froude-Krylov force and drag carry the immersed fraction of the sphere of
+    ! its volume (radius att_r; of its drag area CdA without a volume), as a Rigid6 body's do
+    ! (CD_HermiteCable_Point_Immersion).
     LOGICAL :: has_attach = .FALSE.
     ! Set by a checkpoint-restart reload (CD_HFMF_UnpackMirror): the committed acceleration is
     ! a generalised-alpha history value, so the first held fluid field after the reload must
     ! preserve it instead of re-deriving an initial-condition acceleration.
     LOGICAL :: a_restored = .FALSE.
     INTEGER, ALLOCATABLE :: att_node(:)
-    REAL(wp), ALLOCATABLE :: att_w(:), att_b(:), att_fk(:), att_cda(:), att_cdax(:)
+    REAL(wp), ALLOCATABLE :: att_w(:), att_b(:), att_fk(:), att_cda(:), att_cdax(:), att_r(:)
     ! a point's isotropic drag (a Free point ending the line) in place of the normal/axial split
     LOGICAL, ALLOCATABLE :: att_iso(:)
     ! the point a free end carries: in the equations of motion, not in the end force
@@ -2305,7 +2310,7 @@ CONTAINS
     mgb_old = model%Mgb
     ALLOCATE (model%att_node(n), model%att_w(n), model%att_b(n), model%att_fk(n), model%att_cda(n), &
               model%att_cdax(n), model%att_mass(n), model%att_madd(n), model%att_iso(n), &
-              model%att_point(n))
+              model%att_point(n), model%att_r(n))
     model%att_iso = .FALSE.
     IF (PRESENT(isotropic)) model%att_iso = isotropic
     model%att_point = .FALSE.
@@ -2320,6 +2325,9 @@ CONTAINS
     model%att_mass = mass
     model%att_madd = ca*rho_w*volume
     DO k = 1, n
+      model%att_r(k) = CD_HermiteCable_Point_Radius(volume(k), cda(k))
+    END DO
+    DO k = 1, n
       DO d = 1, 3
         dof = 6*(node(k) - 1) + d
         model%Mgb(KL_D + KU_D + 1, dof) = model%Mgb(KL_D + KU_D + 1, dof) + model%att_mass(k) + model%att_madd(k)
@@ -2329,7 +2337,7 @@ CONTAINS
     CALL solve_consistent_acceleration(model, es, em)
     IF (es /= CD_HCDYN_OK) THEN
       DEALLOCATE (model%att_node, model%att_w, model%att_b, model%att_fk, model%att_cda, model%att_cdax, &
-                  model%att_mass, model%att_madd, model%att_iso, model%att_point)
+                  model%att_mass, model%att_madd, model%att_iso, model%att_point, model%att_r)
       model%has_attach = .FALSE.
       model%Mgb = mgb_old
       model%a = a_old
@@ -2403,14 +2411,21 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: k, base, a, b
     LOGICAL :: has_jac
-    REAL(wp) :: rk(3), jrel(3, 3), jtan(3, 3)
+    REAL(wp) :: rk(3), jrel(3, 3), jtan(3, 3), jz(3)
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     DO k = 1, SIZE(model%att_node)
       IF (model%att_node(k) < n_lo .OR. model%att_node(k) > n_hi) CYCLE
       base = 6*(model%att_node(k) - 1)
-      CALL attachment_residual(model, k, q_cfg, v_cfg, want_tangent, rk, has_jac, jrel, jtan, ErrStat, ErrMsg)
+      CALL attachment_residual(model, k, q_cfg, v_cfg, want_tangent, rk, has_jac, jrel, jtan, ErrStat, ErrMsg, &
+                               jz=jz)
       IF (ErrStat /= CD_HCDYN_OK) RETURN
       IF (want_residual) R(base + 1:base + 3) = R(base + 1:base + 3) + rk
+      ! the dependence on the node height through the immersed fraction (zero off the surface)
+      IF (want_tangent) THEN
+        DO a = 1, 3
+          Kb(KL_D + KU_D + 1 + a - 3, base + 3) = Kb(KL_D + KU_D + 1 + a - 3, base + 3) + jz(a)
+        END DO
+      END IF
       IF (want_tangent .AND. has_jac) THEN
         ! w = u - v, so dR/dv = +df/dw; the tangent DOFs m enter through df/dm
         DO b = 1, 3
@@ -2425,11 +2440,16 @@ CONTAINS
   END SUBROUTINE assemble_attachments
 
   SUBROUTINE attachment_residual(model, k, q_cfg, v_cfg, want_jac, rk, has_jac, jrel, jtan, ErrStat, ErrMsg, &
-                                 f_drag)
+                                 f_drag, jz)
     !! Contribution rk of attachment k to R = f_int - f_ext at the translations of its node:
-    !! weight, buoyancy, Froude-Krylov force and drag (inertia excluded). With want_jac, the
-    !! drag Jacobians d f/d w and d f/d tangent are returned when has_jac is set. f_drag
-    !! (optional) returns the drag force on the node alone (zero above the free surface).
+    !! weight, buoyancy, Froude-Krylov force and drag (inertia excluded). Buoyancy, Froude-Krylov
+    !! force and drag carry the immersed fraction wf of the attachment's sphere (radius att_r)
+    !! at the local surface, so the load is continuous (C1) as the node crosses it: a buoy
+    !! floating at the surface has an equilibrium, where a wet/dry switch at the node height
+    !! had none. A node deeper than att_r below the surface has wf exactly 1 (unchanged loads).
+    !! With want_jac, the drag Jacobians d f/d w and d f/d tangent are returned when has_jac is
+    !! set. f_drag (optional) returns the drag force on the node alone (zero above the free
+    !! surface); jz (optional) returns d rk/d z through wf (zero off the surface band).
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: k
     REAL(wp), INTENT(IN) :: q_cfg(:), v_cfg(:)
@@ -2438,12 +2458,13 @@ CONTAINS
     LOGICAL, INTENT(OUT) :: has_jac
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    REAL(wp), INTENT(OUT), OPTIONAL :: f_drag(3)
+    REAL(wp), INTENT(OUT), OPTIONAL :: f_drag(3), jz(3)
     INTEGER :: j, base
-    REAL(wp) :: u(3), ud(3), wrel(3), wl, f(3)
+    REAL(wp) :: u(3), ud(3), wrel(3), wl, f(3), wf, dwf
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
     rk = CD_ZERO; jrel = CD_ZERO; jtan = CD_ZERO; has_jac = .FALSE.
     IF (PRESENT(f_drag)) f_drag = CD_ZERO
+    IF (PRESENT(jz)) jz = CD_ZERO
     j = model%att_node(k)
     base = 6*(j - 1)
     u = CD_ZERO; ud = CD_ZERO; wl = CD_ZERO
@@ -2456,13 +2477,23 @@ CONTAINS
     IF (model%has_held_field) THEN
       u = u + model%hf_u(:, j); ud = model%hf_ud(:, j); wl = model%hf_wl(j)
     END IF
-    IF (q_cfg(base + 3) > wl) THEN
+    CALL CD_HermiteCable_Point_Immersion(wl - q_cfg(base + 3), model%att_r(k), wf, dwf)
+    IF (.NOT. (wf > CD_ZERO)) THEN
       ! above the free surface: weight only, no buoyancy or fluid load
       rk(3) = model%att_w(k) + model%att_b(k)
       RETURN
     END IF
-    rk(3) = model%att_w(k)
-    rk = rk - model%att_fk(k)*ud
+    IF (wf < CD_ONE) THEN
+      rk(3) = model%att_w(k) + (CD_ONE - wf)*model%att_b(k)
+      rk = rk - wf*model%att_fk(k)*ud
+      IF (PRESENT(jz)) THEN
+        jz(3) = -dwf*model%att_b(k)
+        jz = jz - dwf*model%att_fk(k)*ud
+      END IF
+    ELSE
+      rk(3) = model%att_w(k)
+      rk = rk - model%att_fk(k)*ud
+    END IF
     IF (.NOT. (model%att_cda(k) > CD_ZERO .OR. model%att_cdax(k) > CD_ZERO)) RETURN
     wrel = u - v_cfg(base + 1:base + 3)
     IF (want_jac) THEN
@@ -2475,6 +2506,12 @@ CONTAINS
                                            model%att_cdax(k), f, ErrStat, ErrMsg, isotropic=model%att_iso(k))
     END IF
     IF (ErrStat /= CD_HCDYN_OK) RETURN
+    IF (wf < CD_ONE) THEN
+      IF (PRESENT(jz)) jz = jz - dwf*f
+      f = wf*f
+      jrel = wf*jrel
+      jtan = wf*jtan
+    END IF
     rk = rk - f
     IF (PRESENT(f_drag)) f_drag = f
   END SUBROUTINE attachment_residual
@@ -9302,6 +9339,7 @@ CONTAINS
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     IF (ALLOCATED(model%att_node)) DEALLOCATE (model%att_node, model%att_w, model%att_b, model%att_fk, &
                                                model%att_cda, model%att_cdax)
+    IF (ALLOCATED(model%att_r)) DEALLOCATE (model%att_r)
     IF (ALLOCATED(model%att_mass)) DEALLOCATE (model%att_mass, model%att_madd)
     IF (ALLOCATED(model%att_iso)) DEALLOCATE (model%att_iso)
     IF (ALLOCATED(model%att_point)) DEALLOCATE (model%att_point)
@@ -11696,6 +11734,63 @@ CONTAINS
       dwf = -CD_ONE/diam
     END IF
   END SUBROUTINE CD_HermiteCable_Immersion
+
+  PURE REAL(wp) FUNCTION CD_HermiteCable_Point_Radius(volume, cda) RESULT(r)
+    !! Radius of the sphere whose immersion wets a point attachment at the free surface: the
+    !! sphere of its volume, r = (3 V/(4 pi))^(1/3), or without a volume that of its projected
+    !! drag area, CdA = pi r^2 (as rigid6_wet_fraction sizes a Rigid6 body); 0 for neither.
+    REAL(wp), INTENT(IN) :: volume, cda
+    REAL(wp), PARAMETER :: PI_ = 3.14159265358979323846_wp
+    IF (volume > CD_ZERO) THEN
+      r = (3.0_wp*volume/(4.0_wp*PI_))**(CD_ONE/3.0_wp)
+    ELSE IF (cda > CD_ZERO) THEN
+      r = SQRT(cda/PI_)
+    ELSE
+      r = CD_ZERO
+    END IF
+  END FUNCTION CD_HermiteCable_Point_Radius
+
+  PURE SUBROUTINE CD_HermiteCable_Point_Immersion(depth, radius, wf, dwf, psi)
+    !! Immersed fraction wf of a sphere of radius r whose centre lies depth below the free
+    !! surface (negative above it), the formula of a Rigid6 body (rigid6_wet_fraction): with the
+    !! immersed height h = clamp(depth + r, 0, 2 r), wf = h^2 (3 r - h)/(4 r^3), 0 from r above
+    !! the surface, 1 from r below, 1/2 at the surface, continuous with its slope (C1). dwf =
+    !! d wf/d z, the derivative with respect to the height of the centre: -3 h (2 r - h)/(4 r^3)
+    !! in the band, 0 outside. psi (optional) = the integral of wf over the height, zero above
+    !! the band and -depth below it (in the band -(r h^3 - h^4/4)/(4 r^3)): the buoyancy
+    !! rho g V wf is the force of the potential -rho g V psi. A point (r = 0) is wet at and below
+    !! the surface (the old switch, dwf 0).
+    REAL(wp), INTENT(IN) :: depth, radius
+    REAL(wp), INTENT(OUT) :: wf, dwf
+    REAL(wp), INTENT(OUT), OPTIONAL :: psi
+    REAL(wp) :: h, r3
+    IF (.NOT. (radius > CD_ZERO)) THEN
+      IF (depth >= CD_ZERO) THEN
+        wf = CD_ONE
+        IF (PRESENT(psi)) psi = -depth
+      ELSE
+        wf = CD_ZERO
+        IF (PRESENT(psi)) psi = CD_ZERO
+      END IF
+      dwf = CD_ZERO
+      RETURN
+    END IF
+    IF (depth >= radius) THEN
+      wf = CD_ONE
+      dwf = CD_ZERO
+      IF (PRESENT(psi)) psi = -depth
+    ELSE IF (depth <= -radius) THEN
+      wf = CD_ZERO
+      dwf = CD_ZERO
+      IF (PRESENT(psi)) psi = CD_ZERO
+    ELSE
+      h = depth + radius
+      r3 = 4.0_wp*radius**3
+      wf = h*h*(3.0_wp*radius - h)/r3
+      dwf = -3.0_wp*h*(2.0_wp*radius - h)/r3
+      IF (PRESENT(psi)) psi = -(radius*h**3 - 0.25_wp*h**4)/r3
+    END IF
+  END SUBROUTINE CD_HermiteCable_Point_Immersion
 
   SUBROUTINE CD_HermiteCable_Drag_Element(qe, ve, l0, fluid, waterline_z, rho, diam, cdn, cdt, &
                                           fdrag, djq, djv, ErrStat, ErrMsg, &
