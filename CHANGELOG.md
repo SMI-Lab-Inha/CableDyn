@@ -152,6 +152,23 @@ All notable changes to CableDyn are recorded in this file. The format follows
   and checkpoint state; `Tf` 0 or no row leaves runs unchanged to the bit. A VIV FRAME row now
   needs LINE TYPES `Cl > 0` or a WAKE OSCILLATOR row; the Python deck reader and builder follow.
 
+- A long-run check of the VIV synchronisation model (`viv_long_run`, 400 cycles). With every node
+  of a finite-EI cable moved across the flow, the shedding phase follows the closed-form solution
+  of its equation (Adler's) with an error that grows linearly in time and falls fourfold per
+  halving of the step: 0.033 rad after 400 cycles at 100 steps per cycle; inside the
+  synchronisation band the phase lag holds to 3e-5 rad. On a taut line locked in, finite-EI and
+  `EI = 0`, the load powers close the line's energy balance to 8e-5 of the VIV work at second
+  order, and the response amplitude, VIV power and lock-in frequency of the run's two halves agree
+  within 0.12 %.
+
+### Changed
+
+- `run_study` (and `cabledyn-study`) with `jobs > 1` runs every case with `OMP_NUM_THREADS=1`
+  unless the environment sets it, and `study.json` records the value (`omp_num_threads`). Many
+  processes that each start an OpenMP team oversubscribed the cores: 24 lazy-wave runs at 24 jobs
+  took 19.1 s with the OpenMP default and 16.7 s with one thread each. The Python manual gives the
+  measured batch scaling (13.3 times faster at 24 jobs on a 24-core workstation, 15.1 at 48).
+
 ### Fixed
 
 - The statics of a finite-EI line through the free surface could fail at isolated currents:

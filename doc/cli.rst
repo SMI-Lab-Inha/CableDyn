@@ -1125,7 +1125,9 @@ remaining cases.
    * - ``--jobs``
      - int
      - ``1``
-     - Number of native processes run concurrently; must be positive.
+     - Number of native processes run concurrently; must be positive. Above 1, each process
+       runs with ``OMP_NUM_THREADS=1`` unless the environment sets it (measured batch scaling
+       and thread settings: :doc:`python`, Batch execution and study records).
    * - ``--timeout``
      - float, s
      - none

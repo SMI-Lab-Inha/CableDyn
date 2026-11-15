@@ -315,3 +315,39 @@ def test_study_argument_validation(tmp_path, kwargs, message):
             output_directory=tmp_path / "results",
             **kwargs,
         )
+
+
+@pytest.mark.parametrize(
+    ("jobs", "omp", "passed", "recorded"),
+    [
+        (2, None, "1", "1"),  # parallel cases default to one OpenMP thread each
+        (2, "", "1", "1"),  # an empty value counts as unset
+        (2, "3", None, "3"),  # the caller's count is passed on unchanged
+        (1, None, None, None),  # one case at a time keeps the environment
+    ],
+)
+def test_study_gives_parallel_cases_one_openmp_thread(
+    tmp_path, monkeypatch, jobs, omp, passed, recorded
+):
+    if omp is None:
+        monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    else:
+        monkeypatch.setenv("OMP_NUM_THREADS", omp)
+    manifest = _case_manifest(tmp_path)
+    driver = _driver(tmp_path)
+    original_run = driver.run
+    seen: list[object] = []
+    lock = threading.Lock()
+
+    def recording_run(*args, **kwargs):
+        with lock:
+            seen.append(kwargs.get("env"))
+        return original_run(*args, **kwargs)
+
+    driver.run = recording_run  # type: ignore[method-assign]
+    result = run_study(manifest, driver=driver, output_directory=tmp_path / "results", jobs=jobs)
+    assert result.passed
+    expected = None if passed is None else {"OMP_NUM_THREADS": passed}
+    assert seen == [expected, expected]
+    payload = json.loads(result.study_manifest.read_text(encoding="utf-8"))
+    assert payload["omp_num_threads"] == recorded
