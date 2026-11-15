@@ -103,6 +103,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
   Thorsen et al. (2017) use for it: dominant strain frequency 0.992 Hz against the measured
   1.00 Hz, largest r.m.s. strain 7.3 % above the measured largest, station mean 3.6 % above;
   converged in mesh and time step to 0.2 %.
+- Validation case L3-D (`validation/experiments/delta_flume`): cross-flow and in-line VIV of the
+  Delta Flume riser in the nine blind-trial stepped-current cases of Chaplin et al. (2005b), with
+  one generic coefficient set and the drag amplification on the in-line drag alone, against the
+  experimenters' measured envelopes and summaries: dominant mode right in 5 of 9 and within one in
+  all, mean in-line displacement within 17 % in 7 of 9, cross-flow amplitude −44 % to +4 %.
 - Theory manual, Published coefficient sets: the VIV coefficient sets of Thorsen et al. (2016,
   2017), Ulveseter et al. (2018), Andersen et al. (2024a, b) and Facchinetti et al. (2004), each
   with its source, its test data and the line-type columns it maps to, and Thorsen et al.'s

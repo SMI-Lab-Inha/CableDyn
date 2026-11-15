@@ -286,6 +286,14 @@ Verification and validation references
   *Journal of Fluids and Structures* **21**\ (1), 3–24.
   https://doi.org/10.1016/j.jfluidstructs.2005.04.010
 
+.. _ref-chaplin2005b:
+
+- **Chaplin, J. R., Bearman, P. W., Cheng, Y., Fontaine, E., Graham, J. M. R., Herfjord, K.,
+  Huera Huarte, F. J., Isherwood, M., Lambrakos, K., Larsen, C. M., Meneghini, J. R., Moe, G.,
+  Pattenden, R. J., Triantafyllou, M. S. & Willden, R. H. J. (2005).** Blind predictions of
+  laboratory measurements of vortex-induced vibrations of a tension riser. *Journal of Fluids and
+  Structures* **21**\ (1), 25–40. https://doi.org/10.1016/j.jfluidstructs.2005.05.016
+
 Comparison codes
 ----------------
 
