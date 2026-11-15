@@ -123,6 +123,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
   dominant frequency and σ/D: the set Ulveseter et al. (2019) fitted to these tests matches strain
   (r.m.s. log error 0.178), frequency and amplitude together; Andersen et al.'s (2024b)
   sheared-flow average 0.186; the generic set, blind, 0.277.
+- Validation case L3-F (`validation/experiments/flotant`): VIV of the FLOTANT OD 48 mm
+  power-cable specimen of de Wilde et al. (2021) with its 200 kg clump weight at the 40 tow
+  speeds, cross-flow and in-line A/D_rms at three stations, with three published coefficient
+  sets none of which is fitted to these tests, on a structure identified from the specimen's
+  in-air and in-water RAOs. The set of Ulveseter et al. (2019) gives the first cross-flow peak
+  (0.755 against 0.776 at mid-length) but responds from a lower speed and releases 1.2 Ur late
+  (cross-flow r.m.s. log error 0.731); the generic set is 38 % low at the peak and releases at
+  the measured speed (0.594); the wake oscillator of Facchinetti et al. (2004) is 62 % low
+  (1.208).
 - Theory manual, Published coefficient sets: the VIV coefficient sets of Thorsen et al. (2016,
   2017), Ulveseter et al. (2018), Andersen et al. (2024a, b) and Facchinetti et al. (2004), each
   with its source, its test data and the line-type columns it maps to, and Thorsen et al.'s
