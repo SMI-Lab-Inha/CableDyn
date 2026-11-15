@@ -4915,6 +4915,10 @@ CONTAINS
     ! XS_TOL_FACTOR*tol, which keeps the outputs as close to the converged solution as full
     ! Newton's.
     REAL(wp), PARAMETER :: XS_TOL_FACTOR = 0.3_wp
+    ! Round-off acceptance of a stalled iterate (see at_roundoff_floor): the Newton correction
+    ! is within STALL_ROUNDOFF units of eps times the coordinate scale, and the residual within
+    ! STALL_SANITY of the force scale (the EI = 0 route's bound).
+    REAL(wp), PARAMETER :: STALL_ROUNDOFF = 16.0_wp, STALL_SANITY = 1.0e-4_wp
     INTEGER(INT64) :: pc0, pc1, pcr, pt0, pt1
     CHARACTER(1024) :: em2
 
@@ -5537,6 +5541,21 @@ CONTAINS
       END IF
       EXIT mn_retry
       END DO mn_retry
+      ! A fresh correction that no step length improves and that would move no coordinate beyond
+      ! its last bits: the iterate is on the residual's round-off floor and is converged.
+      IF (chosen < CD_ZERO) THEN
+        IF (at_roundoff_floor()) THEN
+          ! the rejected trials overwrote the staged states: restage the iterate's
+          CALL eval_res(model%ws_qk, .FALSE., rnorm, es, em2)
+          IF (es /= CD_HCDYN_OK) THEN
+            ErrStat = es; ErrMsg = 'CD_HermiteCable_Dyn_Step: '//TRIM(em2)
+            IF (attempt < n_attempt) CYCLE predict
+            RETURN
+          END IF
+          IF (PRESENT(res_out)) res_out = rnorm
+          EXIT
+        END IF
+      END IF
       IF (chosen < CD_ZERO) THEN
         ! No step length reduced the residual (with a usable tangent): fall back to the
         ! SMALLEST step that at least gave a finite evaluation (a safe damped step). Using
@@ -6233,6 +6252,47 @@ CONTAINS
         prof_t_resid = prof_t_resid + REAL(ec1 - ec0, wp)/REAL(pcr, wp)
       END IF
     END SUBROUTINE eval_res
+
+    LOGICAL FUNCTION at_roundoff_floor() RESULT(at_floor)
+      !! The iterate sits on the residual's round-off floor: a fresh Newton correction (ws_dq,
+      !! tw_dp) that no step length improves moves no free coordinate by more than
+      !! STALL_ROUNDOFF eps times its scale (the largest coordinate magnitude or element length,
+      !! and for the tangents and twist angles the largest of their magnitudes and 1), and the
+      !! residual is within STALL_SANITY of the force scale. Each coordinate is stored to its
+      !! last bit, and the inertia takes the acceleration c_a (q - q_n) from it, c_a =
+      !! 1/(beta dt^2): a row's inertial force cannot be resolved finer than about c_a M eps |q|,
+      !! which grows like 1/dt^2 and stands above tol*fscale on a line near rest at a small time
+      !! step (its inertia then sets no force scale). The residual test alone then never passes:
+      !! a 13 m riser at rest in a 0.95 m/s current (64 elements, dt 1.25e-4 s) took the VIV
+      !! lift and stagnated at 1.06 times the tolerance on its axial rows, and each 4-fold
+      !! smaller substep of the step recovery raised the stagnation about 16-fold. The criterion
+      !! is the EI = 0 route's (the residual within the operator's backward error of the
+      !! coordinates, eps max|q| ||A||), applied through the correction A^-1 G.
+      INTEGER :: ii
+      REAL(wp) :: xs, ts, ps
+      at_floor = .FALSE.
+      IF (.NOT. (rnorm <= STALL_SANITY)) RETURN
+      xs = MAXVAL(model%l0); ts = CD_ONE
+      DO ii = 1, ndof
+        IF (MOD(ii - 1, 6) < 3) THEN
+          xs = MAX(xs, ABS(model%ws_qk(ii)))
+        ELSE
+          ts = MAX(ts, ABS(model%ws_qk(ii)))
+        END IF
+      END DO
+      DO ii = 1, ndof
+        IF (.NOT. model%solve_mask(ii)) CYCLE
+        IF (.NOT. (ABS(model%ws_dq(ii)) <= STALL_ROUNDOFF*EPSILON(CD_ONE)*MERGE(xs, ts, MOD(ii - 1, 6) < 3))) RETURN
+      END DO
+      IF (model%tw_active) THEN
+        ps = MAX(CD_ONE, MAXVAL(ABS(model%tw_pk)))
+        DO ii = 1, model%nn
+          IF (.NOT. model%tw_free(ii)) CYCLE
+          IF (.NOT. (ABS(model%tw_dp(ii)) <= STALL_ROUNDOFF*EPSILON(CD_ONE)*ps)) RETURN
+        END DO
+      END IF
+      at_floor = .TRUE.
+    END FUNCTION at_roundoff_floor
 
     SUBROUTINE impose_step_rigid_kinematics(q_state, v_state, a_state)
       !! Eliminate the two prescribed rotational tangent components while leaving

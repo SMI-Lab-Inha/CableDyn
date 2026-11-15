@@ -157,6 +157,19 @@ All notable changes to CableDyn are recorded in this file. The format follows
   height in the march, and rides 1.5 m waves. A module deeper than its sphere's radius is
   unchanged to the bit. In deck waves a node above the instantaneous surface takes the wave
   kinematics at the surface (they were zero there), as a cable's internal waves already did.
+- A finite-EI dynamic step at a small time step could fail on a line near rest: the Newton
+  residual stagnated just above the tolerance, and the step recovery's smaller steps only raised
+  it (a 13 m riser, 64 elements, at rest in a 0.95 m/s current, took the VIV lift at dtM
+  1.25e-4 s and stopped at 1.06 times the tolerance; each 4-fold smaller substep raised the
+  stagnant residual about 16-fold, to 3.4e4 times the tolerance at 1024 substeps). The inertia
+  takes the acceleration `(q - q_n)/(beta dt^2) - ...` from coordinates stored to their last
+  bits, so its residual cannot be settled below about `eps sum_j |M_ij| |q_j| / (beta dt^2)`, a
+  floor that grows like `dt^-2` and, where the line's inertia sets no force scale, stands above
+  the tolerance. As on the `EI = 0` route, an iterate on that floor is now converged: when no
+  step length of a fresh Newton correction reduces the residual, the residual is below 1e-4 of
+  the force scale and the correction moves no free coordinate by more than `16 eps` times its
+  scale. A step that meets the tolerance is unchanged: every example and test deck gives
+  bit-identical outputs.
 
 ## [0.4.2] - 2026-11-09
 
