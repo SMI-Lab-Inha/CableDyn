@@ -28,9 +28,11 @@ PROGRAM test_hermite_viv_frame
   !!   motion statistics, no table); an all-zero tf installs no frame and reproduces the run
   !!   without tf bit for bit;
   !! * F2 with Tf 0.6 s the moving and the fixed pipe agree, with the tables and with the lift
-  !!   alone: the peak and the RMS cross-flow response of the mid node over the second period within
-  !!   1 % (measured at most 0.7 % over the Release and Debug builds and the two OpenBLAS kernels).
-  !!   What is left is the filter's lag of the imposed velocity, about omega Tf = 0.094 rad;
+  !!   alone: the RMS cross-flow response of the mid node over the second period within 1 %, its
+  !!   peak within 2 %. The RMS agrees within 0.2 % on every build and kernel; the peak of the moving
+  !!   pipe ranges 0.811-0.819 D over the Release and Debug builds, the two OpenBLAS kernels and
+  !!   Linux/Windows (fixed pipe 0.819 D), a single extreme of the response. What is left is the
+  !!   filter's lag of the imposed velocity, about omega Tf = 0.094 rad;
   !! * F3 without the frame they differ: in still water the moving pipe's phase sees no cross-flow
   !!   velocity (r'.e = u.e = 0 across the relative flow), and with the tables it takes Cv and CdAmp
   !!   at A/D 0 and the Morison drag; with the tables the peak response is more than 10 % (measured
@@ -54,7 +56,7 @@ PROGRAM test_hermite_viv_frame
   REAL(wp), PARAMETER :: MLIN = RHOW*0.25_wp*PI*D*D
   INTEGER, PARAMETER :: NE = 10, NN = NE + 1, MID = 6*(NE/2), NSTEP = NINT(2.0_wp*TP/DT)
   ! the agreement of the moving and the fixed pipe with the flow frame (F2)
-  REAL(wp), PARAMETER :: TOL_F2 = 0.01_wp
+  REAL(wp), PARAMETER :: TOL_F2 = 0.01_wp, TOL_F2_PEAK = 0.02_wp
 
   TYPE(CD_HermiteCableDynType) :: model, twin
   REAL(wp) :: cl(NE), cf(NE), df(NE), amp(3, CD_VIV_AMP_MAXP, NE), cdy(2, NE), tf0(NE), tfv(NE)
@@ -132,7 +134,7 @@ PROGRAM test_hermite_viv_frame
     WRITE (*, '(A,2F9.4,A,2F9.4)') '  F3'//lab//' without: moving peak, RMS A/D ', pk_m0/D, rms_m0/D, '; fixed ', &
       pk_f0/D, rms_f0/D
     CALL require(pk_ff > 0.2_wp*D, 'F2: the fixed pipe locks in'//lab)
-    CALL require(ABS(pk_mf/pk_ff - 1.0_wp) <= TOL_F2 .AND. ABS(rms_mf/rms_ff - 1.0_wp) <= TOL_F2, &
+    CALL require(ABS(pk_mf/pk_ff - 1.0_wp) <= TOL_F2_PEAK .AND. ABS(rms_mf/rms_ff - 1.0_wp) <= TOL_F2, &
                  'F2: with the flow frame the moving and the fixed pipe agree'//lab)
     CALL require(ABS(pk_m0/pk_f0 - 1.0_wp) > MERGE(0.10_wp, 0.0_wp, tables) .AND. &
                  ABS(rms_m0/rms_f0 - 1.0_wp) > MERGE(0.15_wp, 0.04_wp, tables), &

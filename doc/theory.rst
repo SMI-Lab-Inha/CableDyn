@@ -1535,7 +1535,8 @@ differ by :math:`(m - \rho A)\dot V`), with :math:`T_f` 0.6 s:
      - 0.711 / 0.736
      - 0.349 / 0.375
 
-The two frames agree within 0.7 % with the row (Release and Debug builds, both OpenBLAS kernels),
+With the row the RMS of the two frames agrees within 0.2 % and the peak within 1 % (the moving
+pipe's peak, a single extreme, ranges 0.811-0.819 over builds, OpenBLAS kernels and platforms),
 the rest being the filter's lag
 (:math:`\omega_m T_f` = 0.094). A taut cable towed at 0.15 m/s with :math:`T_f` 10 s gives A/D
 0.7905 against 0.7906 held in the current with the same row (0.792 without it; 0.665 towed without
