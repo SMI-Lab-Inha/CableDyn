@@ -123,7 +123,7 @@ PROGRAM test_hfmf_mirror
     CALL require(es == CD_HCDYN_OK, 'in-line VIV on the cable: '//TRIM(em))
     CALL CD_HermiteCable_Dyn_Set_VIV(twin%line, cl, cf, df, 0.25_wp, es, em, clx=clx, il_alpha=al)
     CALL require(es == CD_HCDYN_OK, 'in-line VIV on the twin: '//TRIM(em))
-    CALL require(CD_HFMF_VIVMirrorSize(cable) == 6*nn + 1, 'VIV block with in-line VIV: 6 nn + 1 values')
+    CALL require(CD_HFMF_VIVMirrorSize(cable) == 8*nn + 1, 'VIV block with in-line VIV: 8 nn + 1 values')
     ALLOCATE (vb(CD_HFMF_MirrorSize(cable)), vb2(CD_HFMF_MirrorSize(cable)))
     CALL CD_HFMF_PackMirror(cable, vb, es, em)
     CALL require(es == CD_HFMF_OK, 'pack with in-line VIV: '//TRIM(em))

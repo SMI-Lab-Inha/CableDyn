@@ -104,9 +104,9 @@ PROGRAM test_hermite_viv_frame
   CALL require(.NOT. model%has_viv .AND. .NOT. model%viv_frame, 'F1: a refused call installs nothing')
   CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, tf=tfv)
   CALL require(es == CD_HCDYN_OK .AND. model%viv_frame .AND. .NOT. model%has_viv_amp .AND. &
-               SIZE(model%viv_ms, 1) == CD_VIV_NMS_FRAME, 'F1: the frame installs on the lift alone: '//TRIM(em))
+               SIZE(model%viv_ms, 1) == CD_VIV_NMS_FRAME + 1, 'F1: the frame installs on the lift alone: '//TRIM(em))
   CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy, tf=tf0)
-  CALL require(es == CD_HCDYN_OK .AND. .NOT. model%viv_frame .AND. SIZE(model%viv_ms, 1) == 6, &
+  CALL require(es == CD_HCDYN_OK .AND. .NOT. model%viv_frame .AND. SIZE(model%viv_ms, 1) == 7, &
                'F1: an all-zero tf installs no frame: '//TRIM(em))
   CALL build(twin)
   CALL CD_HermiteCable_Dyn_Set_VIV(twin, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy)
@@ -147,7 +147,7 @@ PROGRAM test_hermite_viv_frame
     INTEGER :: s
     CALL build(model)
     CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy, tf=tfv)
-    CALL require(es == CD_HCDYN_OK .AND. model%viv_frame .AND. SIZE(model%viv_ms, 1) == CD_VIV_NMS_FRAME, &
+    CALL require(es == CD_HCDYN_OK .AND. model%viv_frame .AND. SIZE(model%viv_ms, 1) == CD_VIV_NMS_FRAME + 1, &
                  'F4: the frame installs: '//TRIM(em))
     DO s = 1, 1500
       CALL advance(model, s, .TRUE.)
@@ -155,7 +155,7 @@ PROGRAM test_hermite_viv_frame
     CALL require(MAXVAL(ABS(model%viv_ms(8, :))) > 0.1_wp*U0, 'F4: the filtered velocity follows the motion')
     CALL CD_HermiteCable_Dyn_Snapshot(model, es, em)
     CALL require(es == CD_HCDYN_OK, 'F4: snapshot: '//TRIM(em))
-    ALLOCATE (q_ref(SIZE(model%q), 200), ms_ref(CD_VIV_NMS_FRAME, NN, 200))
+    ALLOCATE (q_ref(SIZE(model%q), 200), ms_ref(CD_VIV_NMS_FRAME + 1, NN, 200))
     DO s = 1, 200
       CALL advance(model, 1500 + s, .TRUE.)
       q_ref(:, s) = model%q

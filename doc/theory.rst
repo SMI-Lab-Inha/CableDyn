@@ -1239,16 +1239,61 @@ the state vector it integrates, so its phases start at zero at every node: a uni
 excites the symmetric modes only, after which the line stays in its first mode. ``zero
 VIVphaseSeed`` starts every phase at zero, and reproduces that start (:doc:`options`).
 
-In the implicit step the phase is explicit: the step's lift takes the phase predicted at
-:math:`t_{n+1}` from the step-start rate (the generalised-α level under the configuration blend),
-and the committed phase is the trapezoidal (Heun) update with the rate at the converged end
-state. The lift's position and velocity derivatives enter the tangent. The cross-flow motion of
-the phase and the velocity in the lift are the node values averaged with the neighbours,
+In the implicit step the phase is explicit. The step's lift takes the phase predicted at
+:math:`t_{n+1}` (the generalised-α level under the configuration blend) with the predictor rate
+:math:`\dot\phi_p`, the rate at the mid-point of the previous step, and the committed phase
+advances by the implicit mid-point rule on the cross-flow motion at the step's mid-point, solved
+by one fixed-point pass from :math:`\dot\phi_p`,
+
+.. math::
+
+   \dot\phi_1 = \dot\phi\bigl(\dot y_m, \ddot y_m, \phi_n + \tfrac12\delta t\,\dot\phi_p\bigr),\qquad
+   \phi_{n+1} = \phi_n + \delta t\,\dot\phi\bigl(\dot y_m, \ddot y_m,
+                 \phi_n + \tfrac12\delta t\,\dot\phi_1\bigr),
+
+   \dot y_m = \frac{\mathbf r_{n+1} - \mathbf r_n}{\delta t}\cdot\mathbf e_m,\qquad
+   \ddot y_m = \frac{\dot{\mathbf r}_{n+1} - \dot{\mathbf r}_n}{\delta t}\cdot\mathbf e_m,
+
+the step means of the velocity and of its derivative, so a harmonic motion keeps its phase
+between them exactly, with the axis :math:`\mathbf e_m` and the speed :math:`U` of the mean of
+the step's two states. The mid-point rate becomes the next step's :math:`\dot\phi_p` and is part
+of the VIV state. The
+running mean squares advance by the mid-point rule as well, the mean square of a sample
+:math:`s` as :math:`\overline{s^2} + (1 - e^{-\delta t/T_w})(s_m^2 - \overline{s^2})`, over
+:math:`\delta t/2` for the mid-point rate. The acceleration comes from the converged velocities
+because the generalised-α acceleration :math:`\mathbf a_n` is not the line's: it approximates
+:math:`\ddot{\mathbf r}(t_n + (\alpha_m - \alpha_f)\,\delta t)`, so a phase sampling it is
+first order in the step, and at :math:`\rho_\infty = 1` it carries an undamped alternating mode
+of the integrator, while :math:`(\mathbf v_{n+1} - \mathbf v_n)/\delta t` is the mid-point
+acceleration to second order at every :math:`\rho_\infty`. The lift's position and velocity
+derivatives enter the tangent. The cross-flow motion of the phase and the velocity in the lift
+are the node values averaged with the neighbours,
 :math:`(\mathbf{x}_{i-1} + 2\mathbf{x}_i + \mathbf{x}_{i+1})/4`. That keeps a resolved mode of
 wavenumber :math:`k` to :math:`\cos^2(k l_0/2)` and removes the mesh-scale zig-zag mode exactly.
 With the node's own kinematics, a step that resolves the zig-zag mode lets the synchronisation
 loop pump it until the line loses lock-in; a coarse step only hides this behind the
 integrator's numerical damping.
+
+The locked-in response is second order in the time step at every :math:`\rho_\infty`. On the taut
+line of the ``viv_step_order`` test (20 m, 10 elements, pinned in a 0.3 m/s cross current, lock-in
+at 0.65 Hz with a mid-span A/D of 0.57), with :math:`n` steps per response period, the lock-in
+frequency is low by about :math:`2.2/n^2` at :math:`\rho_\infty` 1 and 0.8 and :math:`3.4/n^2` at
+0.4, and the mid-span RMS A/D high by about :math:`1.6/n^2` and :math:`3.4/n^2` (fitted from 80 to
+2700 steps per period against the Richardson limit, which is the same at every
+:math:`\rho_\infty` to 1e-9). The finite-EI cable gives :math:`3.5/n^2` for its frequency at
+:math:`\rho_\infty` 0.8, and the same limit at :math:`\rho_\infty = 1` when its seed carries the
+static stretch of the tangents (from unit tangents the undamped tangent-stretch mode rings at
+:math:`\rho_\infty = 1` and moves the response by up to 0.4 % at fine steps). 100 steps per
+response period therefore keep the frequency and the
+amplitude within 0.04 %, 30 within 0.4 %. A phase that samples :math:`\mathbf a_n`, as
+CableDyn's did before, is first order: the frequency low by about :math:`0.06/n` at
+:math:`\rho_\infty` 0.8 and :math:`0.25/n` at 0.4 (0.25 % at 100 steps per period), and at
+:math:`\rho_\infty = 1` it converges to a frequency 3.4 % low. The amplitude estimate of
+:ref:`theory-viv-amplitude` keeps the smoothing of Thorsen et al., :math:`k_a\,\delta t = 0.1`
+per step, a time of ten steps; it lags only a changing amplitude, and with an amplitude table the
+locked-in response of the same line is second order as well (the frequency low by about
+:math:`2.4/n^2`). The default ``VIVrmsWindow``, 500 steps as in MoorDyn, ties the averaging time
+to ``dtM``: a time-step study gives it in seconds.
 
 On a finite-EI (cubic-Hermite) cable the lift is a distributed load per unit deformed length,
 
@@ -1263,7 +1308,7 @@ points of the drag (a point above the surface carries none), and its exact posit
 velocity derivatives enter the tangent. Each node carries a phase, driven as above by the
 node's cross-flow motion along its own tangent, the slope degrees of freedom; :math:`d`,
 :math:`c_F` and :math:`d_F` at a node are the length-weighted averages over its lifting
-elements. The phase is explicit with the Heun commit as on ``EI = 0`` lines, and no smoothing is
+elements. The phase advances as on ``EI = 0`` lines, and no smoothing is
 needed: the Hermite tangent and the integrated lift leave no mesh-scale mode for the loop to
 pump, and the response is the same from ``dtM`` 5e-4 to 1e-2 s. A finite-EI line with
 :math:`EI \to 0` reproduces the ``EI = 0`` line's lock-in. The standalone Hermite march
@@ -1273,9 +1318,9 @@ deck waves and current through the held fluid field, on a line with one or two m
 VIV runs on every route that carries the line: the standalone driver, the coupled OpenFAST
 and FAST.Farm routes and the standalone runner of a mixed ``EI = 0`` / finite-EI deck. On the
 coupled routes the phase follows the host's fluid field (a SeaState current or waves), and the
-phases, the running mean squares and the averaging time are part of the checkpoint state, so a
-restart continues the uninterrupted run bit for bit. The OpenFAST correction iterations rewind
-them with the rest of the state.
+phases, the running mean squares, the predictor and the averaging time are part of the
+checkpoint state, so a restart continues the uninterrupted run bit for bit. The OpenFAST
+correction iterations rewind them with the rest of the state.
 
 .. _theory-viv-inline:
 
@@ -1315,12 +1360,13 @@ lift,
 with the lift's wetted fractions, node tangent and neighbour-averaged kinematics (for the phase
 and in the force). On a finite-EI cable it is integrated with the lift at the same Gauss points,
 :math:`\cos\phi_x` interpolated between the element's end nodes. Its exact position and velocity
-derivatives enter the tangent on both. The phase is explicit with the Heun commit,
-its end-state rate taken from the end-state cross-flow rate. The phase and the two mean squares
-are part of the step-recovery, snapshot and checkpoint state, and a ``ClX`` of zero leaves the
-run exactly as without the row. On the taut line of ``viv_taut_cable_inline.dat`` the quarter
-span moves in line at twice the cross-flow frequency, A/D 0.19 against 0.03 with the cross-flow
-lift alone, and the same line as an ``EI = 0`` line gives the cable's amplitudes within 1 %.
+derivatives enter the tangent on both. The phase advances as the cross-flow one, by the
+mid-point rule with its rate slaved to the mid-point cross-flow rate and its own predictor rate.
+The phase, the two mean squares and the predictor are part of the step-recovery, snapshot and
+checkpoint state, and a ``ClX`` of zero leaves the run exactly as without the row. On the taut
+line of ``viv_taut_cable_inline.dat`` the quarter span moves in line at twice the cross-flow
+frequency, A/D 0.19 against 0.03 with the cross-flow lift alone, and the same line as an
+``EI = 0`` line gives the cable's amplitudes within 1 %.
 
 A fourth column ``Chh`` adds the higher-harmonic force of
 :ref:`Ulveseter et al. (2019) <ref-ulveseter2019>`, the lift's form at the sum of the two phases,
@@ -1368,10 +1414,11 @@ water, which then never sheds; a ``VIV FRAME`` row with the filter time :math:`T
 .. math::
 
    U_a = \bigl|(\mathbf u - \bar{\mathbf v})_n\bigr|,\qquad
-   \bar{\mathbf v}_{n+1} = \bar{\mathbf v}_n + \bigl(1 - e^{-\delta t/T_f}\bigr)
-   (\mathbf v_{n+1} - \bar{\mathbf v}_n),
+   \bar{\mathbf v}_{n+1} = e^{-h}\,\bar{\mathbf v}_n + \bigl(1 - e^{-h}\bigr)\mathbf v_n
+   + \Bigl(1 - \frac{1 - e^{-h}}{h}\Bigr)(\mathbf v_{n+1} - \mathbf v_n),\qquad
+   h = \delta t/T_f,
 
-the exact first-order filter of the converged end velocity held over the step, started at the
+the exact first-order filter of the converged velocity linear over the step, started at the
 node's initial velocity. The slow motion (a tow, a floater's response) then counts as flow, and the
 VIV velocity, far faster than :math:`T_f`, is filtered out. On a cable towed at 0.15 m/s through
 still water (the taut cable of the deck gate, VIV at 0.28 Hz) :math:`T_f` 10 s gives the lock-in of
@@ -1393,10 +1440,14 @@ fluid-added damping :math:`\gamma\,\omega_f\,\rho D^2\dot y` with
 in full, and their inviscid added mass is the Morison :math:`C_a`; the wake adds the lift only.
 
 The wake state :math:`(q, \dot q)` of a node is integrated beside the cable, as the phase of the
-synchronisation model is. At the start of a step it is advanced under the step-start
-acceleration to give the :math:`q` the step's lift takes; at the converged end it is advanced
-again from the committed state with the acceleration linear between the step's ends, at the
-step-start :math:`\omega_f`, and committed. Both use classical Runge-Kutta in equal sub-steps of
+synchronisation model is. At the start of a step it is advanced under the predictor, the
+cross-flow acceleration at the mid-point of the previous step, at the step-start
+:math:`\omega_f`, to give the :math:`q` the step's lift takes; at the converged end it is advanced
+again from the committed state under the mid-point acceleration
+:math:`(\dot{\mathbf r}_{n+1} - \dot{\mathbf r}_n)\cdot\mathbf e_m/\delta t` (held over the
+step, its integral exact), at the mean of the start and end :math:`\omega_f`, and committed, the
+mid-point acceleration becoming the next predictor: second order in the step, as the phase of the
+synchronisation model. Both use classical Runge-Kutta in equal sub-steps of
 :math:`r\,\delta t \le 0.1`, :math:`r = \omega_f\max(1, \varepsilon q^2)` the faster of the
 oscillation and the van der Pol damping rate at the start of the interval, so a large
 :math:`\varepsilon` stays resolved; should the rate exceed :math:`0.2/\delta t` on the way, or the
@@ -1404,10 +1455,10 @@ result not be finite, the interval is redone with twice the sub-steps. The lift 
 points of the synchronisation lift, :math:`q` interpolated between the element's end nodes, with
 its exact position and velocity derivatives in the tangent at fixed :math:`q`. On an ``EI = 0``
 line it acts at the free nodes as the synchronisation lift does, over the node's tributary length,
-with the node's smoothed cross-flow acceleration (the average with its two neighbours) as the
-forcing, and :math:`(q, \dot q)` takes the place of the phase and the first motion statistic in
-the line's VIV state (with :math:`T_f`, :math:`\bar{\mathbf v}` the next three statistics, and three
-more state rows on a finite-EI cable). :math:`q` starts on
+with the node's smoothed velocity (the average with its two neighbours) in the forcing, and
+:math:`(q, \dot q)` takes the place of the phase and the first motion statistic in the line's
+VIV state, the predictor the second (with :math:`T_f`, :math:`\bar{\mathbf v}` the next three
+statistics, and three more state rows on a finite-EI cable). :math:`q` starts on
 its limit cycle at the node's phase seed, :math:`q = 2\cos\phi_0`, :math:`\dot q = 0`, and the
 state is part of the step-recovery, snapshot and checkpoint state.
 
@@ -1569,10 +1620,11 @@ velocity):
   nodes.
 
 :math:`\bar{\mathbf v}` is held over a step (the step-start value), so the Jacobians are
-unchanged, and it is updated at the converged end. The lift and the drag act on the relative
-velocity, which does not depend on the frame, and are unchanged. For a frame moving at a constant
-velocity (a steady tow) the model is that of the held cable exactly. The velocity relative to
-:math:`\bar{\mathbf v}` loses the part of the VIV velocity that passes the filter: for a response
+unchanged, and it is updated at the converged end, exactly for the velocity linear over the step;
+the phases take the mean of its start and end values, at the step's mid-point. The lift and the
+drag act on the relative velocity, which does not depend on the frame, and are unchanged. For a
+frame moving at a constant velocity (a steady tow) the model is that of the held cable exactly.
+The velocity relative to :math:`\bar{\mathbf v}` loses the part of the VIV velocity that passes the filter: for a response
 at :math:`\omega` it is scaled by :math:`\omega T_f/\sqrt{1 + \omega^2 T_f^2}` and led by
 :math:`\arctan(1/\omega T_f)` (0.9985 and 3.1° at 0.29 Hz with :math:`T_f` 10 s). For a motion at
 :math:`\omega_m` the filter lags by :math:`\arctan\omega_m T_f`. :math:`T_f` is therefore taken

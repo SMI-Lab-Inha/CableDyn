@@ -1169,7 +1169,7 @@ CONTAINS
     CALL CD_System_Snapshot(system, es, em)
     CALL require(es == CD_SYSTEM_OK, 'viv-layout:snapshot-without-tables: '//TRIM(em))
     CALL CD_Set_Model_VIV(system%lines(1), 1025.0_wp, cl, dia, cf, df, 0.25_wp, es, em, amp=amp, amp_n=amp_n)
-    CALL require(es == CD_MODEL_OK .AND. CD_Model_VIV_NMS(system%lines(1)) == 6, 'viv-layout:tables: '//TRIM(em))
+    CALL require(es == CD_MODEL_OK .AND. CD_Model_VIV_NMS(system%lines(1)) == 7, 'viv-layout:tables: '//TRIM(em))
     q_moved = system%lines(1)%q
     q_moved(8) = q_moved(8) + 0.01_wp
     system%lines(1)%q = q_moved
@@ -1178,7 +1178,7 @@ CONTAINS
                  'viv-layout:restore-across-layouts-refused: '//TRIM(em))
     CALL require(ALL(system%lines(1)%q == q_moved), 'viv-layout:nothing-restored')
     CALL CD_System_Snapshot(system, es, em)
-    CALL require(es == CD_SYSTEM_OK .AND. SIZE(system%snap_viv) == 7*NN, 'viv-layout:snapshot-resized: '//TRIM(em))
+    CALL require(es == CD_SYSTEM_OK .AND. SIZE(system%snap_viv) == 8*NN, 'viv-layout:snapshot-resized: '//TRIM(em))
     system%lines(1)%viv_ms(5, 3) = 0.25_wp
     CALL CD_System_Restore(system, es, em)
     CALL require(es == CD_SYSTEM_OK .AND. system%lines(1)%viv_ms(5, 3) == 0.0_wp, &

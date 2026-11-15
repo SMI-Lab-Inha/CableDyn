@@ -192,6 +192,24 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `rho_inf` 0.5 to 1 and 25 and 50 steps per cycle, with the response of the same line seeded
   at its stretch (largest A/D within 0.75 %). Every other step starts as before: every example
   and test deck gives bit-identical outputs.
+- A locked-in VIV response converged at first order in the time step, and at `rhoInf` 1 to a
+  wrong frequency: the phase of the synchronisation model (and the forcing of the wake
+  oscillator) sampled the generalised-alpha acceleration, which is the line's acceleration at
+  `t_n + (alpha_m - alpha_f) dt` only and at `rhoInf` 1 carries an undamped alternating mode of
+  the integrator. On a taut 20 m line locked in at 0.65 Hz the frequency changed 0.74 %, 0.41 %
+  and 0.27 % per halving of the step from 25 to 200 steps per cycle, and at `rhoInf` 1 it
+  converged 3.4 % low. The phase now advances by the implicit mid-point rule on the step's
+  mid-point motion, its velocity and acceleration the step means of the converged positions and
+  velocities, and the lift is predicted with the rate of the previous step's mid-point, a new row
+  of the VIV state (two with in-line VIV) carried by the step recovery, snapshots and checkpoints;
+  the running mean squares, the in-line phase, the flow frame's and the wake filter's filtered
+  velocities and the wake oscillator follow the same mid-point treatment. The response is now
+  second order at every `rhoInf` and does not depend on it (limits within 1e-9): the frequency
+  is low by about 2.2/n^2 to 3.4/n^2 at n steps per response period (doc/theory.rst; test
+  `viv_step_order`). The two VIV example decks change at their default `dtM` and move toward
+  their fine-step results (the cross-flow example's mid-span RMS from 0.31 % to 0.02 % off, its
+  frequency from 0.15 % to 0.018 %); every other example and test deck gives bit-identical
+  outputs.
 
 ## [0.4.2] - 2026-11-09
 

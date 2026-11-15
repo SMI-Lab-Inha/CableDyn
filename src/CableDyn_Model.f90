@@ -60,7 +60,7 @@ MODULE CableDyn_Model
                           CD_VIV_Wrap_Phase, CD_VIV_NM, CD_VIV_TWO_PI, CD_VIV_Node_Inline, CD_VIV_Inline_Phase_Rate, &
                           CD_VIV_NMS, CD_VIV_NMS_AMP, CD_VIV_AMP_MAXP, CD_VIV_Amplitude_Update, CD_VIV_Table, &
                           CD_VIV_Check_Amp_Table, CD_VIV_Ambient_Crossflow_Rate, CD_VIV_Wake_Advance, &
-                          CD_VIV_NMS_FRAME
+                          CD_VIV_NMS_FRAME, CD_VIV_Mean_Square_Weight, CD_VIV_Filter_Linear
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_CableGenAlphaWorkspace, CD_Clear_GenAlpha_Workspace, &
                               CD_Cable_Initial_Acceleration, CD_Cable_Gen_Alpha_Step, CD_Cable_Step_Loads, &
                               CD_DYN_OK, CD_DYN_ALLOCFAIL, &
@@ -402,8 +402,11 @@ MODULE CableDyn_Model
     ! viv_tw is the averaging time of the mean squares [s]; 0 until CD_Latch_Model_VIV_Window
     ! (or the first step) sets MoorDyn's 500 steps. viv_phi_eval is the phase the lift
     ! contributor uses: the committed phase, except inside CD_Step_Model, where it is the
-    ! explicit generalised-alpha force-level phase. viv_rate (phase rate at the step start)
-    ! and viv_ms_next (mean squares updated with the step-start sample) are step scratch.
+    ! explicit generalised-alpha force-level phase. Row viv_pred_row of viv_ms (after the motion
+    ! statistics) is the step predictor, the phase rate at the mid-point of the last step (the
+    ! in-line one in the row after it, with in-line VIV): the step predicts the phase its lift
+    ! takes with it (viv_step_begin). viv_rate (that rate in a step) and viv_ms_next (the
+    ! end-of-step statistics) are step scratch.
     LOGICAL :: has_viv = .FALSE.
     ! the cross-flow phase of a node at rest (CD_VIV_Phase_Rate phi_rest): pi where the node
     ! tangent runs against MoorDyn's (End B to End A), 0 where it runs as MoorDyn's
@@ -454,8 +457,8 @@ MODULE CableDyn_Model
     ! (length-weighted over its lifting elements). The state rides in the VIV state slots, so the
     ! rollback, step-recovery, sub-step and checkpoint copies carry it unchanged: viv_phi holds q
     ! (viv_phi_eval q at the step's evaluation point, viv_phi_next q at the step end) and row 1 of
-    ! viv_ms dq/dt; in a step, viv_rate holds the step-start wake frequency and row 2 of viv_ms_next
-    ! the step-start cross-flow acceleration (row 2 of viv_ms stays 0). With a wake filter time
+    ! viv_ms dq/dt, row 2 the step predictor, the cross-flow acceleration at the mid-point of the
+    ! last step; in a step, viv_rate holds the step-start wake frequency. With a wake filter time
     ! wo_tf > 0 on some node (wo_filter) viv_ms has CD_VIV_NMS_AMP rows, rows 3:5 the node's
     ! velocity low-pass filtered over wo_tf (first order), and the wake frequency takes the flow
     ! normal to the line relative to it (a line moved through still water sheds).
@@ -2801,10 +2804,9 @@ CONTAINS
     CALL step_start_load(ErrStat, ErrMsg)
     IF (force_lengths) CALL leave_committed_lengths(model, aside)
     IF (ErrStat /= CD_MODEL_OK) RETURN
-    ! VIV: phase rate and mean squares at the step-start state (after the committed-state
-    ! load above, which takes the committed phase), and the explicit phase for the in-step
-    ! lift (see viv_step_begin). Nothing is
-    ! committed until the step succeeds; viv_phi_eval returns to the committed phase on
+    ! VIV: the predicted phase rate and the explicit phase for the in-step lift (after the
+    ! committed-state load above, which takes the committed phase; see viv_step_begin). Nothing
+    ! is committed until the step succeeds; viv_phi_eval returns to the committed phase on
     ! every exit, as ve_dt below.
     IF (model%has_viv) THEN
       IF (.NOT. (CD_Is_Finite(dt) .AND. dt > CD_ZERO)) THEN
@@ -3006,7 +3008,8 @@ CONTAINS
         RETURN
       END IF
     END IF
-    ! VIV pass 1: the end-of-step phase (Heun) into viv_phi_next; committed below.
+    ! VIV pass 1: the end-of-step phase (mid-point rule) and statistics into viv_phi_next and
+    ! viv_ms_next; committed below.
     IF (model%has_viv) THEN
       CALL viv_step_end(model, dt, ErrStat, ErrMsg)
       IF (ErrStat /= CD_MODEL_OK) THEN
@@ -3068,8 +3071,7 @@ CONTAINS
       END BLOCK
     END IF
     IF (model%has_viv) THEN
-      ! VIV pass 2 (mutate): the phase and the mean squares updated with the step-start
-      ! sample (the next step starts by adding its own sample, the end state of this one)
+      ! VIV pass 2 (mutate): the phase, the statistics and the step predictor at the step end
       model%viv_phi = model%viv_phi_next
       model%viv_ms = model%viv_ms_next
       model%viv_phi_eval = model%viv_phi
@@ -4200,6 +4202,8 @@ CONTAINS
     END DO
     nms = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, want_amp .OR. (want_wake .AND. want_filter))
     IF (want_frame) nms = CD_VIV_NMS_FRAME
+    ! the step predictor after the motion statistics (viv_pred_row; row 2 on a wake line)
+    IF (.NOT. want_wake) nms = nms + MERGE(2, 1, want_il)
     ALLOCATE (model%viv_cl(n_elem), model%viv_d(n_elem), model%viv_node(n_nodes), model%viv_cf(n_nodes), &
               model%viv_df(n_nodes), model%viv_dn(n_nodes), model%viv_phi(n_nodes), model%viv_ms(nms, n_nodes), &
               model%viv_phi_rollback(n_nodes), model%viv_ms_rollback(nms, n_nodes), &
@@ -4333,7 +4337,10 @@ CONTAINS
       model%viv_wake = .TRUE.
     END IF
     model%has_viv = .TRUE.
-    IF (.NOT. want_il) RETURN
+    IF (.NOT. want_il) THEN
+      CALL viv_seed_predictor(model)
+      RETURN
+    END IF
     ALLOCATE (model%vil_cx(n_elem), model%vil_alpha(n_nodes), model%vil_node(n_nodes), model%vil_phi(n_nodes), &
               model%vil_ms(2, n_nodes), model%vil_phi_rollback(n_nodes), model%vil_ms_rollback(2, n_nodes), &
               model%recovery_vil_phi(n_nodes), model%recovery_vil_ms(2, n_nodes), model%vil_phi_eval(n_nodes), &
@@ -4373,6 +4380,7 @@ CONTAINS
     model%vil_ms_next = model%vil_ms
     model%vil_phi_next = model%vil_phi
     model%has_viv_il = .TRUE.
+    CALL viv_seed_predictor(model)
   END SUBROUTINE CD_Set_Model_VIV
 
   SUBROUTINE CD_Latch_Model_VIV_Window(model, dt)
@@ -4389,11 +4397,13 @@ CONTAINS
 
   SUBROUTINE CD_Get_Model_VIV_State(model, phi, ms, t_window, ErrStat, ErrMsg, phi_x, ms_x)
     !! Copy the committed VIV state for a checkpoint: the shedding phase per node (n_nodes),
-    !! the running mean squares of the cross-flow velocity and acceleration (2, n_nodes), and
-    !! the averaging time (0 while unlatched). A model without VIV returns zeros. phi_x and ms_x
-    !! (both or neither, same shapes) take the in-line phase and mean squares, zero without
-    !! in-line VIV. On a wake-oscillator line phi is the wake variable q and row 1 of ms its rate
-    !! dq/dt (row 2 zero).
+    !! the motion statistics (CD_Model_VIV_NMS, n_nodes: the running mean squares of the
+    !! cross-flow velocity and acceleration, the amplitude estimate and the flow frame where the
+    !! line has them, and the step predictor), and the averaging time (0 while unlatched). A model
+    !! without VIV returns zeros. phi_x and ms_x (both or neither, shapes (n_nodes) and (2,
+    !! n_nodes)) take the in-line phase and mean squares, zero without in-line VIV. On a
+    !! wake-oscillator line phi is the wake variable q, row 1 of ms its rate dq/dt and row 2 the
+    !! step predictor.
     TYPE(CD_ModelType), INTENT(IN) :: model
     REAL(wp), INTENT(OUT) :: phi(:), ms(:, :), t_window
     INTEGER, INTENT(OUT) :: ErrStat
@@ -4466,14 +4476,12 @@ CONTAINS
       RETURN
     END IF
     ! the mean squares (rows 1:2) and the amplitudes y0, y0s (rows 4:5) cannot be negative; the
-    ! travel and the last cross-flow velocity of the amplitude estimate (rows 3, 6) are signed
-    ! (a wake-oscillator line holds dq/dt in row 1, signed, and 0 in row 2)
-    IF (model%viv_wake) THEN
-      neg = ANY(ms(2, :) < CD_ZERO)
-    ELSE
-      neg = ANY(ms(1:2, :) < CD_ZERO)
-    END IF
-    IF (SIZE(ms, 1) >= 5 .AND. .NOT. model%viv_wake) neg = neg .OR. ANY(ms(4:5, :) < CD_ZERO)
+    ! travel and the last cross-flow velocity of the amplitude estimate (rows 3, 6) and the step
+    ! predictor's rates (row viv_pred_row on) are signed (a wake-oscillator line holds dq/dt in row 1
+    ! and its predictor, the mid-point cross-flow acceleration, in row 2, both signed)
+    neg = .FALSE.
+    IF (.NOT. model%viv_wake) neg = ANY(ms(1:2, :) < CD_ZERO)
+    IF (model%has_viv_amp .OR. model%viv_frame) neg = neg .OR. ANY(ms(4:5, :) < CD_ZERO)
     IF (neg .OR. t_window < CD_ZERO) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV mean squares, amplitudes and averaging time must be non-negative')
       RETURN
@@ -4703,10 +4711,13 @@ CONTAINS
   PURE INTEGER FUNCTION CD_Model_VIV_NMS(model) RESULT(n)
     !! Rows of the VIV motion statistics of a node in the VIV state (CD_Get_Model_VIV_State ms):
     !! CD_VIV_NMS_AMP with amplitude tables (the amplitude estimate after the mean squares) or the
-    !! wake filter (the filtered velocity in rows 3:5), CD_VIV_NMS otherwise.
+    !! wake filter (the filtered velocity in rows 3:5), CD_VIV_NMS_FRAME with the flow frame,
+    !! CD_VIV_NMS otherwise; on a synchronisation-model line one more, the step predictor (two
+    !! with in-line VIV; viv_pred_row).
     TYPE(CD_ModelType), INTENT(IN) :: model
     n = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, model%has_viv_amp .OR. model%wo_filter)
     IF (model%viv_frame) n = CD_VIV_NMS_FRAME
+    IF (model%has_viv .AND. .NOT. model%viv_wake) n = n + MERGE(2, 1, model%has_viv_il)
   END FUNCTION CD_Model_VIV_NMS
 
   SUBROUTINE CD_Get_Model_VIV_Amplitude(model, amp, ErrStat, ErrMsg)
@@ -4810,24 +4821,85 @@ CONTAINS
     IF (ALLOCATED(model%fluid_velocity)) uu = model%fluid_velocity(:, nd)
   END SUBROUTINE viv_node_coef
 
+  PURE INTEGER FUNCTION viv_pred_row(model) RESULT(r)
+    !! The row of viv_ms holding the step predictor (CableDyn_VIV): after the motion statistics on a
+    !! synchronisation-model line (the in-line rate in the row after it), row 2 on a wake line.
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    r = 2
+    IF (model%viv_wake) RETURN
+    r = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, model%has_viv_amp)
+    IF (model%viv_frame) r = CD_VIV_NMS_FRAME
+    r = r + 1
+  END FUNCTION viv_pred_row
+
+  SUBROUTINE viv_seed_predictor(model)
+    !! The step predictor of a newly installed VIV model (row viv_pred_row of viv_ms, and of its
+    !! recovery and next copies): the phase rates at the present state, from the node's velocity and
+    !! committed acceleration and the mean squares at zero (MoorDyn's unnormalised start), and on a
+    !! wake line the cross-flow acceleration there. Only the first step predicts from it; every
+    !! step then leaves the rate at its own mid-point (viv_step_end).
+    TYPE(CD_ModelType), INTENT(INOUT) :: model
+    INTEGER :: nd, ia, ir
+    REAL(wp) :: coef, uu(3), yd, ydd, un, xd, xdd, vrel(3), urel(3)
+    LOGICAL :: ok
+    ir = viv_pred_row(model)
+    DO nd = 2, model%n_dof/3 - 1
+      IF (.NOT. model%viv_node(nd)) CYCLE
+      CALL viv_node_coef(model, model%q, nd, coef, uu)
+      ia = 3*nd - 2
+      vrel = smoothed(model%v, ia)
+      urel = uu
+      IF (frame_node(model, nd)) THEN
+        vrel = vrel - model%viv_ms(7:9, nd)
+        urel = uu - model%viv_ms(7:9, nd)
+      END IF
+      CALL CD_VIV_Crossflow_Motion(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), vrel, smoothed(model%a, ia), &
+                                   urel, yd, ydd, un, ok, xd, xdd)
+      IF (.NOT. (ok .AND. CD_Is_Finite(yd) .AND. CD_Is_Finite(ydd))) THEN
+        yd = CD_ZERO
+        ydd = CD_ZERO
+        xd = CD_ZERO
+        xdd = CD_ZERO
+      END IF
+      IF (model%viv_wake) THEN
+        model%viv_ms(ir, nd) = ydd
+        CYCLE
+      END IF
+      model%viv_ms(ir, nd) = CD_VIV_Phase_Rate(yd, ydd, CD_ZERO, CD_ZERO, model%viv_phi(nd), un, model%viv_dn(nd), &
+                                               model%viv_cf(nd), model%viv_df(nd), phi_rest=model%viv_phi_rest)
+      IF (.NOT. model%has_viv_il) CYCLE
+      IF (.NOT. model%vil_node(nd)) CYCLE
+      model%viv_ms(ir + 1, nd) = CD_VIV_Inline_Phase_Rate(xd, xdd, CD_ZERO, CD_ZERO, model%vil_phi(nd), &
+                                                          model%viv_ms(ir, nd), model%vil_alpha(nd))
+    END DO
+    model%viv_ms_rollback = model%viv_ms
+    model%recovery_viv_ms = model%viv_ms
+    model%viv_ms_next = model%viv_ms
+  END SUBROUTINE viv_seed_predictor
+
   SUBROUTINE viv_step_begin(model, dt, ErrStat, ErrMsg)
-    !! Step-start VIV quantities from the committed state (q_n, v_n, a_n, phi_n): the mean
-    !! squares with the step-start cross-flow sample (viv_ms_next), the phase rate
-    !! (viv_rate), and the explicit phase the in-step lift uses (viv_phi_eval): at t_{n+1},
-    !! phi_n + dt rate_n, under the force blend, whose in-step force is r(q_{n+1}, v_{n+1})
-    !! (the committed-state force F_n keeps phi_n); at the generalised-alpha level,
-    !! phi_n + (1 - alpha_f) dt rate_n, under the configuration blend.
+    !! Step-start VIV quantities from the committed state (q_n, v_n, phi_n and the step predictor,
+    !! the phase rate at the mid-point of the last step in row viv_pred_row of viv_ms): that rate
+    !! (viv_rate) and the explicit phase the in-step lift uses (viv_phi_eval): at t_{n+1},
+    !! phi_n + dt rate, under the force blend, whose in-step force is r(q_{n+1}, v_{n+1}) (the
+    !! committed-state force F_n keeps phi_n); at the generalised-alpha level, phi_n + (1 - alpha_f)
+    !! dt rate, under the configuration blend. The rate of the last step's mid-point is O(dt) off
+    !! the step's, so the predicted phase is O(dt^2) off. The committed acceleration is not
+    !! sampled: the generalised-alpha acceleration is the line's to O(dt) only (it is that of
+    !! t_n + (alpha_m - alpha_f) dt) and at rho_inf = 1 it carries an undamped alternating mode of
+    !! its own. On a wake line the wake state is predicted at the evaluation point under the last
+    !! step's mid-point acceleration (row 2) and the step-start wake frequency (viv_rate).
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: dt
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: nd, ia
-    REAL(wp) :: w, alpha_f, yd, ydd, un, coef, uu(3), xd, xdd, sw(2)
+    INTEGER :: nd, ia, ir
+    REAL(wp) :: alpha_f, yd, ydd, un, coef, uu(3), sw(2)
     LOGICAL :: ok
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
     CALL CD_Latch_Model_VIV_Window(model, dt)
-    w = MIN(CD_ONE, dt/model%viv_tw)
+    ir = viv_pred_row(model)
     alpha_f = model%cfg%rho_inf/(model%cfg%rho_inf + CD_ONE)
     IF (model%cfg%force_blend) alpha_f = CD_ZERO
     model%viv_rate = CD_ZERO
@@ -4842,107 +4914,117 @@ CONTAINS
       IF (.NOT. model%viv_node(nd)) CYCLE
       CALL viv_node_coef(model, model%q, nd, coef, uu)
       ia = 3*nd - 2
-      IF (frame_node(model, nd)) THEN
-        ! with the flow frame, the node's velocity relative to its filtered one (the relative flow,
-        ! and so the axes and the shedding speed, unchanged; viv_frame)
-        CALL CD_VIV_Crossflow_Motion(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), &
-                                     smoothed(model%v, ia) - model%viv_ms(7:9, nd), smoothed(model%a, ia), &
-                                     uu - model%viv_ms(7:9, nd), yd, ydd, un, ok, xd, xdd)
-      ELSE
-        CALL CD_VIV_Crossflow_Motion(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), smoothed(model%v, ia), &
-                                     smoothed(model%a, ia), uu, yd, ydd, un, ok, xd, xdd)
-      END IF
+      ! the node tangent must exist at the step start
+      CALL CD_VIV_Crossflow_Motion(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), [CD_ZERO, CD_ZERO, CD_ZERO], &
+                                   [CD_ZERO, CD_ZERO, CD_ZERO], uu, yd, ydd, un, ok)
       IF (.NOT. ok) THEN
         CALL fail(ErrStat, ErrMsg, 'VIV phase: the neighbours of a node coincide (no line tangent)')
         RETURN
       END IF
       IF (model%viv_wake) THEN
         ! the wake frequency of the ambient flow normal to the line (the free stream of the
-        ! paper), not of the relative flow, which the line's own cross-flow motion modulates; the
-        ! wake state predicted at the step's evaluation point under the step-start forcing
+        ! paper), not of the relative flow, which the line's own cross-flow motion modulates
         IF (model%wo_filter) THEN
           ! with the wake filter, of the flow relative to the node's slowly filtered motion
           IF (model%wo_tf(nd) > CD_ZERO) uu = uu - model%viv_ms(3:5, nd)
         END IF
         model%viv_rate(nd) = CD_VIV_TWO_PI*model%wo_st(nd)*viv_node_ambient_speed(model%q, ia, uu)/model%viv_dn(nd)
-        model%viv_ms_next(2, nd) = ydd
         sw = [model%viv_phi(nd), model%viv_ms(1, nd)]
         CALL CD_VIV_Wake_Advance(sw, model%viv_rate(nd), model%wo_eps(nd), model%wo_a(nd)/model%viv_dn(nd), &
-                                 ydd, ydd, (CD_ONE - alpha_f)*dt)
+                                 model%viv_ms(ir, nd), model%viv_ms(ir, nd), (CD_ONE - alpha_f)*dt)
         model%viv_phi_eval(nd) = sw(1)
         CYCLE
       END IF
-      model%viv_ms_next(1, nd) = CD_VIV_Mean_Square(model%viv_ms(1, nd), yd, w)
-      model%viv_ms_next(2, nd) = CD_VIV_Mean_Square(model%viv_ms(2, nd), ydd, w)
-      model%viv_rate(nd) = CD_VIV_Phase_Rate(yd, ydd, model%viv_ms_next(1, nd), model%viv_ms_next(2, nd), &
-                                             model%viv_phi(nd), un, model%viv_dn(nd), model%viv_cf(nd), &
-                                             model%viv_df(nd), phi_rest=model%viv_phi_rest)
+      model%viv_rate(nd) = model%viv_ms(ir, nd)
       model%viv_phi_eval(nd) = model%viv_phi(nd) + (CD_ONE - alpha_f)*dt*model%viv_rate(nd)
       IF (.NOT. model%has_viv_il) CYCLE
       IF (.NOT. model%vil_node(nd)) CYCLE
-      model%vil_ms_next(1, nd) = CD_VIV_Mean_Square(model%vil_ms(1, nd), xd, w)
-      model%vil_ms_next(2, nd) = CD_VIV_Mean_Square(model%vil_ms(2, nd), xdd, w)
-      model%vil_rate(nd) = CD_VIV_Inline_Phase_Rate(xd, xdd, model%vil_ms_next(1, nd), model%vil_ms_next(2, nd), &
-                                                    model%vil_phi(nd), model%viv_rate(nd), model%vil_alpha(nd))
+      model%vil_rate(nd) = model%viv_ms(ir + 1, nd)
       model%vil_phi_eval(nd) = model%vil_phi(nd) + (CD_ONE - alpha_f)*dt*model%vil_rate(nd)
     END DO
   END SUBROUTINE viv_step_begin
 
   SUBROUTINE viv_step_end(model, dt, ErrStat, ErrMsg)
-    !! End-of-step VIV phase by Heun's rule (the trapezoidal corrector of the explicit Euler
-    !! predictor): phi_n+1 = phi_n + dt/2 (rate_n + rate(state_n+1, phi_n + dt rate_n)), with
-    !! the end-state cross-flow sample added to the mean squares for that rate (not stored:
-    !! the next step adds it itself). Writes viv_phi_next only.
+    !! End-of-step VIV state from the step-start state (q, v) and the converged end state (q_step,
+    !! v_step), into viv_phi_next and viv_ms_next. The phase advances by the implicit mid-point
+    !! rule, solved by one fixed-point pass from the step predictor rate_p,
+    !!
+    !!   rate_1 = rate(y'_m, y''_m, ms_m, phi_n + dt/2 rate_p),
+    !!   phi_n+1 = phi_n + dt rate(y'_m, y''_m, ms_m, phi_n + dt/2 rate_1),
+    !!
+    !! on the node's cross-flow motion at the step's mid-point: the mean position, the velocity
+    !! (q_n+1 - q_n)/dt and the acceleration (v_n+1 - v_n)/dt, the step means of the velocity and of
+    !! its derivative (that of the mid-point to O(dt^2) at any rho_inf, and free of the committed
+    !! acceleration's lag and alternating mode). The mean squares advance by the
+    !! mid-point rule as well (the exact average of the mid-point sample over dt, and over dt/2 for
+    !! the mid-point rate), and the filtered velocities of the flow frame and the wake filter
+    !! exactly for the velocity linear over the step. The mid-point rate becomes the next step's
+    !! predictor. On a wake line the wake state advances under the mid-point acceleration (held
+    !! over the step, its integral exact) at the mean of the start and end wake frequencies, and
+    !! that acceleration becomes the predictor.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: dt
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: nd, ia
-    REAL(wp) :: w, yd, ydd, un, coef, uu(3), ms1, ms2, rate_end, xd, xdd, rate_end_x, st(4), sw(2), ydd0, vsm(3)
+    INTEGER :: nd, ia, ir, ip
+    REAL(wp) :: wf, wh, yd, ydd, un, coef, uu(3), ms1, ms2, rate_mid, xd, xdd, rate_mid_x, st(4), sw(2), ap
+    REAL(wp) :: vs0(3), vs1(3), vf(3), qm(9), om
     LOGICAL :: ok
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
-    w = MIN(CD_ONE, dt/model%viv_tw)
+    ir = viv_pred_row(model)
+    wf = CD_VIV_Mean_Square_Weight(dt/model%viv_tw)
+    wh = CD_VIV_Mean_Square_Weight(0.5_wp*dt/model%viv_tw)
     model%viv_phi_next = model%viv_phi
     IF (model%has_viv_il) model%vil_phi_next = model%vil_phi
     DO nd = 2, model%n_dof/3 - 1
       IF (.NOT. model%viv_node(nd)) CYCLE
       CALL viv_node_coef(model, model%q_step, nd, coef, uu)
       ia = 3*nd - 2
+      vs0 = smoothed(model%v, ia)
+      vs1 = smoothed(model%v_step, ia)
+      ! the flow frame's velocity at the mid-point: the filtered velocity at the step end (exact for
+      ! the first-order filter of the velocity linear over the step; a non-finite end velocity
+      ! keeps it) averaged with the step-start one
+      vf = CD_ZERO
       IF (frame_node(model, nd)) THEN
-        CALL CD_VIV_Crossflow_Motion(model%q_step(ia - 3:ia - 1), model%q_step(ia + 3:ia + 5), &
-                                     smoothed(model%v_step, ia) - model%viv_ms(7:9, nd), &
-                                     smoothed(model%a_step, ia), uu - model%viv_ms(7:9, nd), yd, ydd, un, ok, &
-                                     xd, xdd)
-      ELSE
-        CALL CD_VIV_Crossflow_Motion(model%q_step(ia - 3:ia - 1), model%q_step(ia + 3:ia + 5), &
-                                     smoothed(model%v_step, ia), smoothed(model%a_step, ia), uu, yd, ydd, un, ok, &
-                                     xd, xdd)
+        IF (CD_All_Finite(vs1)) &
+          model%viv_ms_next(7:9, nd) = CD_VIV_Filter_Linear(model%viv_ms(7:9, nd), vs0, vs1, dt/model%viv_ftf(nd))
+        vf = 0.5_wp*(model%viv_ms(7:9, nd) + model%viv_ms_next(7:9, nd))
       END IF
+      ! the mid-point motion: the mean position, and the velocity and acceleration over the step,
+      ! (q_n+1 - q_n)/dt and (v_n+1 - v_n)/dt, the step means of the velocity and of its
+      ! derivative, so a harmonic motion keeps its phase between them exactly
+      qm = 0.5_wp*(model%q(ia - 3:ia + 5) + model%q_step(ia - 3:ia + 5))
+      CALL CD_VIV_Crossflow_Motion(qm(1:3), qm(7:9), (smoothed(model%q_step, ia) - smoothed(model%q, ia))/dt - vf, &
+                                   (vs1 - vs0)/dt, uu - vf, yd, ydd, un, ok, xd, xdd)
       IF (model%viv_wake) THEN
-        ! the wake state over the step with the cross-flow acceleration linear from its step-start
-        ! value to the converged end one (held where the end tangent is degenerate), at the
-        ! step-start wake frequency; a non-finite result keeps the step-start forcing alone
-        ydd0 = model%viv_ms_next(2, nd)
-        IF (.NOT. (ok .AND. CD_Is_Finite(ydd))) ydd = ydd0
+        ! the mid-point acceleration (the predictor's where the mid-point tangent is degenerate or
+        ! the acceleration not finite)
+        ap = model%viv_ms(ir, nd)
+        IF (.NOT. (ok .AND. CD_Is_Finite(ydd))) ydd = ap
+        ! the filtered velocity at the step end, exact for the velocity linear over the step (a
+        ! non-finite end velocity keeps it), and the wake frequency there
+        om = model%viv_rate(nd)
+        IF (model%wo_filter) THEN
+          IF (model%wo_tf(nd) > CD_ZERO .AND. CD_All_Finite(vs1)) &
+            model%viv_ms_next(3:5, nd) = CD_VIV_Filter_Linear(model%viv_ms(3:5, nd), vs0, vs1, dt/model%wo_tf(nd))
+          IF (model%wo_tf(nd) > CD_ZERO) uu = uu - model%viv_ms_next(3:5, nd)
+        END IF
+        om = 0.5_wp*(om + CD_VIV_TWO_PI*model%wo_st(nd)*viv_node_ambient_speed(model%q_step, ia, uu)/model%viv_dn(nd))
+        IF (.NOT. CD_Is_Finite(om)) om = model%viv_rate(nd)
         sw = [model%viv_phi(nd), model%viv_ms(1, nd)]
-        CALL CD_VIV_Wake_Advance(sw, model%viv_rate(nd), model%wo_eps(nd), model%wo_a(nd)/model%viv_dn(nd), &
-                                 ydd0, ydd, dt)
+        CALL CD_VIV_Wake_Advance(sw, om, model%wo_eps(nd), model%wo_a(nd)/model%viv_dn(nd), ydd, ydd, dt)
         IF (.NOT. (CD_Is_Finite(sw(1)) .AND. CD_Is_Finite(sw(2)))) THEN
+          ! a non-finite result keeps the step-start frequency and the predictor's forcing
+          ydd = ap
           sw = [model%viv_phi(nd), model%viv_ms(1, nd)]
           CALL CD_VIV_Wake_Advance(sw, model%viv_rate(nd), model%wo_eps(nd), model%wo_a(nd)/model%viv_dn(nd), &
-                                   ydd0, ydd0, dt)
+                                   ydd, ydd, dt)
         END IF
         model%viv_phi_next(nd) = sw(1)
         model%viv_ms_next(1, nd) = sw(2)
-        ! the filtered velocity, exact for the first-order filter of the converged end velocity
-        ! held over the step (a non-finite end velocity keeps it)
-        IF (model%wo_filter) THEN
-          vsm = smoothed(model%v_step, ia)
-          IF (model%wo_tf(nd) > CD_ZERO .AND. CD_All_Finite(vsm)) &
-            model%viv_ms_next(3:5, nd) = model%viv_ms(3:5, nd) + (CD_ONE - EXP(-dt/model%wo_tf(nd)))* &
-                                         (vsm - model%viv_ms(3:5, nd))
-        END IF
+        model%viv_ms_next(ir, nd) = ydd
         CYCLE
       END IF
       IF (.NOT. ok) THEN
@@ -4957,51 +5039,53 @@ CONTAINS
         IF (frame_node(model, nd)) THEN
           CALL CD_VIV_Amplitude_Update(st, CD_VIV_Ambient_Crossflow_Rate(model%q_step(ia + 3:ia + 5) - &
                                                                          model%q_step(ia - 3:ia - 1), &
-                                                                         smoothed(model%v_step, ia) - &
-                                                                         model%viv_ms(7:9, nd), &
+                                                                         vs1 - model%viv_ms(7:9, nd), &
                                                                          uu - model%viv_ms(7:9, nd)), dt)
         ELSE
           CALL CD_VIV_Amplitude_Update(st, CD_VIV_Ambient_Crossflow_Rate(model%q_step(ia + 3:ia + 5) - &
-                                                                         model%q_step(ia - 3:ia - 1), &
-                                                                         smoothed(model%v_step, ia), uu), dt)
+                                                                         model%q_step(ia - 3:ia - 1), vs1, uu), dt)
         END IF
         model%viv_ms_next(3:6, nd) = st
       END IF
-      IF (frame_node(model, nd)) THEN
-        ! the filtered velocity follows the converged end velocity held over the step (exact for
-        ! the first-order filter; a non-finite end velocity keeps it)
-        vsm = smoothed(model%v_step, ia)
-        IF (CD_All_Finite(vsm)) &
-          model%viv_ms_next(7:9, nd) = model%viv_ms(7:9, nd) + (CD_ONE - EXP(-dt/model%viv_ftf(nd)))* &
-                                       (vsm - model%viv_ms(7:9, nd))
-      END IF
-      ms1 = CD_VIV_Mean_Square(model%viv_ms_next(1, nd), yd, w)
-      ms2 = CD_VIV_Mean_Square(model%viv_ms_next(2, nd), ydd, w)
-      rate_end = CD_VIV_Phase_Rate(yd, ydd, ms1, ms2, model%viv_phi(nd) + dt*model%viv_rate(nd), un, &
-                                   model%viv_dn(nd), model%viv_cf(nd), model%viv_df(nd), phi_rest=model%viv_phi_rest)
-      model%viv_phi_next(nd) = CD_VIV_Wrap_Phase(model%viv_phi(nd) + 0.5_wp*dt*(model%viv_rate(nd) + rate_end))
+      ms1 = CD_VIV_Mean_Square(model%viv_ms(1, nd), yd, wh)
+      ms2 = CD_VIV_Mean_Square(model%viv_ms(2, nd), ydd, wh)
+      ! the implicit mid-point rule by one fixed-point pass: the mid-point phase from the predictor,
+      ! then from the rate it gives
+      rate_mid = model%viv_rate(nd)
+      DO ip = 1, 2
+        rate_mid = CD_VIV_Phase_Rate(yd, ydd, ms1, ms2, model%viv_phi(nd) + 0.5_wp*dt*rate_mid, un, &
+                                     model%viv_dn(nd), model%viv_cf(nd), model%viv_df(nd), phi_rest=model%viv_phi_rest)
+      END DO
+      model%viv_ms_next(1, nd) = CD_VIV_Mean_Square(model%viv_ms(1, nd), yd, wf)
+      model%viv_ms_next(2, nd) = CD_VIV_Mean_Square(model%viv_ms(2, nd), ydd, wf)
+      model%viv_ms_next(ir, nd) = rate_mid
+      model%viv_phi_next(nd) = CD_VIV_Wrap_Phase(model%viv_phi(nd) + dt*rate_mid)
       IF (.NOT. model%has_viv_il) CYCLE
       IF (.NOT. model%vil_node(nd)) CYCLE
-      ! the in-line rate at the end state is slaved to the end cross-flow rate (Eq. 6)
-      ms1 = CD_VIV_Mean_Square(model%vil_ms_next(1, nd), xd, w)
-      ms2 = CD_VIV_Mean_Square(model%vil_ms_next(2, nd), xdd, w)
-      rate_end_x = CD_VIV_Inline_Phase_Rate(xd, xdd, ms1, ms2, model%vil_phi(nd) + dt*model%vil_rate(nd), &
-                                            rate_end, model%vil_alpha(nd))
-      model%vil_phi_next(nd) = CD_VIV_Wrap_Phase(model%vil_phi(nd) + 0.5_wp*dt*(model%vil_rate(nd) + rate_end_x))
+      ! the in-line rate at the mid-point is slaved to the mid-point cross-flow rate (Eq. 6)
+      ms1 = CD_VIV_Mean_Square(model%vil_ms(1, nd), xd, wh)
+      ms2 = CD_VIV_Mean_Square(model%vil_ms(2, nd), xdd, wh)
+      rate_mid_x = model%vil_rate(nd)
+      DO ip = 1, 2
+        rate_mid_x = CD_VIV_Inline_Phase_Rate(xd, xdd, ms1, ms2, model%vil_phi(nd) + 0.5_wp*dt*rate_mid_x, rate_mid, &
+                                              model%vil_alpha(nd))
+      END DO
+      model%vil_ms_next(1, nd) = CD_VIV_Mean_Square(model%vil_ms(1, nd), xd, wf)
+      model%vil_ms_next(2, nd) = CD_VIV_Mean_Square(model%vil_ms(2, nd), xdd, wf)
+      model%viv_ms_next(ir + 1, nd) = rate_mid_x
+      model%vil_phi_next(nd) = CD_VIV_Wrap_Phase(model%vil_phi(nd) + dt*rate_mid_x)
     END DO
     IF (model%viv_wake) THEN
-      ! row 2 held the step-start acceleration (scratch); the committed row stays 0
-      model%viv_ms_next(2, :) = CD_ZERO
       IF (.NOT. (CD_All_Finite(model%viv_phi_next) .AND. CD_All_Finite(model%viv_ms_next))) THEN
         CALL fail(ErrStat, ErrMsg, 'VIV wake oscillator update produced a non-finite state')
       END IF
       RETURN
     END IF
-    IF (.NOT. CD_All_Finite(model%viv_phi_next)) THEN
+    IF (.NOT. (CD_All_Finite(model%viv_phi_next) .AND. CD_All_Finite(model%viv_ms_next))) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV phase update produced a non-finite phase')
     END IF
     IF (model%has_viv_il) THEN
-      IF (.NOT. CD_All_Finite(model%vil_phi_next)) THEN
+      IF (.NOT. (CD_All_Finite(model%vil_phi_next) .AND. CD_All_Finite(model%vil_ms_next))) THEN
         CALL fail(ErrStat, ErrMsg, 'in-line VIV phase update produced a non-finite phase')
       END IF
     END IF

@@ -399,8 +399,11 @@ CONTAINS
                                                 a_interior=aL(4:ndof - 3))
       ok = ok .AND. es == CD_SYSTEM_OK
       nv = CD_System_Line_VIV_MirrorSize(a%sys%fast%system, il)
+      ! per node the phases and mean squares, the further motion statistics and, on a
+      ! synchronisation line, the step predictor (two rows with in-line VIV)
       ok = ok .AND. nv == (MERGE(6, 3, il_case) + MERGE(4, 0, amp_case .OR. wakef_case) + &
-                           MERGE(3, 0, ampf_case) + MERGE(7, 0, frame_case))*(ndof/3) + 1
+                           MERGE(3, 0, ampf_case) + MERGE(7, 0, frame_case) + &
+                           MERGE(0, MERGE(2, 1, il_case), wake_case))*(ndof/3) + 1
       IF (with_viv .AND. nv > 0) THEN
         ALLOCATE (buf(nv))
         CALL CD_Get_System_Line_VIV_State(a%sys%fast%system, il, buf, es, em)
@@ -414,8 +417,8 @@ CONTAINS
     CALL CD_HFMF_PackMirror(a%cables(1), buf, es, em)
     nvc = CD_HFMF_VIVMirrorSize(a%cables(1))
     ok = ok .AND. nvc == (MERGE(6, 3, il_case) + MERGE(MERGE(5, 2, wakef_case), 0, wake_case) + &
-                          MERGE(4, 0, amp_case) + MERGE(3, 0, ampf_case) + MERGE(7, 0, frame_case))* &
-         a%cables(1)%line%nn + 1
+                          MERGE(4, 0, amp_case) + MERGE(3, 0, ampf_case) + MERGE(7, 0, frame_case) + &
+                          MERGE(0, MERGE(2, 1, il_case), wake_case))*a%cables(1)%line%nn + 1
     IF (.NOT. with_viv) THEN
       ! the cable's VIV block as the fresh build has it (the torsion-free cable ends with it)
       CALL CD_HFMF_PackMirror(b%cables(1), fresh, es, em)
@@ -445,15 +448,15 @@ CONTAINS
       ! the filtered velocity in rows 7-9 of the motion statistics on both lines, no tables
       same = a%cables(1)%line%viv_frame .AND. .NOT. a%cables(1)%line%has_viv_amp .AND. &
              a%sys%fast%system%lines(1)%viv_frame .AND. .NOT. a%sys%fast%system%lines(1)%has_viv_amp .AND. &
-             SIZE(a%cables(1)%line%viv_ms, 1) == 9 .AND. SIZE(a%sys%fast%system%lines(1)%viv_ms, 1) == 9 .AND. &
+             SIZE(a%cables(1)%line%viv_ms, 1) == 10 .AND. SIZE(a%sys%fast%system%lines(1)%viv_ms, 1) == 10 .AND. &
              MAXVAL(ABS(a%sys%fast%system%lines(1)%viv_ms - b%sys%fast%system%lines(1)%viv_ms)) <= 0.0_wp .AND. &
              MAXVAL(ABS(a%cables(1)%line%viv_ms - b%cables(1)%line%viv_ms)) <= 0.0_wp
     END IF
     IF (same .AND. amp_case) THEN
       ! the motion statistics with the amplitude estimate (rows 3-6) on both lines
       same = a%sys%fast%system%lines(1)%has_viv_amp .AND. a%cables(1)%line%has_viv_amp .AND. &
-             SIZE(a%cables(1)%line%viv_ms, 1) == MERGE(9, 6, ampf_case) .AND. &
-             SIZE(a%sys%fast%system%lines(1)%viv_ms, 1) == MERGE(9, 6, ampf_case) .AND. &
+             SIZE(a%cables(1)%line%viv_ms, 1) == MERGE(10, 7, ampf_case) .AND. &
+             SIZE(a%sys%fast%system%lines(1)%viv_ms, 1) == MERGE(10, 7, ampf_case) .AND. &
              (a%cables(1)%line%viv_frame .EQV. ampf_case) .AND. &
              (a%sys%fast%system%lines(1)%viv_frame .EQV. ampf_case) .AND. &
              MAXVAL(ABS(a%sys%fast%system%lines(1)%viv_ms - b%sys%fast%system%lines(1)%viv_ms)) <= 0.0_wp .AND. &
