@@ -168,6 +168,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   processes that each start an OpenMP team oversubscribed the cores: 24 lazy-wave runs at 24 jobs
   took 19.1 s with the OpenMP default and 16.7 s with one thread each. The Python manual gives the
   measured batch scaling (13.3 times faster at 24 jobs on a 24-core workstation, 15.1 at 48).
+- The load power channels (`VIVPow`, `DragPow`, `DampPow` and their per-length forms) of a line
+  evaluate its node powers once per output row instead of once per channel, on finite-EI cables,
+  `EI = 0` lines and line systems. Outputs are unchanged to the bit; with the three line totals
+  the VIV examples run about 11 % faster (`viv_taut_cable_inline.dat` 2.39 s to 2.14 s; the same
+  line with 200 elements at 100 steps per cycle 18.1 s to 16.1 s).
+- The bending damping of a finite-EI cable (`EI|Bb`, `EI|-zeta|f`) evaluates the second
+  derivatives of the curvature only where the position Jacobian needs them, not in every residual
+  evaluation. Results are unchanged to the bit; the Delta Flume case 9 deck of
+  `validation/experiments/delta_flume` (64 elements, 80 000 steps) runs in 58.6 s instead of
+  73.2 s.
 
 ### Fixed
 

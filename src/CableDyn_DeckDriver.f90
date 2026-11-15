@@ -909,6 +909,19 @@ MODULE CableDyn_DeckDriver
     ! Range graphs and touchdown channels of the run (sized by range_setup_planned; every
     ! row samples the lines that need it before the channels are evaluated).
     TYPE(CD_RangeSet) :: rset
+    ! The node load powers of each line (VIVPow, DragPow, DampPow and their per-length
+    ! channels), evaluated once per row by the row's first load power channel of that line
+    ! (lp_row stamps, lp_off offsets into the node arrays).
+    INTEGER, ALLOCATABLE :: lp_off(:), lp_row(:)
+    REAL(wp), ALLOCATABLE :: line_pv(:), line_pd(:), line_pm(:)
+  END TYPE
+
+  TYPE :: LoadPowerRow
+    !! The node load powers of one finite-EI cable at the committed state of one output row
+    !! (CD_HermiteCable_Dyn_Load_Power): the row's first load power channel of the cable
+    !! evaluates them and its other load power channels reuse them.
+    LOGICAL :: valid = .FALSE.
+    REAL(wp), ALLOCATABLE :: pv(:), pd(:), pm(:)
   END TYPE
 
   TYPE :: LineStepWorkspace
@@ -34147,6 +34160,8 @@ CONTAINS
     REAL(wp) :: val, f(3), fl(3)
     CHARACTER(NAMELEN) :: lo
     CHARACTER(1024) :: em
+    ! the cables' load powers at this row's state, shared by their load power channels
+    TYPE(LoadPowerRow) :: powers(SIZE(cables))
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     IF (PRESENT(ranges)) THEN
       DO li = 1, SIZE(lines)
@@ -34233,7 +34248,7 @@ CONTAINS
           CALL parse_line_node_channel(channels(i), line_id, pidx, pp, comp)
         END IF
         li = find_line(lines, line_id)
-        CALL eval_cable_channel(cables(li), channels(i), val, ErrStat, ErrMsg)
+        CALL eval_cable_channel(cables(li), channels(i), val, ErrStat, ErrMsg, power=powers(li))
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
       END IF
       IF (.NOT. IEEE_IS_FINITE(val)) THEN
@@ -35586,7 +35601,7 @@ CONTAINS
 
     INTEGER, PARAMETER :: CH_LEGACY = 0, CH_FAIRTEN = 1, CH_ANCHTEN = 2, CH_ANGLE = 3, CH_NODE_TEN = 4, &
                           CH_NODE_STATE = 5, CH_POINT_MOTION = 6, CH_POINT_FIXED = 7, CH_POINT_LINE = 8, &
-                          CH_SYS_POINT = 9, CH_TDP = 10
+                          CH_SYS_POINT = 9, CH_TDP = 10, CH_LOAD_POWER = 11
     INTEGER :: i, k, n, li, off, nd, ne, nnode, stride, es
     LOGICAL :: has_motion, ok
     REAL(wp) :: val, q_point(3), v_point(3), a_point(3)
@@ -35664,6 +35679,22 @@ CONTAINS
         val = points(work%ch_aux(i))%pos(work%ch_comp(i))
       CASE (CH_TDP)
         val = work%rset%lines(li)%tdp(work%ch_comp(i))
+      CASE (CH_LOAD_POWER)
+        CALL fetch_power(li, ok)
+        IF (.NOT. ok) THEN
+          CALL legacy_value(i, val)
+        ELSE
+          off = work%lp_off(li)
+          nnode = work%line_ndof(li)/stride
+          IF (PRESENT(models)) THEN
+            val = load_power_value(work%ch_aux(i), work%ch_node(i), work%line_pv(off + 1:off + nnode), &
+                                   work%line_pd(off + 1:off + nnode), work%line_pm(off + 1:off + nnode), models(li)%l0)
+          ELSE
+            val = load_power_value(work%ch_aux(i), work%ch_node(i), work%line_pv(off + 1:off + nnode), &
+                                   work%line_pd(off + 1:off + nnode), work%line_pm(off + 1:off + nnode), &
+                                   system%lines(li)%l0)
+          END IF
+        END IF
       CASE (CH_SYS_POINT)
         CALL CD_Get_System_Point_State(system, work%ch_aux(i), q_point, v_point, a_point, es, em)
         IF (es /= CD_SYSTEM_OK) THEN
@@ -35760,6 +35791,28 @@ CONTAINS
       IF (fetched) work%state_row(il) = work%row
     END SUBROUTINE fetch_state
 
+    SUBROUTINE fetch_power(il, fetched)
+      !! Evaluate line `il`'s node load powers into the row cache once per row.
+      INTEGER, INTENT(IN) :: il
+      LOGICAL, INTENT(OUT) :: fetched
+      INTEGER :: o, m, es
+      CHARACTER(1024) :: msg
+      fetched = work%lp_row(il) == work%row
+      IF (fetched) RETURN
+      o = work%lp_off(il)
+      m = work%line_ndof(il)/stride
+      IF (PRESENT(models)) THEN
+        CALL CD_Get_Model_Load_Power(models(il), work%line_pv(o + 1:o + m), work%line_pd(o + 1:o + m), &
+                                     work%line_pm(o + 1:o + m), es, msg)
+        fetched = es == CD_MODEL_OK
+      ELSE
+        CALL CD_Get_System_Line_Load_Power(system, il, work%line_pv(o + 1:o + m), work%line_pd(o + 1:o + m), &
+                                           work%line_pm(o + 1:o + m), es, msg)
+        fetched = es == CD_SYSTEM_OK
+      END IF
+      IF (fetched) work%lp_row(il) = work%row
+    END SUBROUTINE fetch_power
+
     SUBROUTINE end_tension_override(il, inode, nel, v)
       !! EI=0 model/system lines: an end node reports the force the line exerts on its end
       !! point (end element tension + the end node's lumped loads) instead of the element
@@ -35843,6 +35896,8 @@ CONTAINS
       IF (ALLOCATED(work%line_ndof)) DEALLOCATE (work%line_ndof, work%line_ne, work%state_off, work%ten_off, &
                                                  work%state_row, work%ten_row)
       IF (ALLOCATED(work%line_q)) DEALLOCATE (work%line_q, work%line_v, work%line_a, work%line_ten)
+      IF (ALLOCATED(work%lp_off)) DEALLOCATE (work%lp_off, work%lp_row)
+      IF (ALLOCATED(work%line_pv)) DEALLOCATE (work%line_pv, work%line_pd, work%line_pm)
       ALLOCATE (work%ch_kind(n), work%ch_line(n), work%ch_node(n), work%ch_comp(n), work%ch_aux(n), work%ch_val(n))
       ALLOCATE (work%line_ndof(nl), work%line_ne(nl), work%state_off(nl + 1), work%ten_off(nl + 1), &
                 work%state_row(nl), work%ten_row(nl))
@@ -35857,6 +35912,8 @@ CONTAINS
       work%state_row = 0
       work%ten_row = 0
       work%row = 0
+      ALLOCATE (work%lp_off(nl + 1), work%lp_row(nl))
+      work%lp_row = 0
 
       DO j = 1, n
         lo = to_lower(channels(j))
@@ -35925,13 +35982,18 @@ CONTAINS
         ELSE
           CALL parse_line_node_channel(channels(j), il, node, kind, comp)
           ! from the line model, channel-at-a-time (CH_LEGACY)
-          IF (is_load_power_kind(kind) .OR. kind == 21) CYCLE
+          IF (kind == 21) CYCLE
           il = find_line(lines, il)
           IF (il < 1) CYCLE
           CALL line_sizes(il, sized, tension_sized)
           IF (.NOT. sized) CYCLE
           IF (node < 1 .OR. node > work%line_ndof(il)/stride) CYCLE
-          IF (kind == 3) THEN
+          IF (is_load_power_kind(kind)) THEN
+            ! the line's node load powers, evaluated once per row for all its power channels
+            work%ch_kind(j) = CH_LOAD_POWER
+            work%ch_node(j) = deck_to_internal_node(node, work%line_ndof(il)/stride - 1)
+            work%ch_aux(j) = kind
+          ELSE IF (kind == 3) THEN
             IF (.NOT. tension_sized) CYCLE
             work%ch_kind(j) = CH_NODE_TEN
             work%ch_node(j) = deck_to_internal_node(node, work%line_ne(il))
@@ -35947,12 +36009,16 @@ CONTAINS
 
       work%state_off(1) = 0
       work%ten_off(1) = 0
+      work%lp_off(1) = 0
       DO il = 1, nl
         work%state_off(il + 1) = work%state_off(il) + work%line_ndof(il)
         work%ten_off(il + 1) = work%ten_off(il) + MAX(0, work%line_ne(il))
+        work%lp_off(il + 1) = work%lp_off(il) + work%line_ndof(il)/stride
       END DO
       ALLOCATE (work%line_q(work%state_off(nl + 1)), work%line_v(work%state_off(nl + 1)), &
                 work%line_a(work%state_off(nl + 1)), work%line_ten(work%ten_off(nl + 1)))
+      ALLOCATE (work%line_pv(work%lp_off(nl + 1)), work%line_pd(work%lp_off(nl + 1)), &
+                work%line_pm(work%lp_off(nl + 1)))
       work%plan_ready = .TRUE.
       work%plan_motion = has_motion
     END SUBROUTINE build_plan
@@ -40176,7 +40242,7 @@ CONTAINS
     ErrMsg = 'CableDyn_DeckDriver: OUTPUT "'//TRIM(ch)//'": '//TRIM(em)
   END SUBROUTINE sys_solvefail
 
-  SUBROUTINE eval_cable_channel(cable, ch, val, ErrStat, ErrMsg, mesh_node)
+  SUBROUTINE eval_cable_channel(cable, ch, val, ErrStat, ErrMsg, mesh_node, power)
     !! Evaluate one channel for a finite-EI Hermite power cable (CD_HFMF). Reads the cable's
     !! committed state directly from the CD_HFMF
     !! line (stride-6 DOFs: r at 6*(n-1)+1..3, tangent m at +4..6) and recovers the
@@ -40187,13 +40253,16 @@ CONTAINS
     !! names a deck node (1 + the total NumSegs of the line's sections, End A first), read at its
     !! node of the final mesh on a refined line (cable%deck_node); mesh_node = .TRUE. reads the
     !! token's node as a node of the final mesh instead (the static profile and the C API line
-    !! arrays list every mesh node).
+    !! arrays list every mesh node). power (optional), the cable's load powers at its present
+    !! state: a load power channel takes them when they are valid and stores them otherwise, so
+    !! the load power channels of one output row evaluate them once.
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
     CHARACTER(*), INTENT(IN) :: ch
     REAL(wp), INTENT(OUT) :: val
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     LOGICAL, INTENT(IN), OPTIONAL :: mesh_node
+    TYPE(LoadPowerRow), INTENT(INOUT), OPTIONAL :: power
 
     CHARACTER(NAMELEN) :: lo
     INTEGER :: line_id, node, kind, comp, nnode, nelem, inode, es
@@ -40279,6 +40348,13 @@ CONTAINS
     inode = deck_to_internal_node(node, nelem)
     SELECT CASE (kind)
     CASE (15:20)   ! load power: the line total, or per unit length about the node
+      IF (PRESENT(power)) THEN
+        IF (power%valid) THEN
+          ! the row's earlier load power channel of this cable evaluated them at this state
+          val = load_power_value(kind, inode, power%pv, power%pd, power%pm, cable%line%l0)
+          RETURN
+        END IF
+      END IF
       BLOCK
         REAL(wp) :: pv(nnode), pd(nnode), pm(nnode)
         CALL CD_HermiteCable_Dyn_Load_Power(cable%line, pv, pd, pm, es, em)
@@ -40287,6 +40363,12 @@ CONTAINS
                           TRIM(em)); RETURN
         END IF
         val = load_power_value(kind, inode, pv, pd, pm, cable%line%l0)
+        IF (PRESENT(power)) THEN
+          power%pv = pv
+          power%pd = pd
+          power%pm = pm
+          power%valid = .TRUE.
+        END IF
       END BLOCK
     CASE (21)   ! the smoothed VIV amplitude estimate of the node (VIV AMPLITUDE)
       BLOCK
