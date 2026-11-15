@@ -82,6 +82,7 @@ article's methods, are compared in
 | **L3-H** | Holcombe static lazy-wave experiment | measured marker geometry | position RMSE 1.07–1.89% of suspended length; peak marker-curvature error 0.34–5.54% | end-restraint bracket | Pass |
 | **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.58 N; MAPE 3.11%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
 | **L3-C** | Chaplin Delta Flume riser, still-water natural frequencies | measured modes 1–7 at five tensions | mean error +1.87%, mean absolute 2.28%, largest 4.88% (34 of 35; one outlier reported) | full published table, no fitted parameter | Pass |
+| **L3-D** | Chaplin Delta Flume riser in a stepped current, blind-trial cases 1–9, cross-flow and in-line VIV | measured dominant mode, peak cross-flow amplitude, mean in-line displacement, curvature standard deviations | mode right in 5/9, within one in 9/9; mean in-line within ±17% in 7/9 (−25% to +34%); cross-flow amplitude −44% to +4%; cross-flow curvature −39% to +26% | generic coefficient set, no fitted parameter | Pass measured |
 | **L3-W** | SJTU steel catenary riser in 0.2 m/s current, cross-flow VIV | measured r.m.s. strain (25 stations) and dominant frequency | frequency 0.992 vs 1.00 Hz; max r.m.s. strain +7.3%, station mean +3.6% | published coefficient set, no fitted parameter | Pass |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
 | **L4-1** | Coupled platform + mooring | synthetic reference | bit-for-bit | — | Pass |
@@ -338,6 +339,24 @@ scripts, results, and source provenance are in
   its ratio to the first mode departs from that of every other series, and it is reported
   separately. 128 elements and ten times the unpublished axial stiffness change no frequency by
   more than 3e-6 and 1.2e-4.
+
+- **L3-D Delta Flume riser, VIV in a stepped current**
+  ([Chaplin et al., 2005a](https://cabledyn.readthedocs.io/en/latest/references.html#ref-chaplin2005);
+  [Chaplin et al., 2005b](https://cabledyn.readthedocs.io/en/latest/references.html#ref-chaplin2005b)):
+  the nine blind-trial cases, the lower 5.94 m of the L3-C riser in 0.16–0.95 m/s, with the top
+  spring in series and the measured mean top tension set statically. One generic set for all
+  cases: cross-flow lift 0.8 (f̂0 0.18 ± 0.08), in-line C_x 0.85, α 0.15, C_D 1.2, and the drag
+  amplification of Chaplin et al. (2005a, Eq. 4) on the in-line drag alone (`VIV AMPLITUDE` with
+  `VIV DAMPING 0 0 1`). Against the experimenters' processed results, read from the vector
+  graphics of their blind-trial presentation: the dominant cross-flow mode is right in 5 of 9
+  cases and within one in the rest; the largest mean in-line displacement is within ±17% in 7 of
+  9 (+34% in case 2, −25% in case 9; the blind predictions under-predicted it by 20–40%);
+  the largest cross-flow amplitude is −44% to +4%, and the overall standard deviation of the
+  cross-flow curvature −39% to +26%. Half the time step and 128 elements leave the mode and
+  change the mean in-line displacement and the cross-flow curvature by at most 2.6% (the in-line
+  curvature by up to 10%), except in two cases: case 5 beats in the 40 s window (its peak
+  amplitude moves by up to 20%), and case 9 settles in mode 7 instead of 8 at half the time
+  step.
 
 - **L3-W SJTU steel catenary riser, cross-flow VIV in uniform current**
   ([Wang et al., 2014](https://cabledyn.readthedocs.io/en/latest/references.html#ref-wang2014);

@@ -1451,7 +1451,7 @@ The row serves two uses:
 
 - With :math:`(0, 0, 1)` and the drag factor of :ref:`Chaplin et al. (2005) <ref-chaplin2005>`,
   the amplification acts on the mean in-line drag alone, as measured, while the cross-flow drag
-  stays Morison's.
+  stays Morison's (validation case L3-D, the Delta Flume riser in a stepped current).
 - :math:`(0.31, 0.89, 0)` is Thorsen's cross-flow model. It drops the linear part
   :math:`\tfrac12\rho D C_{dn}U\dot y` of Morison's cross-flow damping, so it is consistent with
   cross-flow VIV alone. An in-line force that turns with the relative flow can then drive an
