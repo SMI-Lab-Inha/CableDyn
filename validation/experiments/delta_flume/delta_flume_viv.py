@@ -88,6 +88,11 @@ CV = 0.8  # the VIV AMPLITUDE table holds Cv = Cl constant
 VIV_RMS_WINDOW = 0.25  # s, the same averaging time at every dtM
 
 
+def trapezoid_rows(f: np.ndarray, x: np.ndarray) -> np.ndarray:
+    """Trapezoidal integral of each row of f over x (NumPy 1.x has no np.trapezoid)."""
+    return 0.5 * ((f[:, 1:] + f[:, :-1]) * np.diff(x)).sum(axis=1)
+
+
 def drag_amplification(ad: float) -> float:
     """Chaplin et al. (2005a, Eq. 4): Cd/Cd0 = 1 + 2.3 s + 1.7 s^2, s = (A/D)/sqrt(2)."""
     s = ad / math.sqrt(2.0)
@@ -236,11 +241,7 @@ def response(folder: Path, stem: str, t0: float) -> dict:
     so = s[o]
     proj = [
         float(
-            np.sqrt(
-                np.mean(
-                    np.trapezoid(yd[:, o] * np.sin(n * np.pi * so), so, axis=1) ** 2
-                )
-            )
+            np.sqrt(np.mean(trapezoid_rows(yd[:, o] * np.sin(n * np.pi * so), so) ** 2))
         )
         for n in range(1, 16)
     ]
