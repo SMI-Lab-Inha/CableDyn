@@ -3480,19 +3480,34 @@ with the fluid velocity :math:`\mathbf{u}` and acceleration :math:`\dot{\mathbf{
 the relative velocity :math:`\mathbf{w} = \mathbf{u} - \dot{\mathbf{r}}_j` split normal and along
 the nodal tangent :math:`\mathbf{m}_j/\lvert\mathbf{m}_j\rvert` (the line's Morison law with
 :math:`C_dA = C_{d,n} d` and :math:`C_dA_x = \pi C_{d,t} d`). The drag enters the velocity tangent
-and, through :math:`\mathbf{m}_j`, the position tangent exactly. Above the free surface an
-attachment carries its weight :math:`-m g\,\mathbf{e}_z` alone. The statics start from the
+and, through :math:`\mathbf{m}_j`, the position tangent exactly. At the free surface the buoyancy,
+Froude–Krylov force and drag carry the immersed fraction of the sphere of the attachment's volume,
+:math:`r = (3V/4\pi)^{1/3}` (of its drag area, :math:`C_dA = \pi r^2`, without a volume), as a
+Rigid6 body's buoyancy does: with the immersed height :math:`h = \min(2r, \max(0, \eta - z_j + r))`,
+
+.. math::
+
+   \phi = \frac{h^2 (3r - h)}{4 r^3},
+
+so the weight is :math:`-(m - \phi\rho V)\,g\,\mathbf{e}_z`, continuous with its slope as the node
+crosses the surface: :math:`\phi = 1` exactly from :math:`r` below the surface (the loads above,
+unchanged) and :math:`\phi = 0` from :math:`r` above it (the weight :math:`-m g\,\mathbf{e}_z`
+alone). A module that floats then rests at the height where :math:`\phi\rho V g` balances its
+share of the load, where a wet/dry switch at the node gave it no position. The added mass
+:math:`C_a \rho V` stays in the constant mass matrix, and the modal analysis leaves out the
+hydrostatic stiffness of the surface, a module's as a line's own. The statics start from the
 equilibrium with the net weight smeared over the node's two elements, in a deck current across
 the vertical plane of the chord with the drag areas smeared over them too (per-metre drag
 coefficients :math:`C_dA/(d\,L)` and :math:`C_dA_x/(\pi d\,L)` added to an element of length
 :math:`L` for each share), and continue to the lumped loads in warm-started Newton solves, the
 smeared weight and drag moving to the node together; in a deck current the drag at rest is
 lumped at the node, each solve takes
-every attachment's load on the side of the still-water level its node is on, and the final
-solve is repeated with the loads of its own solution until the nodes stop moving and no
-attachment changes side (an attachment that its weight in air takes below the surface and its
-weight in water above it has no static position, and the solve fails closed, naming the
-attachment that crossed the surface). Before, an attachment above the surface
+it at its incoming state, and the final solve is repeated with the drag of its own solution
+until the nodes stop moving. The buoyancy an attachment loses at the still-water level,
+:math:`\rho V g (1 - \phi)` downward, is part of every Newton iterate with its stiffness
+:math:`-\rho V g\, \partial\phi/\partial z` and potential, so a floating module needs no
+outer iteration. Before, a wet/dry switch at the node gave a module at the surface no static
+position and the solve stopped with an error; and before that, an attachment above the surface
 kept its buoyancy in the statics: a 500 kg, 0.2 m\ :sup:`3` module 3 m above it moved the
 fairlead load by up to 6.1 % in the first second of the march. The load moves
 in eighths; a solve that stalls on a residual floor above the tight static tolerance is

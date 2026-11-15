@@ -51,12 +51,14 @@ PROGRAM test_static_dry_weight
   !!      march to 1e-4 m (measured 0); with the buoyancy kept above the surface (dev before the
   !!      dry-weight fix) they moved by 5.5e-3 m.
   !!   9. A net-buoyant module (200 kg, 2 m^3) 50 m along a slack finite-EI cable from 20 m below
-  !!      the surface: in water it lifts its node 4.5 m above the surface, where the dynamics gives
-  !!      it its weight alone, which sinks it: a point attachment has no static position there.
-  !!      The static start fails closed and its message names the attachment that crossed the
-  !!      still-water level. Before, the solves carried the module above and below the surface in
-  !!      turn until a load step failed, and the message read as a homotopy that stopped (dev
-  !!      started the module 4.5 m above the surface with its buoyancy and ran).
+  !!      the surface: in water it would lift its node 4.5 m above the surface, so it floats. Its
+  !!      buoyancy fades over the sphere of its volume (r 0.78 m), and the static start finds it
+  !!      inside that band, at the height where the immersed share balances its load; the march
+  !!      holds it there over 3 s to 1e-3 m (the dynamics wets the module with the same fraction).
+  !!      In 1.5 m, 6 s Airy waves the module rides the surface through its band for 18 s: every
+  !!      step converges and it stays within its radius of the instantaneous surface's range.
+  !!      Before, a wet/dry switch at the node gave it no static position and the static start
+  !!      failed, naming the attachment that crossed the still-water level.
   !! A deck whose lines are all submerged is solved once, bit-identically (the example A/B).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_GetMovingPointMesh, &
@@ -140,7 +142,7 @@ PROGRAM test_static_dry_weight
   CALL check(dmax <= 1.0e-4_wp, 'chain between two moving objects across the surface: both start in the march''s '// &
              'equilibrium')
 
-  ! 9. a module that would float: no static position, failed by name
+  ! 9. a module that floats: a static position in the surface band, held by the march
   CALL floating_module()
 
   IF (nfail > 0) THEN
@@ -479,10 +481,14 @@ CONTAINS
 
   SUBROUTINE floating_module()
     !! Gate 9: a 160 m finite-EI cable (80 elements) from a Coupled point at (0, 0, -20) m to a
-    !! Fixed one at (100, 0, -50) m on a 50 m seabed, a 200 kg, 2 m^3 module 50 m along it.
-    INTEGER :: u, es
-    LOGICAL :: conv
+    !! Fixed one at (100, 0, -50) m on a 50 m seabed, a 200 kg, 2 m^3 module 50 m along it (node
+    !! 26), 3 s of the march.
+    REAL(wp), PARAMETER :: R_SPHERE = 0.7816_wp   ! (3 V/(4 pi))^(1/3), V = 2 m^3
+    INTEGER :: u, es, ios
+    LOGICAL :: conv, first
+    REAL(wp) :: row(2), z0, dz_max, z_lo, z_hi
     CHARACTER(1024) :: em
+    CHARACTER(4096) :: line
     OPEN (NEWUNIT=u, FILE='dry_float.dat', STATUS='replace', ACTION='write')
     WRITE (u, '(A)') 'test_static_dry_weight: a net-buoyant module that would float'
     WRITE (u, '(A)') '--- LINE TYPES ---'
@@ -505,7 +511,7 @@ CONTAINS
     WRITE (u, '(A)') '--- ATTACHMENTS ---'
     WRITE (u, '(A)') 'LineID ArcLength Mass Volume CdA Ca CdAx'
     WRITE (u, '(A)') '(-) (m) (kg) (m^3) (m^2) (-) (m^2)'
-    WRITE (u, '(A)') '1 50.0 200.0 2.0 0.0 0.0 0.0'
+    WRITE (u, '(A)') '1 50.0 200.0 2.0 1.0 0.5 0.0'
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'
@@ -513,17 +519,77 @@ CONTAINS
     WRITE (u, '(A)') '3.0e5 cBot'
     WRITE (u, '(A)') '0.01 dtM'
     WRITE (u, '(A)') '50.0 WtrDpth'
-    WRITE (u, '(A)') '0.1 TMax'
+    WRITE (u, '(A)') '3.0 TMax'
     WRITE (u, '(A)') '--- OUTPUTS ---'
-    WRITE (u, '(A)') 'Point1Fz'
+    WRITE (u, '(A)') 'L1N26pz'
     WRITE (u, '(A)') '--- END ---'
     CLOSE (u)
     CALL CD_Run_Deck_Driver('dry_float.dat', 'dry_float', conv, es, em)
-    WRITE (*, '(2A)') '  module that would float: ', TRIM(em)
-    CALL check(es /= CD_DECKDRV_OK, 'module that would float: the static start fails closed')
-    CALL check(INDEX(em, 'attachment 1 of the line') > 0 .AND. INDEX(em, 'crossed the still-water level') > 0, &
-               'module that would float: the failure names the attachment that crossed the surface')
+    CALL check(es == CD_DECKDRV_OK .AND. conv, 'module that floats: the static start and the march run: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    OPEN (NEWUNIT=u, FILE='dry_float.out', STATUS='old', ACTION='read')
+    first = .TRUE.
+    z0 = 0.0_wp
+    dz_max = 0.0_wp
+    DO
+      READ (u, '(A)', IOSTAT=ios) line
+      IF (ios /= 0) EXIT
+      READ (line, *, IOSTAT=ios) row
+      IF (ios /= 0) CYCLE
+      IF (first) THEN
+        z0 = row(2)
+        first = .FALSE.
+      END IF
+      dz_max = MAX(dz_max, ABS(row(2) - z0))
+    END DO
+    CLOSE (u)
+    WRITE (*, '(A,F9.4,A,ES10.2,A)') '  module that floats: static height ', z0, ' m, largest drift ', dz_max, ' m'
+    CALL check(.NOT. first .AND. ABS(z0) < R_SPHERE, 'module that floats: its static height lies in the surface '// &
+               'band of its sphere')
+    CALL check(dz_max <= 1.0e-3_wp, 'module that floats: the march holds its static height')
+    ! the same in waves: the module heaves through its band
+    CALL copy_with_waves('dry_float.dat', 'dry_float_wave.dat')
+    CALL CD_Run_Deck_Driver('dry_float_wave.dat', 'dry_float_wave', conv, es, em)
+    CALL check(es == CD_DECKDRV_OK .AND. conv, 'module that floats, in waves: the march runs: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    OPEN (NEWUNIT=u, FILE='dry_float_wave.out', STATUS='old', ACTION='read')
+    z_lo = HUGE(1.0_wp)
+    z_hi = -HUGE(1.0_wp)
+    DO
+      READ (u, '(A)', IOSTAT=ios) line
+      IF (ios /= 0) EXIT
+      READ (line, *, IOSTAT=ios) row
+      IF (ios /= 0) CYCLE
+      z_lo = MIN(z_lo, row(2))
+      z_hi = MAX(z_hi, row(2))
+    END DO
+    CLOSE (u)
+    WRITE (*, '(A,2F9.4,A)') '  module that floats, in waves: height range ', z_lo, z_hi, ' m'
+    CALL check(z_hi - z_lo > 0.5_wp .AND. z_lo > -0.75_wp - R_SPHERE .AND. z_hi < 0.75_wp + R_SPHERE, &
+               'module that floats, in waves: it heaves with the surface, within its radius of the wave crest '// &
+               'and trough')
   END SUBROUTINE floating_module
+
+  SUBROUTINE copy_with_waves(src, dst)
+    !! The deck src with 1.5 m, 6 s Airy waves (head-on) and TMax 18 s, written to dst.
+    CHARACTER(*), INTENT(IN) :: src, dst
+    INTEGER :: ui, uo, ios
+    CHARACTER(4096) :: line
+    OPEN (NEWUNIT=ui, FILE=src, STATUS='old', ACTION='read')
+    OPEN (NEWUNIT=uo, FILE=dst, STATUS='replace', ACTION='write')
+    DO
+      READ (ui, '(A)', IOSTAT=ios) line
+      IF (ios /= 0) EXIT
+      IF (TRIM(line) == '3.0 TMax') THEN
+        WRITE (uo, '(A)') '18.0 TMax'
+        WRITE (uo, '(A)') 'airy 1.5 6.0 0.0 waves'
+      ELSE
+        WRITE (uo, '(A)') TRIM(line)
+      END IF
+    END DO
+    CLOSE (ui)
+    CLOSE (uo)
+  END SUBROUTINE copy_with_waves
 
   SUBROUTINE two_objects_drift(dmax)
     !! Gate 8: the body of gate 7, a 65 m chain (EI = 0, 30 segments) from its point (0, 0, 8) m to

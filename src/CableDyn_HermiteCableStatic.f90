@@ -47,7 +47,7 @@ MODULE CableDyn_HermiteCableStatic
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType, CD_Bathymetry_Is_Initialized, &
                                  CD_Bathymetry_Floor, CD_Bathymetry_Floor_Gradient, CD_BATHY_OK, &
                                  CD_Bathymetry_Rotate_Curvature
-  USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Drag_Element, CD_HCDYN_OK
+  USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Drag_Element, CD_HCDYN_OK, CD_HermiteCable_Point_Immersion
   USE CableDyn_Static, ONLY: CD_Static_As_Laid_Reference, CD_STATIC_OK
   USE CableDyn_Hydro, ONLY: CD_Current_Profile_Velocity, CD_CurrentGridType, CD_Current_Grid_Velocity, &
                             CD_Current_Profile_Gradient, CD_Current_Grid_Gradient, CD_HYDRO_OK
@@ -309,7 +309,8 @@ CONTAINS
                                           waterline_z, dry_buoyancy, merit_line_search, pseudo_transient, &
                                           energy_minimization, stable, water_weight, current, residual_out, &
                                           tangent_out, friction, residual_unmet, torsion, energy_out, &
-                                          end_share_hold, f_nodal_twist, stall_limit)
+                                          end_share_hold, f_nodal_twist, stall_limit, att_node, att_buoyancy, &
+                                          att_radius)
     !! Solve the finite-EI static equilibrium of a Hermite bending-cable line.
     !!
     !! l0(ne), EA(ne), EI(ne), w(ne) : per-element rest length, axial/bending stiffness,
@@ -460,6 +461,18 @@ CONTAINS
     !!                                  fixed count; the norm, unlike the largest component
     !!                                  that decides convergence, does not change when the
     !!                                  line is turned.
+    !! att_node, att_buoyancy, att_radius (optional, together, one entry per attachment):
+    !!                                  point attachments whose buoyancy rho g V [N]
+    !!                                  (att_buoyancy) at node att_node f_nodal carries in full
+    !!                                  (their net weight (m - rho V) g). The buoyancy they
+    !!                                  lose at the free surface (waterline_z, 0 without it),
+    !!                                  rho g V (1 - wf(z)) downward, is added at the node
+    !!                                  height of each iterate with its stiffness and
+    !!                                  potential, wf the immersed fraction of the sphere of
+    !!                                  radius att_radius (CD_HermiteCable_Point_Immersion),
+    !!                                  ramped with the load-continuation factor as f_nodal. A
+    !!                                  buoy floating at the surface then has an equilibrium;
+    !!                                  a node deeper than its radius adds nothing.
     REAL(wp), INTENT(IN) :: l0(:), EA(:), EI(:), w(:), seed(:)
     INTEGER, INTENT(IN) :: fixed_dofs(:)
     REAL(wp), INTENT(IN) :: seabed_z, kn, tol, damping
@@ -499,6 +512,8 @@ CONTAINS
     TYPE(CD_HermiteTorsionType), INTENT(INOUT), OPTIONAL :: torsion
     REAL(wp), INTENT(IN), OPTIONAL :: f_nodal_twist(:)
     INTEGER, INTENT(IN), OPTIONAL :: stall_limit
+    INTEGER, INTENT(IN), OPTIONAL :: att_node(:)
+    REAL(wp), INTENT(IN), OPTIONAL :: att_buoyancy(:), att_radius(:)
 
     INTEGER :: ne, nn, ndof, c, it, es, i, b, nci, n_buoy, omp_threads, axial_order, bending_order
     ! stall_limit: the residual merit at the start of an update, its value at the last halving
@@ -678,6 +693,23 @@ CONTAINS
     IF (use_nodal_contact) THEN
       IF (SIZE(contact_kn) /= nn .OR. .NOT. CD_All_Finite(contact_kn) .OR. ANY(contact_kn <= CD_ZERO)) THEN
         CALL fail('contact_kn must be finite, positive, and have length n_nodes'); RETURN
+      END IF
+    END IF
+    IF (PRESENT(att_node) .OR. PRESENT(att_buoyancy) .OR. PRESENT(att_radius)) THEN
+      IF (.NOT. (PRESENT(att_node) .AND. PRESENT(att_buoyancy) .AND. PRESENT(att_radius))) THEN
+        CALL fail('att_node, att_buoyancy and att_radius must be supplied together'); RETURN
+      END IF
+      IF (SIZE(att_buoyancy) /= SIZE(att_node) .OR. SIZE(att_radius) /= SIZE(att_node)) THEN
+        CALL fail('att_node, att_buoyancy and att_radius must share one length'); RETURN
+      END IF
+      IF (ANY(att_node < 1) .OR. ANY(att_node > nn)) THEN
+        CALL fail('att_node out of range'); RETURN
+      END IF
+      IF (.NOT. (CD_All_Finite(att_buoyancy) .AND. CD_All_Finite(att_radius))) THEN
+        CALL fail('att_buoyancy and att_radius must be finite'); RETURN
+      END IF
+      IF (ANY(att_buoyancy < CD_ZERO) .OR. ANY(att_radius < CD_ZERO)) THEN
+        CALL fail('att_buoyancy and att_radius must be >= 0'); RETURN
       END IF
     END IF
     IF (use_bathymetry) THEN
@@ -1209,6 +1241,8 @@ CONTAINS
       LOGICAL, INTENT(IN) :: do_update
       REAL(wp) :: qe(12)
       REAL(wp) :: pen, dqnorm, z_floor, gxg, gyg, gx, gy, xg, yg, normal, normal_gap, kn_eff
+      ! an attachment's surface waterline, immersed fraction, its height derivative and potential
+      REAL(wp) :: z_wl_att, wf_att, dwf_att, psi_att
       REAL(wp) :: curv_g(3), curv_l(3)
       REAL(wp) :: step_scale, trial_norm, row_scale, column_scale, merit, trial_merit, merit_base, diag_floor
       REAL(wp) :: gradient_component, column_norm2, fdry(4), kdry(4, 4), e_term
@@ -1349,6 +1383,25 @@ CONTAINS
           pi_total = pi_total - e_term
           pi_abs = pi_abs + ABS(e_term)
         END IF
+      END IF
+
+      ! ---- buoyancy the point attachments lose at the free surface ----
+      ! downward rho g V (1 - wf(z)) on top of f_nodal's net weight, with its stiffness
+      ! -rho g V dwf/dz >= 0 and potential rho g V (z - psi(z) - z_w), zero below the band
+      IF (PRESENT(att_node)) THEN
+        DO a = 1, SIZE(att_node)
+          IF (.NOT. (att_buoyancy(a) > CD_ZERO)) CYCLE
+          gi = 6*(att_node(a) - 1) + 3
+          z_wl_att = CD_ZERO
+          IF (PRESENT(waterline_z)) z_wl_att = waterline_z
+          CALL CD_HermiteCable_Point_Immersion(z_wl_att - q(gi), att_radius(a), wf_att, dwf_att, psi_att)
+          IF (.NOT. (wf_att < CD_ONE)) CYCLE
+          R(gi) = R(gi) + eifac*att_buoyancy(a)*(CD_ONE - wf_att)
+          ab(KL_H + KU_H + 1, gi) = ab(KL_H + KU_H + 1, gi) - eifac*att_buoyancy(a)*dwf_att
+          e_term = eifac*att_buoyancy(a)*(q(gi) - psi_att - z_wl_att)
+          pi_total = pi_total + e_term
+          pi_abs = pi_abs + ABS(e_term)
+        END DO
       END IF
 
       ! ---- optional rotational line-end connections ----

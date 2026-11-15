@@ -97,6 +97,7 @@ MODULE CableDyn_DeckDriver
                                          CD_HCSTAT_NOCONVERGE, CD_HC_COMPRESSION_OSCILLATION, &
                                          CD_HC_COMPRESSION_STRICT
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HCDYN_OK, CD_HCDYN_TENSILE_OFF, CD_HCDYN_TENSILE_WARN, &
+                                          CD_HermiteCable_Point_Immersion, CD_HermiteCable_Point_Radius, &
                                           CD_HCDYN_TENSILE_ERROR, CD_HermiteCable_Dyn_Load_Power, &
                                           CD_HermiteCable_Dyn_VIV_Amplitude, &
                                           CD_HermiteCable_Axial_Damping_Resultant, &
@@ -3979,13 +3980,13 @@ CONTAINS
 
     SUBROUTINE torsion_after_attachments(est, emt)
       !! The torsion stage of a line with ATTACHMENTS, on its discrete equilibrium (after the
-      !! attachment polish): the attachments' net weights -(m - rho V) g e_z at their nodes (-m g
-      !! e_z above the still-water level, attachment_static_weight) and, in a deck current, their
-      !! drag at the twisted state as nodal loads. The drag depends on the node's position and
-      !! line tangent, and the weight on the side of the surface, so the stage is repeated, each
-      !! time a fresh torsion solve from the last state, with the loads of the last solution until
-      !! the solution stops moving and no attachment changes side (fixed point, as in
-      !! attachment_static_polish). Every pass starts from the polished state, in equilibrium
+      !! attachment polish): the attachments' net weights -(m - rho V) g e_z at their nodes, less
+      !! the buoyancy an attachment within its radius of the surface loses there
+      !! (attachment_static_weight) and, in a deck current, their drag at the twisted state as
+      !! nodal loads. The drag depends on the node's position and line tangent, and that buoyancy
+      !! on its height, so the stage is repeated, each time a fresh torsion solve from the last
+      !! state, with the loads of the last solution until the solution stops moving (fixed point).
+      !! Every pass starts from the polished state, in equilibrium
       !! under the loads at that state: the change to the loads of the last solution is ramped
       !! with the imposed twist, in full at the target. Taken in full from the untwisted start, the
       !! drag of a twisted shape pushed a lazy wave whose untwisted state is unstable out of its
@@ -3994,26 +3995,19 @@ CONTAINS
       CHARACTER(*), INTENT(OUT) :: emt
       INTEGER, PARAMETER :: MAX_FIXED_POINT = 60
       REAL(wp), PARAMETER :: FIXED_POINT_TOL = 1.0e-9_wp   ! m
-      REAL(wp), ALLOCATABLE :: f_att(:), f_drag(:), q_prev(:), q_polished(:), f_untwisted(:)
-      LOGICAL, ALLOCATABLE :: att_dry(:), att_dry_now(:)
+      REAL(wp), ALLOCATABLE :: f_att(:), f_att_now(:), f_drag(:), q_prev(:), q_polished(:), f_untwisted(:)
       LOGICAL :: has_drag
-      INTEGER :: fp, k_cross
-      ! the first attachment a pass moved across the still-water level, which names a failure of
-      ! the stage after it (as in attachment_static_polish)
-      CHARACTER(512) :: cause
-      CHARACTER(64) :: mv
+      INTEGER :: fp
       est = CD_DECKDRV_OK
-      k_cross = 0
-      cause = ''
       emt = ''
       ! every pass starts from the polished, untwisted discrete state (a pass from the last twisted
       ! state would first relax it, and a writhe a buckling descent left could put Theta_0 a turn
       ! away, on another branch)
       q_polished = q_static
-      ALLOCATE (f_att(SIZE(q_static)), f_drag(SIZE(q_static)), att_dry(SIZE(att_node)), att_dry_now(SIZE(att_node)))
+      ALLOCATE (f_att(SIZE(q_static)), f_att_now(SIZE(q_static)), f_drag(SIZE(q_static)))
       has_drag = opts%has_current .AND. ANY(ln%att(4, :) > CD_ZERO .OR. ln%att(6, :) > CD_ZERO)
       DO fp = 1, MAX_FIXED_POINT
-        CALL attachment_static_weight(q_static, att_node, ln%att, opts, f_att, att_dry)
+        CALL attachment_static_weight(q_static, att_node, ln%att, opts, f_att, surface=.TRUE.)
         f_drag = CD_ZERO
         IF (has_drag) THEN
           CALL attachment_static_drag(q_static, att_node, ln%att, opts, frame_cs, f_drag, est, emt)
@@ -4030,35 +4024,16 @@ CONTAINS
         ELSE
           CALL torsion_stage(est, emt, f_untwisted, f_att + f_drag - f_untwisted)
         END IF
-        IF (est /= CD_DECKDRV_OK) THEN
-          IF (k_cross > 0) emt = TRIM(cause)//'; '//TRIM(emt)
-          RETURN
-        END IF
-        ! an attachment the twist moved across the still-water level: once more, with its weight on
-        ! its new side
-        CALL attachment_static_weight(q_static, att_node, ln%att, opts, f_att, att_dry_now)
-        IF (.NOT. ALL(att_dry_now .EQV. att_dry)) THEN
-          IF (k_cross == 0) THEN
-            k_cross = FINDLOC(att_dry_now .NEQV. att_dry, .TRUE., DIM=1)
-            WRITE (mv, '(ES9.3,A,ES9.3)') ln%att(2, k_cross), ' kg, Volume ', ln%att(3, k_cross)
-            cause = 'finite-EI torsion static solve with discrete ATTACHMENTS: attachment '// &
-                    TRIM(int_to_str(k_cross))//' of the line (Mass '//TRIM(ADJUSTL(mv))//' m^3) crossed the '// &
-                    'still-water level, where the dynamics drops its buoyancy; a point attachment that its weight '// &
-                    'in air takes below the surface and its weight in water above it has no static position (move '// &
-                    'it along the line or change its Mass or Volume)'
-          END IF
-          CYCLE
-        END IF
-        IF (.NOT. has_drag) RETURN
+        IF (est /= CD_DECKDRV_OK) RETURN
+        ! the weights at the twisted state: an attachment the twist moved within its radius of the
+        ! surface carries another share of its buoyancy (once more, with the loads of this state)
+        CALL attachment_static_weight(q_static, att_node, ln%att, opts, f_att_now, surface=.TRUE.)
+        IF (.NOT. has_drag .AND. ALL(f_att_now == f_att)) RETURN
         IF (MAXVAL(ABS(q_static - q_prev)) <= FIXED_POINT_TOL) RETURN
       END DO
       est = CD_DECKDRV_SOLVEFAIL
-      IF (ALL(att_dry_now .EQV. att_dry)) THEN
-        emt = 'finite-EI torsion static solve with discrete ATTACHMENTS: the attachment current drag did not '// &
-              'settle to a fixed point'
-      ELSE
-        emt = cause
-      END IF
+      emt = 'finite-EI torsion static solve with discrete ATTACHMENTS: the attachment loads (current drag, '// &
+            'buoyancy at the surface) did not settle to a fixed point'
     END SUBROUTINE torsion_after_attachments
 
     SUBROUTINE twisted_attachment_checks(est, emt)
@@ -5786,18 +5761,19 @@ CONTAINS
                                       cdt_bare, tol_floor, floor_res, release)
     !! Homotopy from the smeared-attachment equilibrium q to the discrete one: in warm-started
     !! Newton solves the element weights move from w_smear to w_bare while the lumped nodal
-    !! forces -(m - rho V) g e_z (-m g e_z for an attachment above the still-water level,
-    !! attachment_static_weight) and, in a deck current, the attachment current drag grow from
+    !! forces -(m - rho V) g e_z (attachment_static_weight), the buoyancy an attachment loses at
+    !! the still-water level (in each Newton iterate: the static solve's att_buoyancy, the
+    !! immersed fraction of the sphere of its volume) and, in a deck current, the attachment
+    !! current drag grow from
     !! zero to full, with the contact, dry-buoyancy, end-connection and line current terms of
     !! the builder's static problem. With cdn_bare and cdt_bare (the line's own drag
     !! coefficients of cur_obj, whose cdn and cdt carry the attachments' drag smeared,
     !! smear_attachment_drag) the element drag coefficients move from those of cur_obj to them
     !! with the weights, so the smeared drag passes to the nodes as the smeared weight does.
     !! The drag depends on the node's position (profile current,
-    !! current grid) and line tangent, and the weight on the side of the surface the node is on,
-    !! so each solve takes them at its incoming state and the full-load solve is repeated with
-    !! those of the last solution until the solution stops moving and no attachment changes
-    !! side (fixed point).
+    !! current grid) and line tangent, so each solve takes it at its incoming state and the
+    !! full-load solve is repeated with that of the last solution until the solution stops
+    !! moving (fixed point).
     !!
     !! The load fraction advances in steps of 1/NSTEP. A step whose damped Newton solve does
     !! not converge is repeated from the last converged state with pseudo-transient
@@ -5853,15 +5829,11 @@ CONTAINS
     INTEGER, PARAMETER :: NEWTON_RETRY_ITER = 40, MAX_FAILED_STEPS = 64
     REAL(wp), PARAMETER :: FIXED_POINT_TOL = 1.0e-9_wp   ! m
     REAL(wp), ALLOCATABLE :: f_att(:), f_drag(:), dry(:), knnode(:), wl(:), q_out(:), curv(:)
+    ! each attachment's buoyancy rho g V and the radius of its sphere at the surface
+    REAL(wp), ALLOCATABLE :: att_b(:), att_r(:)
     REAL(wp) :: lam, lam_done, dlam, res, change
     INTEGER :: i, ne, fp, n_failed, n_ok, grow_after
     LOGICAL :: has_drag, converged, newton_failed, grown, release_
-    ! which attachments are above the still-water level: in the state the last solve took its
-    ! loads at, and in the state it returned
-    LOGICAL, ALLOCATABLE :: att_dry(:), att_dry_now(:)
-    ! the first attachment a solve moved across the still-water level (0: none), which names a
-    ! failure of the polish after it
-    INTEGER :: k_cross
     ! The damped Newton failure of the first failed solve, and of the last one.
     CHARACTER(1024) :: first_msg, last_msg
     CHARACTER(48) :: step_buf, lam_buf
@@ -5895,9 +5867,12 @@ CONTAINS
     n_failed = 0
     ne = SIZE(l0)
     ALLOCATE (f_att(6*(ne + 1)), f_drag(6*(ne + 1)), dry(ne), q_out(SIZE(q)), curv(ne + 1))
-    ALLOCATE (att_dry(SIZE(node)), att_dry_now(SIZE(node)))
-    CALL attachment_static_weight(q, node, att, opts, f_att, att_dry)
-    k_cross = 0
+    CALL attachment_static_weight(q, node, att, opts, f_att)
+    ALLOCATE (att_b(SIZE(node)), att_r(SIZE(node)))
+    DO i = 1, SIZE(node)
+      att_b(i) = opts%rhoW*opts%g*att(3, i)
+      att_r(i) = CD_HermiteCable_Point_Radius(att(3, i), att(4, i))
+    END DO
     has_drag = opts%has_current .AND. ANY(att(4, :) > CD_ZERO .OR. att(6, :) > CD_ZERO)
     dry = opts%rhoW*opts%g*QUARTER_PI*diam**2
     IF (contact_enabled) THEN
@@ -5947,12 +5922,12 @@ CONTAINS
           WRITE (lam_buf, '(F8.6)') lam_done
           IF (dlam < MIN_STEP) THEN
             WRITE (step_buf, '(ES9.2)') MIN_STEP
-            CALL fail_solve(ErrStat, ErrMsg, surface_note('; ')//TRIM(first_msg)//'; the homotopy stopped at '// &
+            CALL fail_solve(ErrStat, ErrMsg, TRIM(first_msg)//'; the homotopy stopped at '// &
                             'load fraction '//TRIM(ADJUSTL(lam_buf))//', where load steps down to '// &
                             TRIM(ADJUSTL(step_buf))//' did not converge either')
           ELSE
             WRITE (step_buf, '(I0)') MAX_FAILED_STEPS
-            CALL fail_solve(ErrStat, ErrMsg, surface_note('; ')//TRIM(first_msg)//'; the homotopy stopped at '// &
+            CALL fail_solve(ErrStat, ErrMsg, TRIM(first_msg)//'; the homotopy stopped at '// &
                             'load fraction '//TRIM(ADJUSTL(lam_buf))//' after '//TRIM(step_buf)// &
                             ' load steps had failed')
           END IF
@@ -5960,54 +5935,21 @@ CONTAINS
         END IF
       END IF
     END DO
-    ! An attachment whose node the last solve moved across the still-water level was loaded with
-    ! the weight of the other side: the full-load solve is repeated (below) until none does. A
-    ! line below the surface (or wholly above it) without attachment drag is done.
-    CALL attachment_static_weight(q, node, att, opts, f_att, att_dry_now)
-    IF (.NOT. release_ .AND. .NOT. has_drag .AND. ALL(att_dry_now .EQV. att_dry)) RETURN
+    ! The weights are constant and the buoyancy at the surface is part of each solve: without
+    ! attachment drag the homotopy's last solve is the equilibrium.
+    IF (.NOT. release_ .AND. .NOT. has_drag) RETURN
     DO fp = 1, MAX_FIXED_POINT
       CALL solve_with(CD_ONE, converged, change)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
       IF (.NOT. converged) THEN
-        CALL fail_solve(ErrStat, ErrMsg, surface_note('; ')//TRIM(last_msg)// &
-                        ' (attachment current drag and surface fixed point)')
+        CALL fail_solve(ErrStat, ErrMsg, TRIM(last_msg)//' (attachment current drag fixed point)')
         RETURN
       END IF
-      CALL attachment_static_weight(q, node, att, opts, f_att, att_dry_now)
-      ! the weight is constant on either side of the surface: with no attachment changing side the
-      ! solve took the weights of its own solution, and without drag it is the equilibrium
-      IF (ALL(att_dry_now .EQV. att_dry) .AND. (.NOT. has_drag .OR. change <= FIXED_POINT_TOL)) RETURN
+      IF (.NOT. has_drag .OR. change <= FIXED_POINT_TOL) RETURN
     END DO
-    IF (ALL(att_dry_now .EQV. att_dry)) THEN
-      CALL fail_solve(ErrStat, ErrMsg, 'finite-EI static solve with discrete ATTACHMENTS: the attachment '// &
-                      'current drag did not settle to a fixed point')
-    ELSE
-      IF (k_cross == 0) k_cross = FINDLOC(att_dry_now .NEQV. att_dry, .TRUE., DIM=1)
-      CALL fail_solve(ErrStat, ErrMsg, surface_note(''))
-    END IF
+    CALL fail_solve(ErrStat, ErrMsg, 'finite-EI static solve with discrete ATTACHMENTS: the attachment '// &
+                    'current drag did not settle to a fixed point')
   CONTAINS
-    FUNCTION surface_note(sep) RESULT(msg)
-      !! The cause of a failed polish in which a solve moved an attachment across the still-water
-      !! level (k_cross; empty without one), followed by sep: a point attachment that its weight
-      !! in air takes below the surface and its weight in water above it (a net-buoyant module
-      !! that would float, or any module whose node lies nearer the surface than the deflection
-      !! its buoyancy rho V g gives the line) has no static position. Without this the failure
-      !! read as a homotopy that stopped (a 200 kg, 2 m^3 module on a slack cable, which the
-      !! solves carried above and below the surface in turn).
-      CHARACTER(*), INTENT(IN) :: sep
-      CHARACTER(:), ALLOCATABLE :: msg
-      CHARACTER(64) :: mv
-      msg = ''
-      IF (k_cross < 1) RETURN
-      WRITE (mv, '(ES9.3,A,ES9.3)') att(2, k_cross), ' kg, Volume ', att(3, k_cross)
-      msg = 'finite-EI static solve with discrete ATTACHMENTS: attachment '//TRIM(int_to_str(k_cross))// &
-            ' of the line (Mass '//TRIM(ADJUSTL(mv))//' m^3) crossed the still-water level, where the '// &
-            'dynamics drops its buoyancy; a point attachment that its weight in air takes below the surface '// &
-            'and its weight in water above it has no static position (move it along the line or change its '// &
-            'Mass or Volume)'
-      msg = msg//sep
-    END FUNCTION surface_note
-
     SUBROUTINE solve_with(scale, ok, dq_max)
       !! One warm-started solve at load fraction scale, with the attachment current drag
       !! evaluated on the incoming state: the damped Newton iteration and, when it does not
@@ -6025,12 +5967,6 @@ CONTAINS
       CHARACTER(48) :: num_buf
       ok = .FALSE.
       max_it = [MERGE(NEWTON_RETRY_ITER, 200, newton_failed), 200, 200]
-      ! the attachments' weights on the side of the surface of the incoming state (the first one the
-      ! last solve moved across the surface is recorded for the failure message)
-      CALL attachment_static_weight(q, node, att, opts, f_att, att_dry_now)
-      IF (k_cross == 0 .AND. .NOT. ALL(att_dry_now .EQV. att_dry)) &
-        k_cross = FINDLOC(att_dry_now .NEQV. att_dry, .TRUE., DIM=1)
-      att_dry = att_dry_now
       f_drag = CD_ZERO
       IF (has_drag) THEN
         CALL attachment_static_drag(q, node, att, opts, frame_cs, f_drag, es, em)
@@ -6091,7 +6027,8 @@ CONTAINS
                                           endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
                                           water_weight=opts%rhoW*opts%g, current=cur_l, &
                                           backtracking=mode_s == MERIT, merit_line_search=mode_s == MERIT, &
-                                          pseudo_transient=mode_s == PSEUDO_TRANSIENT)
+                                          pseudo_transient=mode_s == PSEUDO_TRANSIENT, att_node=node, &
+                                          att_buoyancy=scale*att_b, att_radius=att_r)
       ELSE
         CALL CD_HermiteCable_Static_Solve(l0, ea, ei, wl, q, fixed_dofs, contact_z, CD_ZERO, 1, max_it(mode_s), &
                                           tol_s, 0.7_wp, q_out, curv, res, it, es, em, &
@@ -6102,7 +6039,8 @@ CONTAINS
                                           endconn_mode=endconn_mode, waterline_z=CD_ZERO, dry_buoyancy=dry, &
                                           water_weight=opts%rhoW*opts%g, current=cur_l, &
                                           backtracking=mode_s == MERIT, merit_line_search=mode_s == MERIT, &
-                                          pseudo_transient=mode_s == PSEUDO_TRANSIENT)
+                                          pseudo_transient=mode_s == PSEUDO_TRANSIENT, att_node=node, &
+                                          att_buoyancy=scale*att_b, att_radius=att_r)
       END IF
     END SUBROUTINE static_solve
   END SUBROUTINE attachment_static_polish
@@ -6118,13 +6056,16 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: k, base, es
-    REAL(wp) :: ug(3), ul(3), fd(3)
+    REAL(wp) :: ug(3), ul(3), fd(3), wf, dwf
     CHARACTER(1024) :: em
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     DO k = 1, SIZE(node)
       IF (.NOT. (att(4, k) > CD_ZERO .OR. att(6, k) > CD_ZERO)) CYCLE
       base = 6*(node(k) - 1)
-      IF (q(base + 3) > CD_ZERO) CYCLE
+      ! the immersed fraction of the attachment's sphere at the still-water level, as the
+      ! dynamics scales its drag (attachment_residual of the cubic-Hermite model)
+      CALL CD_HermiteCable_Point_Immersion(-q(base + 3), CD_HermiteCable_Point_Radius(att(3, k), att(4, k)), wf, dwf)
+      IF (.NOT. (wf > CD_ZERO)) CYCLE
       ! the node's global position (the solve frame is the global one turned by frame_cs)
       ug = deck_current_velocity(opts, [frame_cs(1)*q(base + 1) - frame_cs(2)*q(base + 2), &
                                         frame_cs(2)*q(base + 1) + frame_cs(1)*q(base + 2), q(base + 3)], &
@@ -6138,32 +6079,42 @@ CONTAINS
       IF (es /= CD_HCDYN_OK) THEN
         CALL fail(ErrStat, ErrMsg, TRIM(em)); RETURN
       END IF
-      f(base + 1:base + 3) = f(base + 1:base + 3) + fd
+      f(base + 1:base + 3) = f(base + 1:base + 3) + wf*fd
     END DO
   END SUBROUTINE attachment_static_drag
 
-  SUBROUTINE attachment_static_weight(q, node, att, opts, f, dry)
+  SUBROUTINE attachment_static_weight(q, node, att, opts, f, surface)
     !! The attachments' weight at rest as nodal loads (f, the generalized load vector of the
-    !! cable solve, set here): -(m - rho V) g e_z at the node of an attachment at or below the
-    !! still-water level and -m g e_z above it, as the dynamics loads it (attachment_residual of
-    !! the cubic-Hermite model: above the free surface its weight only, no buoyancy, and no drag,
-    !! which attachment_static_drag skips there too). Without it the static start kept the
-    !! buoyancy of an attachment above the surface: a 500 kg, 0.2 m^3 module 3 m above it on a
-    !! cable hung from 5 m above the surface moved the fairlead load by up to 6.1 % in the first
-    !! second.
-    !! dry(k): attachment k is above the surface in q.
+    !! cable solve, set here): the net weight -(m - rho V) g e_z at the node of each attachment.
+    !! With surface (default false) also the buoyancy an attachment loses at the still-water
+    !! level at its height in q, -rho g V (1 - wf) e_z, wf the immersed fraction of the sphere of
+    !! its volume (CD_HermiteCable_Point_Immersion), as the dynamics loads it (attachment_residual
+    !! of the cubic-Hermite model); exactly -m g e_z from its radius above the surface, nothing
+    !! more from its radius below it. Without surface the static solve adds that share in each
+    !! Newton iterate (att_buoyancy of CD_HermiteCable_Static_Solve). Without it the static start
+    !! kept the buoyancy of an attachment above the surface: a 500 kg, 0.2 m^3 module 3 m above it
+    !! on a cable hung from 5 m above the surface moved the fairlead load by up to 6.1 % in the
+    !! first second.
     REAL(wp), INTENT(IN) :: q(:), att(:, :)
     INTEGER, INTENT(IN) :: node(:)
     TYPE(DeckOptions), INTENT(IN) :: opts
     REAL(wp), INTENT(OUT) :: f(:)
-    LOGICAL, INTENT(OUT) :: dry(:)
+    LOGICAL, INTENT(IN), OPTIONAL :: surface
     INTEGER :: k, base
+    REAL(wp) :: wf, dwf
+    LOGICAL :: surface_
+    surface_ = .FALSE.
+    IF (PRESENT(surface)) surface_ = surface
     f = CD_ZERO
     DO k = 1, SIZE(node)
       base = 6*(node(k) - 1)
-      dry(k) = q(base + 3) > CD_ZERO
-      IF (dry(k)) THEN
+      wf = CD_ONE
+      IF (surface_) CALL CD_HermiteCable_Point_Immersion(-q(base + 3), CD_HermiteCable_Point_Radius(att(3, k), &
+                                                                                                    att(4, k)), wf, dwf)
+      IF (.NOT. (wf > CD_ZERO)) THEN
         f(base + 3) = f(base + 3) - att(2, k)*opts%g
+      ELSE IF (wf < CD_ONE) THEN
+        f(base + 3) = f(base + 3) - (att(2, k) - wf*opts%rhoW*att(3, k))*opts%g
       ELSE
         f(base + 3) = f(base + 3) - (att(2, k) - opts%rhoW*att(3, k))*opts%g
       END IF
@@ -34005,7 +33956,7 @@ CONTAINS
       INTEGER, INTENT(IN) :: n
       REAL(wp), INTENT(OUT) :: xyz(3, n), fv(3, n), fa(3, n), wl(n)
       INTEGER :: j, es
-      REAL(wp) :: eta, wv(3), wa(3)
+      REAL(wp) :: eta, eta_s, wv(3), wa(3), zs
       CHARACTER(1024) :: em
       CHARACTER(200) :: em_k ! a per-node current or wave kinematics message (at most 160 characters)
       CALL CD_HFMF_GetNodePositions(cable, xyz, es, em)
@@ -34024,6 +33975,17 @@ CONTAINS
           CALL deck_wave_kinematics(opts, xyz(1, j), xyz(2, j), xyz(3, j), time, eta, wv, wa, es, em_k)
           IF (es /= CD_HYDRO_OK) THEN
             CALL hermite_fluid_fail('wave kinematics', em_k); RETURN
+          END IF
+          IF (xyz(3, j) > eta) THEN
+            ! a node above the instantaneous surface takes the field at the surface: the parts of
+            ! the section (an attachment's sphere, a Gauss point's band) still wet there move with
+            ! it (the internal waves of a cable do the same, CD_HermiteCable_Drag_Element); the
+            ! kinematics above the surface are zero
+            zs = eta
+            CALL deck_wave_kinematics(opts, xyz(1, j), xyz(2, j), zs, time, eta_s, wv, wa, es, em_k)
+            IF (es /= CD_HYDRO_OK) THEN
+              CALL hermite_fluid_fail('wave kinematics', em_k); RETURN
+            END IF
           END IF
           fv(:, j) = fv(:, j) + wv; fa(:, j) = wa; wl(j) = eta
         END IF

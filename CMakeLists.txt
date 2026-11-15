@@ -1333,6 +1333,10 @@ add_executable(test_static_surface_crossing tests/test_static_surface_crossing.f
 target_link_libraries(test_static_surface_crossing PRIVATE cabledyn_core)
 add_test(NAME static_surface_crossing COMMAND test_static_surface_crossing WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(static_surface_crossing PROPERTIES LABELS "fortran;integration;static" TIMEOUT 600)
+add_executable(test_attachment_surface tests/test_attachment_surface.f90)
+target_link_libraries(test_attachment_surface PRIVATE cabledyn_core)
+add_test(NAME attachment_surface COMMAND test_attachment_surface)
+set_tests_properties(attachment_surface PROPERTIES LABELS "fortran;unit;static")
 
 # VIV amplitude estimate (Thorsen et al. 2016, Eq. 8 and 9) and the amplitude tables.
 add_executable(test_viv_amplitude_kernel tests/test_viv_amplitude_kernel.f90)
