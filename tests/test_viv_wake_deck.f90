@@ -29,7 +29,7 @@ PROGRAM test_viv_wake_deck
   !!      VIV velocity: A/D within 2 %, frequency within 0.002 Hz), on both cores, and the two
   !!      cores agree there as in W5 (an EI = 0 line cannot run between two moving points);
   !!   W7 VIV FRAME refusals by name: a malformed row, an unknown or repeated type,
-  !!      a negative Tf, and a type without a WAKE OSCILLATOR row.
+  !!      a negative Tf, and a type without VIV (no Cl, no WAKE OSCILLATOR row).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   IMPLICIT NONE
@@ -417,8 +417,8 @@ CONTAINS
                  frame_rows='cable 10')
     CALL refused('riser 0.3', 'VIV FRAME names LINE TYPE', 'W7: a repeated type', frame_rows='riser 10;riser 5')
     CALL refused('riser 0.3', 'filter time Tf must be >= 0', 'W7: a negative Tf', frame_rows='riser -1')
-    CALL refused('', 'give the type a WAKE OSCILLATOR row', 'W7: a type without the wake oscillator', &
-                 cl='0.8', frame_rows='riser 10')
+    CALL refused('', 'give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row', 'W7: a type without VIV', &
+                 frame_rows='riser 10')
     CALL refused('riser 0.3 x', 'plain numbers', 'a non-numeric St')
     CALL refused('cable 0.3', 'undefined LINE TYPE', 'an unknown type')
     CALL refused('riser 0.3;riser 0.2', 'twice', 'a repeated type')

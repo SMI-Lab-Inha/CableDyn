@@ -5016,7 +5016,7 @@ def test_viv_frame_rows_are_read_and_kept(tmp_path):
         (True, ("cable 8",), 'undefined LINE TYPE "cable"'),
         (True, ("chain 8", "chain 4"), 'names LINE TYPE "chain" twice'),
         (True, ("chain -1",), "filter time Tf must be >= 0"),
-        (False, ("chain 8",), "give the type a WAKE OSCILLATOR row"),
+        (False, ("chain 8",), "give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row"),
     ],
 )
 def test_viv_frame_rows_follow_the_native_checks(wake, rows, message):
@@ -5031,6 +5031,15 @@ _DAMP_BASE = _with_section(
     "chain 0.0 0.8",
     "chain 1.0 0.4",
 )
+
+
+def test_viv_frame_takes_a_synchronisation_type():
+    # the phases of the lift alone, and with a table its estimate and damping split, take it
+    lift_only = _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8"))
+    DeckFile.from_text(_with_section(lift_only, "VIV FRAME", "chain 8"))
+    DeckFile.from_text(_with_section(_DAMP_BASE, "VIV FRAME", "chain 8"))
+    damped = _with_section(_DAMP_BASE, "VIV DAMPING", "chain 0.31 0.89")
+    DeckFile.from_text(_with_section(damped, "VIV FRAME", "chain 8"))
 
 
 @pytest.mark.parametrize(

@@ -87,8 +87,11 @@ MODULE CableDyn_VIV
   !> Rows of the per-node VIV motion statistics: the running mean squares of the cross-flow
   !> velocity and acceleration (CD_VIV_NMS), and with an amplitude table (VIV AMPLITUDE section)
   !> the four values of the amplitude estimate after them (CD_VIV_NMS_AMP; CD_VIV_Amplitude_Update).
+  !> With a flow frame as well (VIV FRAME section, filter time Tf > 0) the node's velocity low-pass
+  !> filtered over Tf follows them in rows 7:9 (CD_VIV_NMS_FRAME).
   INTEGER, PARAMETER, PUBLIC :: CD_VIV_NMS = 2
   INTEGER, PARAMETER, PUBLIC :: CD_VIV_NMS_AMP = 6
+  INTEGER, PARAMETER, PUBLIC :: CD_VIV_NMS_FRAME = 9
   !> The smoothing of the amplitude estimate per time step, k_a dt of Thorsen et al. (2016, Eq. 9).
   REAL(wp), PARAMETER, PUBLIC :: CD_VIV_AMP_KDT = 0.1_wp
   !> The most rows of one line type's amplitude table.

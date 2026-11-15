@@ -361,7 +361,13 @@ _FRAME_PARITY = [
         [_WAKE_LIFT, _WAKE_SECTION, _WAKE_RISER, _frame_rows("riser 8 1")],
         False,
     ),
-    ("frame-sync-type", [_frame_rows("riser 8")], False),
+    ("frame-sync-type", [_frame_rows("riser 8")], True),
+    ("frame-no-viv", [_WAKE_LIFT, ("riser      0.85   0.15", ""), _frame_rows("riser 8")], False),
+    (
+        "frame-amp-type",
+        [_amp_table("riser 0.0 0.8 1.0", "riser 0.5 0.4 1.5"), _frame_rows("riser 8")],
+        True,
+    ),
 ]
 
 _AMP_PARITY += _FRAME_PARITY
@@ -381,6 +387,7 @@ _DAMP_PARITY = [
     ("damp-negative", [_DAMP_TABLE, _damp_rows("riser 0.31 -0.89")], False),
     ("damp-one-value", [_DAMP_TABLE, _damp_rows("riser 0.31")], False),
     ("damp-repeated", [_DAMP_TABLE, _damp_rows("riser 0.31 0.89", "riser 0 0 1")], False),
+    ("damp-frame", [_DAMP_TABLE, _damp_rows("riser 0.31 0.89"), _frame_rows("riser 8")], True),
     (
         "damp-ei0-line",
         [

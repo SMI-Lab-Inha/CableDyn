@@ -296,8 +296,24 @@ def test_viv_frame_rows_are_written(tmp_path: Path) -> None:
     )
     deck = DeckFile.from_text(model.to_text(validate=False), path=tmp_path / "deck.dat")
     assert [row.tokens for row in deck._rows("VIV FRAME")] == [("towed", "8.0")]
+    model.add_line_type(
+        "lifted",
+        diam=0.1,
+        mass=10.0,
+        ea=5.0e7,
+        cl=0.8,
+        viv_amplitude=[(0.0, 0.8, 1.0), (1.0, 0.4, 1.5)],
+        viv_frame_tf=6.0,
+    )
+    model.add_line_type("lift", diam=0.1, mass=10.0, ea=5.0e7, cl=0.8, viv_frame_tf=4.0)
+    deck = DeckFile.from_text(model.to_text(validate=False), path=tmp_path / "deck.dat")
+    assert [row.tokens for row in deck._rows("VIV FRAME")] == [
+        ("towed", "8.0"),
+        ("lifted", "6.0"),
+        ("lift", "4.0"),
+    ]
     model.add_line_type("plain", diam=0.1, mass=10.0, ea=5.0e7, viv_frame_tf=8.0)
-    with pytest.raises(ValueError, match="set wake_cl0"):
+    with pytest.raises(ValueError, match="set cl > 0 or wake_cl0"):
         model.to_text(validate=False)
 
 

@@ -3728,7 +3728,8 @@ CONTAINS
                                                    opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
                                              tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, il_alpha=viv_al, &
                                              chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn, dviv=viv_dva, &
-                                             cdy=RESHAPE([cdy_a, cdy_b, cdy_c], [3, SIZE(cdy_a)], ORDER=[2, 1]))
+                                             cdy=RESHAPE([cdy_a, cdy_b, cdy_c], [3, SIZE(cdy_a)], ORDER=[2, 1]), &
+                                             tf=wo_tf)
           ELSE
             CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
                                              MERGE(opts%viv_rms_window, &
@@ -3736,7 +3737,8 @@ CONTAINS
                                                    opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
                                              tangent_reversed=.NOT. ln%ends_swapped, amp=viv_amp3, amp_n=viv_ampn, &
                                              dviv=viv_dva, &
-                                             cdy=RESHAPE([cdy_a, cdy_b, cdy_c], [3, SIZE(cdy_a)], ORDER=[2, 1]))
+                                             cdy=RESHAPE([cdy_a, cdy_b, cdy_c], [3, SIZE(cdy_a)], ORDER=[2, 1]), &
+                                             tf=wo_tf)
           END IF
         END BLOCK
         IF (es /= CD_HCDYN_OK) THEN
@@ -10458,6 +10460,8 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :), viv_dia(:)
     ! the WAKE OSCILLATOR rows per element (C_L0, St, eps, A, Tf; C_L0 0 where none)
     REAL(wp), ALLOCATABLE :: viv_wo(:, :)
+    ! the VIV FRAME filter time per element (0 where none)
+    REAL(wp), ALLOCATABLE :: viv_ftf(:)
     INTEGER, ALLOCATABLE :: viv_ampn(:)
     LOGICAL, ALLOCATABLE :: syr_el(:)
     REAL(wp) :: anchor(3), fairlead(3), mode1_omega
@@ -10498,9 +10502,10 @@ CONTAINS
               hydro_can(SIZE(l0)), hydro_cat(SIZE(l0)), ve_ead(SIZE(l0)), ve_bas(SIZE(l0)), &
               ve_bad(SIZE(l0)), ve_ambl(SIZE(l0)), ve_vbet(SIZE(l0)), viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), &
               viv_df(SIZE(l0)), syr_el(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)), viv_hh(SIZE(l0)), &
-              viv_tix(SIZE(l0)), viv_dia(SIZE(l0)), viv_wo(5, SIZE(l0)))
+              viv_tix(SIZE(l0)), viv_dia(SIZE(l0)), viv_wo(5, SIZE(l0)), viv_ftf(SIZE(l0)))
     viv_tix = CD_ZERO
     viv_wo = CD_ZERO
+    viv_ftf = CD_ZERO
     viv_dia = CD_ZERO
     viv_cl = CD_ZERO
     viv_cf = CD_ZERO
@@ -10586,6 +10591,7 @@ CONTAINS
         viv_dia(e) = MERGE(types(line_section_type(sections, ln%id, i))%viv_dv, hydro_diam(e), &
                            types(line_section_type(sections, ln%id, i))%viv_dv > CD_ZERO)
         syr_el(e) = types(line_section_type(sections, ln%id, i))%is_syrope
+        viv_ftf(e) = types(line_section_type(sections, ln%id, i))%viv_tf
       END DO
     END DO
     syr_el = syr_el(SIZE(syr_el):1:-1)
@@ -10598,6 +10604,7 @@ CONTAINS
     viv_tix = viv_tix(SIZE(viv_tix):1:-1)
     viv_dia = viv_dia(SIZE(viv_dia):1:-1)
     viv_wo = viv_wo(:, SIZE(viv_wo, 2):1:-1)
+    viv_ftf = viv_ftf(SIZE(viv_ftf):1:-1)
     IF (ANY(viv_wo(1, :) > CD_ZERO) .AND. ANY(viv_cl > CD_ZERO)) THEN
       CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(ln%id))//': a line takes one VIV model, but its '// &
                 'types mix the synchronisation lift (LINE TYPES Cl > 0) and the wake oscillator (WAKE '// &
@@ -10904,11 +10911,11 @@ CONTAINS
           ELSE IF (ANY(viv_clx > CD_ZERO)) THEN
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, viv_dia, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, &
-                                  il_alpha=viv_al, chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn)
+                                  il_alpha=viv_al, chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn, tf=viv_ftf)
           ELSE
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, viv_dia, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, amp=viv_amp3, &
-                                  amp_n=viv_ampn)
+                                  amp_n=viv_ampn, tf=viv_ftf)
           END IF
         END BLOCK
         IF (es == CD_MODEL_OK) CALL CD_Recompute_Model_Acceleration(model, es, em)
@@ -17886,7 +17893,11 @@ CONTAINS
     !! flow relative to the cable's velocity low-pass filtered over Tf (first order), so that a
     !! cable moved through the water by a tow or its floater sees that motion as flow, and its own
     !! VIV velocity, much faster than Tf, does not count; Tf 0 is the ambient flow. It sets the
-    !! wake oscillator's frequency; the type needs a WAKE OSCILLATOR row. A type takes one row.
+    !! wake oscillator's frequency, or on the synchronisation model (LINE TYPES Cl > 0) the motion
+    !! of the phases (the cable's velocity relative to the filtered one) and the ambient-frame
+    !! quantities: the amplitude estimate (and so the VIV AMPLITUDE coefficients) and the axes of
+    !! the VIV DAMPING split; the shedding speed stays the relative normal speed. The type needs
+    !! LINE TYPES Cl > 0 or a WAKE OSCILLATOR row. A type takes one row.
     CHARACTER(*), INTENT(IN) :: row
     TYPE(DeckLineType), INTENT(INOUT) :: types(:)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -17917,9 +17928,9 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'VIV FRAME filter time Tf must be >= 0 (0 = the ambient flow), at most 1e15')
       RETURN
     END IF
-    IF (.NOT. (types(it)%wo_cl0 > CD_ZERO)) THEN
+    IF (.NOT. (types(it)%wo_cl0 > CD_ZERO .OR. types(it)%cl > CD_ZERO)) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV FRAME of LINE TYPE "'//TRIM(types(it)%name)//'" sets the flow frame of '// &
-                'its wake oscillator: give the type a WAKE OSCILLATOR row'); RETURN
+                'its VIV model: give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row'); RETURN
     END IF
     types(it)%viv_tf = v
     types(it)%has_vivf_row = .TRUE.

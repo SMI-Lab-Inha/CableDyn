@@ -1374,9 +1374,10 @@ velocity across the ambient flow normal to the line, :math:`\dot{\mathbf r}\cdot
 \mathbf u_n)/|\mathbf u_n|`: their :math:`y` is measured across the incoming flow, and the
 cross-flow axis of the phase, across the relative flow, turns with the node's own velocity, which
 at a response velocity comparable to the flow would shorten the projected velocity by
-:math:`U/|\mathbf v_n|` (16 % at the A/D of 0.68 of the gate below). The travel is integrated by
-the trapezoidal rule over each step, with a crossing inside a step placed by linear interpolation;
-the error is that of the rule, :math:`(\omega\Delta t)^2/12` relative for a harmonic response.
+:math:`U/|\mathbf v_n|` (16 % at the A/D of 0.68 of the gate below); a ``VIV FRAME`` row takes the
+flow and the velocity relative to the cable's filtered motion (:ref:`theory-viv-frame`). The
+travel is integrated by the trapezoidal rule over each step, with a crossing inside a step
+placed by linear interpolation; the error is that of the rule, :math:`(\omega\Delta t)^2/12` relative for a harmonic response.
 The travel is carried signed, :math:`\int\dot y\,\mathrm{d}t` since the last crossing, whose sign
 is that of the half cycle: a velocity that reverses through a sample at zero ends the half cycle
 there, and one that touches zero without a sign change ends none.
@@ -1443,7 +1444,8 @@ from the still-water decay tests of Vikestad et al. 2000, valid for :math:`y_0/D
 :math:`u_{ref} = 0.01` m/s the axes are undefined, and :math:`\mathbf f_n` blends to Morison's as
 :math:`\beta\,\mathbf f_s + (1-\beta)\,\mathbf f_M` with :math:`\beta = U^2/(U^2 + u_{ref}^2)`.
 The force and its Jacobians in the relative velocity and in the tangent are exact, and the
-tangential drag is unchanged.
+tangential drag is unchanged. With a ``VIV FRAME`` row the axes and the blend take the ambient flow
+relative to the cable's filtered motion (:ref:`theory-viv-frame`).
 
 The row serves two uses:
 
@@ -1459,6 +1461,91 @@ On the taut gate line, :math:`(0, 0, 1)` with factor 1 is the line without the r
 with :math:`C_v = 0` and factor 2 the line settles at the static in-line offset of ``Cd`` 2.4 to the
 printed digits; Thorsen's form raises the steady cross-flow amplitude from :math:`A/D` 0.68 to 1.02;
 and the drag, damping and VIV powers balance within 0.2 %.
+
+.. _theory-viv-frame:
+
+Flow frame of the synchronisation model
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The synchronisation model takes the node's motion in the earth frame. Its phase reads the
+cross-flow velocity :math:`\dot{\mathbf r}\cdot\mathbf e` across the relative flow, which is
+:math:`\mathbf u\cdot\mathbf e` and so zero in still water; the amplitude estimate and the
+cross-flow damping are defined across the ambient flow, which still water does not have. A cable
+moved through still water, by a tow or by its floater, therefore locks its phase on
+:math:`\ddot y` alone, keeps :math:`y_0^* = 0`, :math:`C_v(0)` and the drag factor at 0, and its
+damping blends to Morison's, while the same problem in the cable's frame (the water moving past
+the held cable) does not. A ``VIV FRAME`` row with :math:`T_f > 0` on a synchronisation type
+(LINE TYPES ``Cl > 0``) takes these quantities in the frame of the node's filtered velocity
+:math:`\bar{\mathbf v}` of :ref:`theory-viv-wake` (the same filter, started at the node's
+velocity):
+
+- the phases (cross-flow, and in-line where it runs) take :math:`\dot{\mathbf r} -
+  \bar{\mathbf v}` along their axes, which the relative flow sets, so the axes and the shedding
+  speed :math:`U` stay those of the relative flow; the acceleration stays the node's, since
+  :math:`\bar{\mathbf v}` changes slowly and its rate :math:`(\mathbf v - \bar{\mathbf v})/T_f`
+  would carry the VIV velocity;
+- the amplitude estimate takes
+
+  .. math::
+
+     \dot y = (\dot{\mathbf r} - \bar{\mathbf v})\cdot
+     \frac{\mathbf t\times(\mathbf u - \bar{\mathbf v})_n}{|(\mathbf u - \bar{\mathbf v})_n|},
+
+  and with it the table's :math:`C_v`, drag factor and :math:`C_{dy}`;
+- the damping takes :math:`\mathbf e_x`, :math:`\mathbf e_y` and the blend :math:`\beta` from
+  :math:`(\mathbf u - \bar{\mathbf v})_n`, an element the mean :math:`\bar{\mathbf v}` of its end
+  nodes.
+
+:math:`\bar{\mathbf v}` is held over a step (the step-start value), so the Jacobians are
+unchanged, and it is updated at the converged end. The lift and the drag act on the relative
+velocity, which does not depend on the frame, and are unchanged. For a frame moving at a constant
+velocity (a steady tow) the model is that of the held cable exactly. The velocity relative to
+:math:`\bar{\mathbf v}` loses the part of the VIV velocity that passes the filter: for a response
+at :math:`\omega` it is scaled by :math:`\omega T_f/\sqrt{1 + \omega^2 T_f^2}` and led by
+:math:`\arctan(1/\omega T_f)` (0.9985 and 3.1° at 0.29 Hz with :math:`T_f` 10 s). For a motion at
+:math:`\omega_m` the filter lags by :math:`\arctan\omega_m T_f`. :math:`T_f` is therefore taken
+several VIV periods long and short against the motion.
+
+A pipe of the displaced mass (20 m, :math:`D` 0.1 m, ``Cl`` 0.8) moved in still water with
+velocity amplitude 0.6 m/s and period 40 s, against the same pipe held in the water moving the
+other way (the held fluid field, so the Froude-Krylov load acts; a pipe of another mass would
+differ by :math:`(m - \rho A)\dot V`), with :math:`T_f` 0.6 s:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Pipe
+     - Frame
+     - Peak A/D moving / held
+     - RMS A/D moving / held
+   * - Amplitude table and Thorsen's damping
+     - ``Tf`` 0.6 s
+     - 0.819 / 0.819
+     - 0.446 / 0.447
+   * -
+     - none
+     - 0.711 / 0.850
+     - 0.349 / 0.450
+   * - ``Cl`` alone
+     - ``Tf`` 0.6 s
+     - 0.713 / 0.714
+     - 0.372 / 0.371
+   * -
+     - none
+     - 0.711 / 0.736
+     - 0.349 / 0.375
+
+With the row the RMS of the two frames agrees within 0.2 % and the peak within 1 % (the moving
+pipe's peak, a single extreme, ranges 0.811-0.819 over builds, OpenBLAS kernels and platforms),
+the rest being the filter's lag
+(:math:`\omega_m T_f` = 0.094). A taut cable towed at 0.15 m/s with :math:`T_f` 10 s gives A/D
+0.7905 against 0.7906 held in the current with the same row (0.792 without it; 0.665 towed without
+the row) with the table and damping, and 0.6764 against 0.6764 with ``Cl`` alone. On the held
+cable :math:`T_f` changes A/D by at most 0.23 % on both line kinds. :math:`\bar{\mathbf v}` takes
+rows 7-9 of the node's motion statistics on both line kinds (nine rows; rows 3-6, the amplitude
+estimate, stay 0 without a table), so it is part of the step-recovery, snapshot and checkpoint
+state; an ``EI = 0`` line filters its smoothed node velocity. :math:`T_f` 0 or no row leaves the
+run unchanged to the bit.
 
 .. _theory-viv-coefficients:
 
