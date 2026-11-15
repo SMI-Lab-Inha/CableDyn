@@ -2262,7 +2262,7 @@ CONTAINS
     IF (.NOT. self%initialized) RETURN
     IF (self%line%has_viv) n = (1 + SIZE(self%line%viv_ms, 1))*self%line%nn + 1
     IF (self%line%has_viv_il) n = n + 3*self%line%nn
-    IF (self%line%viv_wake) n = n + 2*self%line%nn
+    IF (self%line%viv_wake) n = n + SIZE(self%line%wo_s)
   END FUNCTION CD_HFMF_VIVMirrorSize
 
   INTEGER FUNCTION CD_HFMF_FrictionMirrorSize(self) RESULT(n)
@@ -2352,8 +2352,8 @@ CONTAINS
       k = k + 3*self%line%nn
     END IF
     IF (self%line%viv_wake) THEN
-      buf(k + 1:k + 2*self%line%nn) = RESHAPE(self%line%wo_s, [2*self%line%nn])
-      k = k + 2*self%line%nn
+      buf(k + 1:k + SIZE(self%line%wo_s)) = RESHAPE(self%line%wo_s, [SIZE(self%line%wo_s)])
+      k = k + SIZE(self%line%wo_s)
     END IF
     IF (self%line%torsion%active) THEN
       buf(k + 1) = self%line%torsion%theta
@@ -2545,10 +2545,10 @@ CONTAINS
       k = k + 3*self%line%nn
     END IF
     IF (self%line%viv_wake) THEN
-      self%line%wo_s = RESHAPE(buf(k + 1:k + 2*self%line%nn), [2, self%line%nn])
+      self%line%wo_s = RESHAPE(buf(k + 1:k + SIZE(self%line%wo_s)), SHAPE(self%line%wo_s))
       self%line%wo_q_eval = self%line%wo_s(1, :)
       self%line%ws_recovery_wo_s = self%line%wo_s
-      k = k + 2*self%line%nn
+      k = k + SIZE(self%line%wo_s)
     END IF
     IF (self%line%torsion%active) THEN
       self%line%torsion%theta = buf(k + 1)

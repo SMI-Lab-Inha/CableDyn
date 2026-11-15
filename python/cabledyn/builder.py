@@ -229,6 +229,12 @@ class LineType:
         synchronisation lift, so ``cl`` stays ``None`` or 0, and acts on
         ``EI = 0`` lines and finite-EI cables. ``None`` leaves a trailing value out of the row (the
         solver takes 0.2, 0.3 and 12); a value given writes the ones before it.
+    viv_frame_tf : float | None
+        Optional flow frame of a type's VIV model, a ``VIV FRAME`` section row
+        ``Name Tf``: the filter time [s] of the cable velocity the model's free
+        stream is taken relative to (0: the ambient flow; set it for a cable
+        moved through the water by a tow or its floater). It sets the wake
+        oscillator's frequency, so it needs ``wake_cl0``. ``None`` writes no row.
     viv_amplitude : list of tuples | None
         Optional amplitude-dependent VIV coefficients of a type (Thorsen et al.
         2016), the rows of a ``VIV AMPLITUDE`` section table ``Name AD Cv
@@ -275,6 +281,7 @@ class LineType:
     wake_a: float | None = None
     viv_amplitude: list[tuple[float, ...]] | None = None
     viv_diameter: float | None = None
+    viv_frame_tf: float | None = None
     viv_damping: tuple[float, ...] | None = None
 
 
@@ -1701,6 +1708,7 @@ class DeckModel:
         wake_a: float | None = None,
         viv_amplitude: list[tuple[float, ...]] | None = None,
         viv_diameter: float | None = None,
+        viv_frame_tf: float | None = None,
         viv_damping: tuple[float, ...] | None = None,
     ) -> LineType:
         """Add a ``LINE TYPES`` row; see :class:`LineType` for the fields.
@@ -1744,6 +1752,7 @@ class DeckModel:
             wake_a,
             None if viv_amplitude is None else [tuple(row) for row in viv_amplitude],
             viv_diameter,
+            viv_frame_tf,
             None if viv_damping is None else tuple(viv_damping),
         )
         self._line_types.append(item)
@@ -2639,6 +2648,7 @@ class DeckModel:
         _emit(out, "WAKE OSCILLATOR", *self._wake_table())
         _emit(out, "VIV AMPLITUDE", *self._viv_amp_table())
         _emit(out, "VIV DIAMETER", *self._viv_diam_table())
+        _emit(out, "VIV FRAME", *self._viv_frame_table())
         _emit(out, "VIV DAMPING", *self._viv_damp_table())
         _emit(out, "FAILURE", *self._failure_table())
         _emit(out, "CONTROL", *self._control_table())
@@ -3086,6 +3096,19 @@ class DeckModel:
             rows.append([_text(item.name, what), _num(item.viv_diameter, what)])
         return "Name Dviv", "(-) (m)", rows
 
+    def _viv_frame_table(self) -> tuple[str, str, list[list[str]]]:
+        rows: list[list[str]] = []
+        for item in self._line_types:
+            if item.viv_frame_tf is None:
+                continue
+            what = f"line type {item.name!r}"
+            if item.wake_cl0 is None:
+                raise ValueError(
+                    f"{what}: viv_frame_tf sets the frame of its wake oscillator, set wake_cl0"
+                )
+            rows.append([_text(item.name, what), _num(item.viv_frame_tf, what)])
+        return "Name Tf", "(-) (s)", rows
+
     def _syrope_table(self) -> tuple[str, str, list[list[str]]]:
         rows = [
             [_line_list(row.lines), _num(row.tmax0, "SYROPE IC"), _num(row.tmean0, "SYROPE IC")]
@@ -3309,6 +3332,9 @@ class _Loader:
         for row in self.rows("VIV DIAMETER"):
             t = row.tokens
             model.line_types[t[0]].viv_diameter = _f(t[1])
+        for row in self.rows("VIV FRAME"):
+            t = row.tokens
+            model.line_types[t[0]].viv_frame_tf = _f(t[1])
         for row in self.rows("ATTACHMENTS"):
             t = row.tokens
             arc: float | tuple[float, float, float]

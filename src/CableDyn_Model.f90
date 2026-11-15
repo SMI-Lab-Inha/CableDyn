@@ -445,9 +445,12 @@ MODULE CableDyn_Model
     ! rollback, step-recovery, sub-step and checkpoint copies carry it unchanged: viv_phi holds q
     ! (viv_phi_eval q at the step's evaluation point, viv_phi_next q at the step end) and row 1 of
     ! viv_ms dq/dt; in a step, viv_rate holds the step-start wake frequency and row 2 of viv_ms_next
-    ! the step-start cross-flow acceleration (row 2 of viv_ms stays 0).
-    LOGICAL :: viv_wake = .FALSE.
-    REAL(wp), ALLOCATABLE :: wo_st(:), wo_eps(:), wo_a(:)
+    ! the step-start cross-flow acceleration (row 2 of viv_ms stays 0). With a wake filter time
+    ! wo_tf > 0 on some node (wo_filter) viv_ms has CD_VIV_NMS_AMP rows, rows 3:5 the node's
+    ! velocity low-pass filtered over wo_tf (first order), and the wake frequency takes the flow
+    ! normal to the line relative to it (a line moved through still water sheds).
+    LOGICAL :: viv_wake = .FALSE., wo_filter = .FALSE.
+    REAL(wp), ALLOCATABLE :: wo_st(:), wo_eps(:), wo_a(:), wo_tf(:)
     TYPE(GenAlphaConfig) :: cfg
     ! Run audit of the committed host steps (CD_Audit_Model_Step), diagnostics only: never part
     ! of the state, of a copy, or of a result. audit_t holds the segment tensions of the last two
@@ -4004,7 +4007,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: wake(:, :)
     INTEGER :: n_nodes, n_elem, e, nd, istat, k, nms
     REAL(wp) :: wsum
-    LOGICAL :: want_il, want_amp, want_wake
+    LOGICAL :: want_il, want_amp, want_wake, want_filter
     CHARACTER(160) :: amsg
 
     ErrStat = CD_MODEL_OK
@@ -4093,13 +4096,14 @@ CONTAINS
       want_amp = ANY(amp_n > 0)
     END IF
     want_wake = .FALSE.
+    want_filter = .FALSE.
     IF (PRESENT(wake)) THEN
-      IF (SIZE(wake, 1) /= 3 .OR. SIZE(wake, 2) /= n_elem) THEN
-        CALL fail(ErrStat, ErrMsg, 'the VIV wake oscillator wake must have shape (3, n_elem)')
+      IF ((SIZE(wake, 1) /= 3 .AND. SIZE(wake, 1) /= 4) .OR. SIZE(wake, 2) /= n_elem) THEN
+        CALL fail(ErrStat, ErrMsg, 'the VIV wake oscillator wake must have shape (3 or 4, n_elem)')
         RETURN
       END IF
       IF (.NOT. CD_All_Finite(wake)) THEN
-        CALL fail(ErrStat, ErrMsg, 'the VIV wake oscillator St, eps and A must be finite')
+        CALL fail(ErrStat, ErrMsg, 'the VIV wake oscillator St, eps, A and Tf must be finite')
         RETURN
       END IF
       DO e = 1, n_elem
@@ -4109,6 +4113,14 @@ CONTAINS
           CALL fail(ErrStat, ErrMsg, 'the VIV wake oscillator needs St > 0, eps > 0 and A >= 0, each at most '// &
                     '1e15, where cl > 0')
           RETURN
+        END IF
+        IF (SIZE(wake, 1) == 4) THEN
+          IF (wake(4, e) < CD_ZERO) THEN
+            CALL fail(ErrStat, ErrMsg, 'the VIV wake oscillator filter time Tf must be >= 0 (0 = the ambient '// &
+                      'flow) and at most 1e15')
+            RETURN
+          END IF
+          IF (wake(4, e) > CD_ZERO) want_filter = .TRUE.
         END IF
       END DO
       want_wake = ANY(cl > CD_ZERO)
@@ -4146,7 +4158,7 @@ CONTAINS
         RETURN
       END IF
     END DO
-    nms = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, want_amp)
+    nms = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, want_amp .OR. (want_wake .AND. want_filter))
     ALLOCATE (model%viv_cl(n_elem), model%viv_d(n_elem), model%viv_node(n_nodes), model%viv_cf(n_nodes), &
               model%viv_df(n_nodes), model%viv_dn(n_nodes), model%viv_phi(n_nodes), model%viv_ms(nms, n_nodes), &
               model%viv_phi_rollback(n_nodes), model%viv_ms_rollback(nms, n_nodes), &
@@ -4211,7 +4223,7 @@ CONTAINS
     model%viv_phi_rest = 0.5_wp*CD_VIV_TWO_PI
     IF (PRESENT(tangent_reversed)) model%viv_phi_rest = MERGE(0.5_wp*CD_VIV_TWO_PI, CD_ZERO, tangent_reversed)
     IF (want_wake) THEN
-      ALLOCATE (model%wo_st(n_nodes), model%wo_eps(n_nodes), model%wo_a(n_nodes), STAT=istat)
+      ALLOCATE (model%wo_st(n_nodes), model%wo_eps(n_nodes), model%wo_a(n_nodes), model%wo_tf(n_nodes), STAT=istat)
       IF (istat /= 0) THEN
         CALL clear_viv(model)
         CALL alloc_fail(ErrStat, ErrMsg, 'VIV wake oscillator storage allocation failed')
@@ -4223,6 +4235,8 @@ CONTAINS
       model%wo_st = CD_ZERO
       model%wo_eps = CD_ZERO
       model%wo_a = CD_ZERO
+      model%wo_tf = CD_ZERO
+      model%wo_filter = want_filter
       DO nd = 2, n_nodes - 1
         IF (.NOT. model%viv_node(nd)) CYCLE
         wsum = CD_ZERO
@@ -4232,12 +4246,16 @@ CONTAINS
           model%wo_st(nd) = model%wo_st(nd) + model%l0(k)*wake(1, k)
           model%wo_eps(nd) = model%wo_eps(nd) + model%l0(k)*wake(2, k)
           model%wo_a(nd) = model%wo_a(nd) + model%l0(k)*wake(3, k)
+          IF (want_filter) model%wo_tf(nd) = model%wo_tf(nd) + model%l0(k)*wake(4, k)
         END DO
         model%wo_st(nd) = model%wo_st(nd)/wsum
         model%wo_eps(nd) = model%wo_eps(nd)/wsum
         model%wo_a(nd) = model%wo_a(nd)/wsum
+        model%wo_tf(nd) = model%wo_tf(nd)/wsum
         ! on the limit cycle at the node's start phase
         model%viv_phi(nd) = 2.0_wp*COS(model%viv_phi(nd))
+        ! the filtered velocity starts at the node's (smoothed) velocity
+        IF (want_filter) model%viv_ms(3:5, nd) = smoothed(model%v, 3*nd - 2)
       END DO
       model%viv_cf = CD_ZERO
       model%viv_df = CD_ZERO
@@ -4245,6 +4263,9 @@ CONTAINS
       model%recovery_viv_phi = model%viv_phi
       model%viv_phi_eval = model%viv_phi
       model%viv_phi_next = model%viv_phi
+      model%viv_ms_rollback = model%viv_ms
+      model%recovery_viv_ms = model%viv_ms
+      model%viv_ms_next = model%viv_ms
       model%viv_wake = .TRUE.
     END IF
     model%has_viv = .TRUE.
@@ -4388,7 +4409,7 @@ CONTAINS
     ELSE
       neg = ANY(ms(1:2, :) < CD_ZERO)
     END IF
-    IF (SIZE(ms, 1) >= 5) neg = neg .OR. ANY(ms(4:5, :) < CD_ZERO)
+    IF (SIZE(ms, 1) >= 5 .AND. .NOT. model%viv_wake) neg = neg .OR. ANY(ms(4:5, :) < CD_ZERO)
     IF (neg .OR. t_window < CD_ZERO) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV mean squares, amplitudes and averaging time must be non-negative')
       RETURN
@@ -4617,10 +4638,10 @@ CONTAINS
 
   PURE INTEGER FUNCTION CD_Model_VIV_NMS(model) RESULT(n)
     !! Rows of the VIV motion statistics of a node in the VIV state (CD_Get_Model_VIV_State ms):
-    !! CD_VIV_NMS_AMP with amplitude tables (the amplitude estimate after the mean squares),
-    !! CD_VIV_NMS otherwise.
+    !! CD_VIV_NMS_AMP with amplitude tables (the amplitude estimate after the mean squares) or the
+    !! wake filter (the filtered velocity in rows 3:5), CD_VIV_NMS otherwise.
     TYPE(CD_ModelType), INTENT(IN) :: model
-    n = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, model%has_viv_amp)
+    n = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, model%has_viv_amp .OR. model%wo_filter)
   END FUNCTION CD_Model_VIV_NMS
 
   SUBROUTINE CD_Get_Model_VIV_Amplitude(model, amp, ErrStat, ErrMsg)
@@ -4766,6 +4787,10 @@ CONTAINS
         ! the wake frequency of the ambient flow normal to the line (the free stream of the
         ! paper), not of the relative flow, which the line's own cross-flow motion modulates; the
         ! wake state predicted at the step's evaluation point under the step-start forcing
+        IF (model%wo_filter) THEN
+          ! with the wake filter, of the flow relative to the node's slowly filtered motion
+          IF (model%wo_tf(nd) > CD_ZERO) uu = uu - model%viv_ms(3:5, nd)
+        END IF
         model%viv_rate(nd) = CD_VIV_TWO_PI*model%wo_st(nd)*viv_node_ambient_speed(model%q, ia, uu)/model%viv_dn(nd)
         model%viv_ms_next(2, nd) = ydd
         sw = [model%viv_phi(nd), model%viv_ms(1, nd)]
@@ -4800,7 +4825,7 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: nd, ia
-    REAL(wp) :: w, yd, ydd, un, coef, uu(3), ms1, ms2, rate_end, xd, xdd, rate_end_x, st(4), sw(2), ydd0
+    REAL(wp) :: w, yd, ydd, un, coef, uu(3), ms1, ms2, rate_end, xd, xdd, rate_end_x, st(4), sw(2), ydd0, vsm(3)
     LOGICAL :: ok
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -4830,6 +4855,14 @@ CONTAINS
         END IF
         model%viv_phi_next(nd) = sw(1)
         model%viv_ms_next(1, nd) = sw(2)
+        ! the filtered velocity, exact for the first-order filter of the converged end velocity
+        ! held over the step (a non-finite end velocity keeps it)
+        IF (model%wo_filter) THEN
+          vsm = smoothed(model%v_step, ia)
+          IF (model%wo_tf(nd) > CD_ZERO .AND. CD_All_Finite(vsm)) &
+            model%viv_ms_next(3:5, nd) = model%viv_ms(3:5, nd) + (CD_ONE - EXP(-dt/model%wo_tf(nd)))* &
+                                         (vsm - model%viv_ms(3:5, nd))
+        END IF
         CYCLE
       END IF
       IF (.NOT. ok) THEN
@@ -4943,7 +4976,9 @@ CONTAINS
     IF (ALLOCATED(model%wo_st)) DEALLOCATE (model%wo_st)
     IF (ALLOCATED(model%wo_eps)) DEALLOCATE (model%wo_eps)
     IF (ALLOCATED(model%wo_a)) DEALLOCATE (model%wo_a)
+    IF (ALLOCATED(model%wo_tf)) DEALLOCATE (model%wo_tf)
     model%viv_wake = .FALSE.
+    model%wo_filter = .FALSE.
     model%has_viv_amp = .FALSE.
     model%has_viv_il = .FALSE.
     model%has_viv = .FALSE.
@@ -7711,6 +7746,9 @@ CONTAINS
     IF (ErrStat /= CD_MODEL_OK) RETURN
     CALL copy_real1(src%wo_a, work%wo_a, 'wo_a', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%wo_tf, work%wo_tf, 'wo_tf', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    work%wo_filter = src%wo_filter
     work%has_viv_amp = src%has_viv_amp
     CALL copy_real3(src%viv_amp, work%viv_amp, 'viv_amp', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
@@ -7905,6 +7943,8 @@ CONTAINS
     CALL MOVE_ALLOC(from%wo_st, to%wo_st)
     CALL MOVE_ALLOC(from%wo_eps, to%wo_eps)
     CALL MOVE_ALLOC(from%wo_a, to%wo_a)
+    CALL MOVE_ALLOC(from%wo_tf, to%wo_tf)
+    to%wo_filter = from%wo_filter
     to%has_viv_amp = from%has_viv_amp
     CALL MOVE_ALLOC(from%viv_amp, to%viv_amp)
     CALL MOVE_ALLOC(from%viv_amp_n, to%viv_amp_n)

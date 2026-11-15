@@ -3,7 +3,7 @@
 ! Copyright (c) 2026 Jae Hoon Seo, SMI Lab, Inha University
 PROGRAM test_viv_wake_deck
   !! Wake-oscillator VIV on a deck (the optional WAKE OSCILLATOR section, TypeName CL0 [St [eps
-  !! [A]]]; Facchinetti et al. 2004): the taut cable of the in-line VIV gate (100 m, D 0.1 m,
+  !! [A]]], and the VIV FRAME section, TypeName Tf; Facchinetti et al. 2004): the taut cable of the in-line VIV gate (100 m, D 0.1 m,
   !! 50 kN, pinned at 50 m depth) in a uniform 0.15 m/s current along y, its type with no
   !! synchronisation lift (Cl 0) and the row riser 0.3 (St 0.2, eps 0.3, A 12). W1-W3 run on the
   !! finite-EI cable (EI 1 N m^2) and on the EI = 0 line alike.
@@ -19,13 +19,23 @@ PROGRAM test_viv_wake_deck
   !!      A out of range, a type that keeps its synchronisation lift (Cl > 0, which in-line VIV
   !!      also needs), and a line that mixes the two models (finite-EI and EI = 0);
   !!   W5 the two cores agree: the EI = 0 line locks in within 3 % of the finite-EI cable's A/D
-  !!      and 0.003 Hz of its frequency, and so does its uncoupled response.
+  !!      and 0.003 Hz of its frequency, and so does its uncoupled response;
+  !!   W6 a finite-EI cable towed through still water: both ends move at 0.15 m/s against y (a
+  !!      10 s half-cosine ramp), no current. With the filter time Tf 10 s the wake frequency takes
+  !!      the flow relative to the cable's filtered motion, and the cable locks in as the fixed
+  !!      cable in the 0.15 m/s current does (A/D within 5 %, frequency within 0.003 Hz); without
+  !!      it (the ambient flow, zero) the wake does not lock in (A/D below a tenth of that). The
+  !!      fixed cable in the current with Tf 10 s locks in as without it (the filter removes the
+  !!      VIV velocity: A/D within 2 %, frequency within 0.002 Hz), on both cores, and the two
+  !!      cores agree there as in W5 (an EI = 0 line cannot run between two moving points);
+  !!   W7 VIV FRAME refusals by name: a malformed row, an unknown or repeated type,
+  !!      a negative Tf, and a type without a WAKE OSCILLATOR row.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   IMPLICIT NONE
   REAL(wp), PARAMETER :: PI = 3.14159265358979323846_wp, D = 0.1_wp, F_WAKE = 0.2_wp*0.15_wp/0.1_wp
   INTEGER :: nfail = 0
-  REAL(wp) :: ad_fe(4) = 0.0_wp, ad_l(4) = 0.0_wp
+  REAL(wp) :: ad_fe(4) = 0.0_wp, ad_l(4) = 0.0_wp, af_fe(2) = 0.0_wp, af_l(2) = 0.0_wp
 
   CALL write_current('wod_current.dat')
   CALL check_runs('1.0', 'wod', ad_fe)
@@ -36,6 +46,12 @@ PROGRAM test_viv_wake_deck
                'W5: the EI = 0 line locks in as the finite-EI cable')
   CALL require(ABS(ad_l(3)/ad_fe(3) - 1.0_wp) <= 0.03_wp .AND. ABS(ad_l(4) - ad_fe(4)) <= 0.003_wp, &
                'W5: and responds uncoupled as it')
+  CALL write_tow('wod_tow.txt')
+  CALL check_tow('wodt', ad_fe)
+  CALL check_filter_fixed('1.0', 'wodf', ad_fe, af_fe)
+  CALL check_filter_fixed('0.0', 'wodf0', ad_l, af_l)
+  CALL require(ABS(af_l(1)/af_fe(1) - 1.0_wp) <= 0.03_wp .AND. ABS(af_l(2) - af_fe(2)) <= 0.003_wp, &
+               'W6: with Tf the EI = 0 line locks in as the finite-EI cable')
   CALL check_refusals()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -80,23 +96,28 @@ CONTAINS
     CLOSE (u)
   END SUBROUTINE write_current
 
-  SUBROUTINE write_deck(path, wake_rows, tmax, cl, ei, viv_row, mixed)
+  SUBROUTINE write_deck(path, wake_rows, tmax, cl, ei, viv_row, mixed, tow, frame_rows)
     !! wake_rows: the WAKE OSCILLATOR section's data rows, ';'-separated ('' for no section); cl the
     !! type's LINE TYPES Cl (default 0), ei its EI (default 1), viv_row a VIV section row, mixed:
-    !! the line in two sections, the second of a type 'lift' with Cl 0.8.
+    !! the line in two sections, the second of a type 'lift' with Cl 0.8; tow: no current, both
+    !! ends Coupled and moved by the motion file wod_tow.txt; frame_rows: the VIV FRAME section's
+    !! data rows, ';'-separated (none without it).
     CHARACTER(*), INTENT(IN) :: path, wake_rows
     REAL(wp), INTENT(IN) :: tmax
     CHARACTER(*), INTENT(IN), OPTIONAL :: cl, ei, viv_row
-    LOGICAL, INTENT(IN), OPTIONAL :: mixed
+    LOGICAL, INTENT(IN), OPTIONAL :: mixed, tow
+    CHARACTER(*), INTENT(IN), OPTIONAL :: frame_rows
     CHARACTER(32) :: cl_col, ei_col
     INTEGER :: u, i0, i1
-    LOGICAL :: two
+    LOGICAL :: two, towed
     cl_col = '0.0'
     IF (PRESENT(cl)) cl_col = cl
     ei_col = '1.0'
     IF (PRESENT(ei)) ei_col = ei
     two = .FALSE.
     IF (PRESENT(mixed)) two = mixed
+    towed = .FALSE.
+    IF (PRESENT(tow)) towed = tow
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') '--------------------- CableDyn Input File ---------------------------------'
     WRITE (u, '(A)') 'wake-oscillator deck gate: taut cable in a uniform current'
@@ -109,7 +130,11 @@ CONTAINS
     WRITE (u, '(A)') '----------------------- POINTS ----------------------------------------------'
     WRITE (u, '(A)') 'ID   Attachment   X       Y     Z      M    V     CdA   CA'
     WRITE (u, '(A)') '1    Coupled      0.0     0.0   -50.0  0    0     0     0'
-    WRITE (u, '(A)') '2    Fixed        100.0   0.0   -50.0  0    0     0     0'
+    IF (towed) THEN
+      WRITE (u, '(A)') '2    Coupled      100.0   0.0   -50.0  0    0     0     0'
+    ELSE
+      WRITE (u, '(A)') '2    Fixed        100.0   0.0   -50.0  0    0     0     0'
+    END IF
     WRITE (u, '(A)') '----------------------- LINES -----------------------------------------------'
     WRITE (u, '(A)') 'ID   NodeA  NodeB  Outputs'
     WRITE (u, '(A)') '1    1      2      -'
@@ -140,12 +165,31 @@ CONTAINS
         i0 = i0 + i1
       END DO
     END IF
+    IF (PRESENT(frame_rows)) THEN
+      WRITE (u, '(A)') '----------------------- VIV FRAME -------------------------------------------'
+      WRITE (u, '(A)') 'TypeName   Tf'
+      WRITE (u, '(A)') '(-)        (s)'
+      i0 = 1
+      DO
+        i1 = INDEX(frame_rows(i0:), ';')
+        IF (i1 == 0) THEN
+          WRITE (u, '(A)') TRIM(frame_rows(i0:))
+          EXIT
+        END IF
+        WRITE (u, '(A)') frame_rows(i0:i0 + i1 - 2)
+        i0 = i0 + i1
+      END DO
+    END IF
     WRITE (u, '(A)') '---------------------- OPTIONS ----------------------------------------------'
     WRITE (u, '(A)') '0.01     dtM'
     WRITE (u, '(A)') '100.0    WtrDpth'
     WRITE (u, '(A)') '1025.0   rhoW'
     WRITE (u, '(A)') '9.80665  g'
-    WRITE (u, '(A)') 'wod_current.dat  WaterKin'
+    IF (towed) THEN
+      WRITE (u, '(A)') 'wod_tow.txt  motionFile'
+    ELSE
+      WRITE (u, '(A)') 'wod_current.dat  WaterKin'
+    END IF
     WRITE (u, '(A,F8.3,A)') ' ', tmax, '    TMax'
     WRITE (u, '(A)') '---------------------- OUTPUTS -----------------------------------------------'
     WRITE (u, '(A)') 'L1N25PZ'
@@ -281,8 +325,100 @@ CONTAINS
                                               'W3: a row with CL0 0 is the deck without the section'//lab)
   END SUBROUTINE check_runs
 
+  SUBROUTINE write_tow(path)
+    !! Both ends (points 1 and 2) moved along -y at 0.15 m/s after a 10 s half-cosine velocity ramp,
+    !! every 0.01 s to 100 s: y = -U (t/2 - T sin(pi t/T)/(2 pi)) in the ramp (T 10 s).
+    CHARACTER(*), INTENT(IN) :: path
+    REAL(wp), PARAMETER :: U = 0.15_wp, TR = 10.0_wp
+    INTEGER :: u_, k
+    REAL(wp) :: t, y, v, a
+    OPEN (NEWUNIT=u_, FILE=path, STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u_, '(A)') '# time point x y z vx vy vz ax ay az'
+    DO k = 0, 10000
+      t = 0.01_wp*REAL(k, wp)
+      IF (t < TR) THEN
+        y = -U*(0.5_wp*t - TR*SIN(PI*t/TR)/(2.0_wp*PI))
+        v = -U*0.5_wp*(1.0_wp - COS(PI*t/TR))
+        a = -U*0.5_wp*(PI/TR)*SIN(PI*t/TR)
+      ELSE
+        y = -U*(0.5_wp*TR + (t - TR))
+        v = -U
+        a = 0.0_wp
+      END IF
+      WRITE (u_, '(F9.3,A,3ES17.9,A,ES17.9,A,ES17.9,A)') t, ' 1 ', 0.0_wp, y, -50.0_wp, ' 0 ', v, ' 0 0 ', a, ' 0'
+      WRITE (u_, '(F9.3,A,3ES17.9,A,ES17.9,A,ES17.9,A)') t, ' 2 ', 100.0_wp, y, -50.0_wp, ' 0 ', v, ' 0 0 ', a, ' 0'
+    END DO
+    CLOSE (u_)
+  END SUBROUTINE write_tow
+
+  SUBROUTINE check_tow(tag, ref)
+    !! W6 on the finite-EI cable: towed with Tf 10 s against the fixed cable in the current (ref,
+    !! from check_runs), and without Tf.
+    CHARACTER(*), INTENT(IN) :: tag
+    REAL(wp), INTENT(IN) :: ref(4)
+    CHARACTER(*), PARAMETER :: ei = '1.0'
+    REAL(wp), ALLOCATABLE :: tf(:, :), t0(:, :)
+    INTEGER :: nf, n0
+    REAL(wp) :: ad_f, f_f, ad_0, f_0
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    CHARACTER(:), ALLOCATABLE :: lab
+    lab = ' (EI '//ei//')'
+    CALL write_deck(tag//'_tf.dat', 'riser 0.3', 100.0_wp, ei=ei, tow=.TRUE., frame_rows='riser 10')
+    CALL run(tag//'_tf.dat', tag//'_tf', ok, msg)
+    CALL require(ok, 'W6: the towed deck with Tf runs'//lab//': '//TRIM(msg))
+    CALL write_deck(tag//'_amb.dat', 'riser 0.3', 100.0_wp, ei=ei, tow=.TRUE.)
+    CALL run(tag//'_amb.dat', tag//'_amb', ok, msg)
+    CALL require(ok, 'W6: the towed deck without Tf runs'//lab//': '//TRIM(msg))
+    CALL read_out(tag//'_tf.out', tf, nf)
+    CALL read_out(tag//'_amb.out', t0, n0)
+    CALL require(nf > 1000 .AND. n0 == nf, 'W6: the towed runs wrote matching rows'//lab)
+    IF (.NOT. (nf > 1000 .AND. n0 == nf)) RETURN
+    CALL window_stats(tf, nf, 50.0_wp, 75.0_wp, ad_f, f_f)
+    CALL window_stats(t0, n0, 50.0_wp, 75.0_wp, ad_0, f_0)
+    WRITE (*, '(A,2F8.4,A,2F8.4,A,F8.4)') 'W6'//lab//': towed A/D, f [Hz] with Tf ', ad_f, f_f, &
+      '; in the current ', ref(1:2), '; towed without Tf A/D ', ad_0
+    CALL require(ABS(ad_f/ref(1) - 1.0_wp) <= 0.05_wp .AND. ABS(f_f - ref(2)) <= 0.003_wp, &
+                 'W6: towed with Tf, the cable locks in as the fixed cable in the current'//lab)
+    CALL require(ad_0 < 0.1_wp*ref(1), 'W6: towed without Tf (the ambient flow), the wake does not lock in'//lab)
+  END SUBROUTINE check_tow
+
+  SUBROUTINE check_filter_fixed(ei, tag, ref, res)
+    !! W6 on the fixed cable of EI ei in the current: with Tf 10 s against without it (ref, from
+    !! check_runs); res = (A/D, f) with Tf.
+    CHARACTER(*), INTENT(IN) :: ei, tag
+    REAL(wp), INTENT(IN) :: ref(4)
+    REAL(wp), INTENT(OUT) :: res(2)
+    REAL(wp), ALLOCATABLE :: tf(:, :)
+    INTEGER :: nf
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    CHARACTER(:), ALLOCATABLE :: lab
+    lab = ' (EI '//ei//')'
+    res = 0.0_wp
+    CALL write_deck(tag//'.dat', 'riser 0.3', 100.0_wp, ei=ei, frame_rows='riser 10')
+    CALL run(tag//'.dat', tag, ok, msg)
+    CALL require(ok, 'W6: the fixed cable with Tf runs'//lab//': '//TRIM(msg))
+    CALL read_out(tag//'.out', tf, nf)
+    CALL require(nf > 1000, 'W6: the fixed run with Tf wrote its rows'//lab)
+    IF (nf <= 1000) RETURN
+    CALL window_stats(tf, nf, 50.0_wp, 75.0_wp, res(1), res(2))
+    WRITE (*, '(A,2F8.4,A,2F8.4)') 'W6'//lab//': fixed in the current A/D, f [Hz] with Tf ', res, '; without ', &
+      ref(1:2)
+    CALL require(ABS(res(1)/ref(1) - 1.0_wp) <= 0.02_wp .AND. ABS(res(2) - ref(2)) <= 0.002_wp, &
+                 'W6: fixed in the current, Tf leaves the lock-in as the ambient flow gives it'//lab)
+  END SUBROUTINE check_filter_fixed
+
   SUBROUTINE check_refusals()
     CALL refused('riser 0.3 0.2 0.3 12 1', 'TypeName CL0 [St [eps [A]]]', 'a row of six columns')
+    CALL refused('riser 0.3', 'VIV FRAME rows must be: TypeName Tf', 'W7: a VIV FRAME row of three columns', &
+                 frame_rows='riser 10 1')
+    CALL refused('riser 0.3', 'VIV FRAME row names undefined LINE TYPE', 'W7: an unknown type', &
+                 frame_rows='cable 10')
+    CALL refused('riser 0.3', 'VIV FRAME names LINE TYPE', 'W7: a repeated type', frame_rows='riser 10;riser 5')
+    CALL refused('riser 0.3', 'filter time Tf must be >= 0', 'W7: a negative Tf', frame_rows='riser -1')
+    CALL refused('', 'give the type a WAKE OSCILLATOR row', 'W7: a type without the wake oscillator', &
+                 cl='0.8', frame_rows='riser 10')
     CALL refused('riser 0.3 x', 'plain numbers', 'a non-numeric St')
     CALL refused('cable 0.3', 'undefined LINE TYPE', 'an unknown type')
     CALL refused('riser 0.3;riser 0.2', 'twice', 'a repeated type')
@@ -298,14 +434,14 @@ CONTAINS
                  ei='0.0')
   END SUBROUTINE check_refusals
 
-  SUBROUTINE refused(rows, needle, what, cl, ei, viv_row, mixed)
+  SUBROUTINE refused(rows, needle, what, cl, ei, viv_row, mixed, frame_rows)
     CHARACTER(*), INTENT(IN) :: rows, needle, what
-    CHARACTER(*), INTENT(IN), OPTIONAL :: cl, ei, viv_row
+    CHARACTER(*), INTENT(IN), OPTIONAL :: cl, ei, viv_row, frame_rows
     LOGICAL, INTENT(IN), OPTIONAL :: mixed
     LOGICAL :: ok
     CHARACTER(1024) :: msg
     ! an absent optional passes on absent
-    CALL write_deck('wod_bad.dat', rows, 1.0_wp, cl=cl, ei=ei, viv_row=viv_row, mixed=mixed)
+    CALL write_deck('wod_bad.dat', rows, 1.0_wp, cl=cl, ei=ei, viv_row=viv_row, mixed=mixed, frame_rows=frame_rows)
     CALL run('wod_bad.dat', 'wod_bad', ok, msg)
     CALL require(.NOT. ok .AND. INDEX(msg, needle) > 0, 'W4: '//what//' is refused: '//TRIM(msg))
   END SUBROUTINE refused

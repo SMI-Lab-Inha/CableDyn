@@ -345,6 +345,28 @@ _DIA_PARITY = [
 _AMP_PARITY += _DIA_PARITY
 
 
+def _frame_rows(*rows: str) -> tuple[str, str]:
+    """The edit that puts a VIV FRAME section with ``rows`` before OPTIONS."""
+    block = "--------------------- VIV FRAME -----\n" + "".join(f"{row}\n" for row in rows)
+    return _AMP_OPTIONS, block + _AMP_OPTIONS
+
+
+_WAKE_RISER = ("riser      0.85   0.15", "riser 0.3")
+_FRAME_PARITY = [
+    ("frame-accepted", [_WAKE_LIFT, _WAKE_SECTION, _WAKE_RISER, _frame_rows("riser 8")], True),
+    ("frame-zero", [_WAKE_LIFT, _WAKE_SECTION, _WAKE_RISER, _frame_rows("riser 0")], True),
+    ("frame-negative", [_WAKE_LIFT, _WAKE_SECTION, _WAKE_RISER, _frame_rows("riser -1")], False),
+    (
+        "frame-three-columns",
+        [_WAKE_LIFT, _WAKE_SECTION, _WAKE_RISER, _frame_rows("riser 8 1")],
+        False,
+    ),
+    ("frame-sync-type", [_frame_rows("riser 8")], False),
+]
+
+_AMP_PARITY += _FRAME_PARITY
+
+
 def _damp_rows(*rows: str) -> tuple[str, str]:
     """The edit that puts a VIV DAMPING section with ``rows`` before OPTIONS."""
     block = "--------------------- VIV DAMPING -----\n" + "".join(f"{row}\n" for row in rows)

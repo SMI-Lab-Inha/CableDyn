@@ -134,7 +134,7 @@ exist. A conventional layout is:
 
 LINE TYPES → BODIES → EXTERNAL LOADS → ROD TYPES → RODS → POINTS → TURBINES → LINES → SYROPE IC →
 SECTIONS → END CONNECTIONS / EQUIVALENT BUOYANCY / ATTACHMENTS / STIFFENERS / VIV / WAKE OSCILLATOR /
-VIV AMPLITUDE / VIV DIAMETER / VIV DAMPING / FAILURE / CONTROL → OPTIONS → OUTPUTS
+VIV AMPLITUDE / VIV DIAMETER / VIV DAMPING / VIV FRAME / FAILURE / CONTROL → OPTIONS → OUTPUTS
 
 Within LINE TYPES, the header row must precede the data rows because it selects their column
 order.
@@ -215,6 +215,7 @@ are collapsed. It must match one of the spellings below; any other name fails wi
 | VIV AMPLITUDE | `VIV AMPLITUDE`, `VIV AMPLITUDES` |
 | VIV DIAMETER | `VIV DIAMETER`, `VIV DIAMETERS` |
 | VIV DAMPING | `VIV DAMPING` |
+| VIV FRAME | `VIV FRAME`, `VIV FRAMES` |
 | FAILURE | `FAILURE`, `FAILURES` |
 | CONTROL | `CONTROL`, `CONTROLS` |
 | TURBINES | `TURBINES`, `TURBINE` |
@@ -1354,6 +1355,40 @@ Behaviour:
 - A row with `Dviv` equal to `Diam` runs as the type without it. It acts on `EI = 0` lines and
   finite-EI cables, standalone and coupled. A row fails if it is not `TypeName Dviv`, names an
   undefined or already named type or one without VIV, or holds a value out of range.
+
+### VIV FRAME (optional)
+
+The flow frame of the VIV model of a line type: the flow the model takes as its free stream, the
+ambient flow by default. A cable moved through the water by a tow or by its floater sees no
+ambient flow, so its wake oscillator never shed; with a filter time `Tf` the free stream is the
+ambient flow relative to the cable's own slow motion (see [Wake oscillator](theory.rst)).
+
+```text
+--------------------- VIV FRAME ----------------------------------------
+TypeName   Tf
+(-)        (s)
+cable      10
+```
+
+| Column | Meaning |
+|--------|---------|
+| `TypeName` | an existing LINE TYPES name (case-insensitive) with a WAKE OSCILLATOR row, at most one row each |
+| `Tf` | filter time >= 0 [s], at most 1e15; `0` is the ambient flow |
+
+Behaviour:
+
+- With `Tf > 0` the wake frequency `2 pi St U_a/D` takes `U_a` = the speed normal to the line of
+  the ambient flow less the node's velocity low-pass filtered over `Tf` (first order, started at
+  the node's initial velocity). The slow motion then counts as flow; the cable's own VIV
+  velocity, much faster than `Tf`, does not modulate the frequency.
+- Take `Tf` several VIV periods long and short against the motion. A taut cable towed at 0.15 m/s
+  through still water (VIV at 0.28 Hz) with `Tf` 10 s locks in as the same cable held in a
+  0.15 m/s current, A/D within 0.6 % and frequency within 0.001 Hz, where the ambient flow gave it
+  no lock-in. On a held cable in a current `Tf` changes A/D by 0.03 %.
+- The filtered velocity is part of the step-recovery, snapshot and checkpoint state. A row with
+  `Tf = 0` leaves the run exactly as without it. It acts on `EI = 0` lines and finite-EI cables,
+  standalone and coupled. A row fails if it is not `TypeName Tf`, names an undefined or already
+  named type or one without a WAKE OSCILLATOR row, or holds a value out of range.
 
 ### VIV DAMPING (optional, finite-EI lines)
 
