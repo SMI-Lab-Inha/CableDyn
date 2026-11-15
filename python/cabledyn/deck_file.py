@@ -3387,14 +3387,15 @@ class DeckFile:
                     "VIV: give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row"
                 )
 
-    def _check_viv_frame_section(self, wake_type_names: set[str]) -> None:
+    def _check_viv_frame_section(self, frame_type_names: set[str]) -> None:
         """Native ``apply_type_viv_frame`` for the VIV FRAME section.
 
         A row ``TypeName Tf`` sets the flow frame of a line type's VIV model: with the filter
         time ``Tf > 0`` [s] the free stream is the ambient flow relative to the cable's velocity
         low-pass filtered over ``Tf`` (0: the ambient flow), at most 1e15. It sets the wake
-        oscillator's frequency, so the type needs a WAKE OSCILLATOR row with ``CL0 > 0``; a type
-        takes one row.
+        oscillator's frequency, or the amplitude estimate and the VIV DAMPING split of the
+        synchronisation model, so the type needs a WAKE OSCILLATOR row with ``CL0 > 0`` or a
+        VIV AMPLITUDE table (``frame_type_names``); a type takes one row.
         """
         types = {row.tokens[0].lower(): row.tokens[0] for row in self.line_types}
         named: set[str] = set()
@@ -3419,10 +3420,11 @@ class DeckFile:
                     f"{where}: VIV FRAME filter time Tf must be >= 0 (0 = the ambient flow), "
                     "at most 1e15"
                 )
-            if name not in wake_type_names:
+            if name not in frame_type_names:
                 raise DeckFormatError(
                     f'{where}: VIV FRAME of LINE TYPE "{types[name]}" sets the flow frame of its '
-                    "wake oscillator: give the type a WAKE OSCILLATOR row"
+                    "wake oscillator or of its amplitude estimate: give the type a WAKE OSCILLATOR "
+                    "row or a VIV AMPLITUDE table"
                 )
 
     def _check_viv_damp_section(self, amp_type_names: set[str]) -> set[str]:
@@ -4824,7 +4826,7 @@ class DeckFile:
         wake_type_names = self._check_wake_section(viv_type_names)
         amp_type_names = self._check_viv_amp_section(viv_type_names)
         self._check_viv_diam_section(viv_type_names | wake_type_names)
-        self._check_viv_frame_section(wake_type_names)
+        self._check_viv_frame_section(wake_type_names | amp_type_names)
         damp_type_names = self._check_viv_damp_section(amp_type_names)
         amp_lines = {
             line_id

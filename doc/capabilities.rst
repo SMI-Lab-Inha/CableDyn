@@ -168,7 +168,9 @@ Line and constitutive capability
      - a table over the cross-flow amplitude of the synchronisation coefficient and a drag
        factor, read at the amplitude estimate of Thorsen et al. (2016) (``VIVAmp`` channel), on
        ``EI = 0`` lines and finite-EI cables (:ref:`theory-viv-amplitude`), its state in the
-       checkpoint
+       checkpoint; a ``VIV FRAME`` row (``Tf``) takes the estimate, and the ``VIV DAMPING``
+       axes, relative to the cable's filtered motion (a towed or floater-driven cable,
+       :ref:`theory-viv-frame`)
    * - VIV diameter (``VIV DIAMETER`` section ``Dviv``)
      - Standalone and coupled
      - a diameter of the VIV model apart from the hydrodynamic one, for buoyancy-module zones and
@@ -179,7 +181,8 @@ Line and constitutive capability
        cross-flow part ``C_dy = a + b y0/D`` of Thorsen et al. (2016) read at the amplitude
        estimate plus a Morison-form term ``c``; ``0 0 1`` keeps Morison's drag and lets the
        ``VIV AMPLITUDE`` drag factor act on the in-line part alone; finite-EI cables
-       (:ref:`theory-viv-cf-damping`)
+       (:ref:`theory-viv-cf-damping`); with a ``VIV FRAME`` row about the flow relative to the
+       cable's filtered motion (:ref:`theory-viv-frame`)
 
 Loads and environment
 ---------------------

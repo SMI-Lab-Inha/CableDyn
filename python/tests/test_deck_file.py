@@ -5033,6 +5033,17 @@ _DAMP_BASE = _with_section(
 )
 
 
+def test_viv_frame_takes_a_type_with_an_amplitude_table():
+    # the synchronisation model's amplitude estimate and damping split take the frame
+    DeckFile.from_text(_with_section(_DAMP_BASE, "VIV FRAME", "chain 8"))
+    damped = _with_section(_DAMP_BASE, "VIV DAMPING", "chain 0.31 0.89")
+    DeckFile.from_text(_with_section(damped, "VIV FRAME", "chain 8"))
+    # the lift alone, without a table, has no ambient-frame quantity
+    lift_only = _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8"))
+    with pytest.raises(DeckFormatError, match=re.escape("or a VIV AMPLITUDE table")):
+        DeckFile.from_text(_with_section(lift_only, "VIV FRAME", "chain 8"))
+
+
 @pytest.mark.parametrize(
     "rows, expected",
     [

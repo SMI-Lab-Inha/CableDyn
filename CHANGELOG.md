@@ -118,6 +118,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   leaves runs unchanged to the bit. The Python deck reader and builder (`viv_frame_tf`) take the
   section.
 
+- The `VIV FRAME` section on the synchronisation model: on a type with a `VIV AMPLITUDE` table,
+  `Tf > 0` takes the amplitude estimate (and so `Cv` and `CdAmp`) and the axes and blend of the
+  `VIV DAMPING` split relative to the cable's filtered velocity. A cable moved through still water
+  had `y0 = 0`, `Cv(0)`, `CdAmp(0)` and Morison's drag. A pipe moved at 0.6 m/s amplitude and
+  40 s period in still water now gives peak A/D 0.84 against 0.83 for the same pipe held in the
+  moving water (0.71 against 0.85 without the row); a cable towed at 0.15 m/s, 0.780 against 0.792
+  held in the current. The phase rate keeps the published form. On `EI = 0` lines and finite-EI
+  cables, the filtered velocity in rows 7-9 of the VIV motion statistics, so in the step-recovery,
+  snapshot and checkpoint state; `Tf` 0 or no row leaves runs unchanged to the bit. The Python
+  deck reader and builder take it.
+
 ### Fixed
 
 - The statics of a finite-EI line through the free surface could fail at isolated currents:

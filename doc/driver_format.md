@@ -1301,7 +1301,9 @@ Behaviour:
 
 - Each node estimates its cross-flow amplitude as Thorsen et al. do (their Eq. 8 and 9): half the
   travel of the node across the ambient flow between two zero crossings of its cross-flow
-  velocity, smoothed by a tenth of the difference at every time step. An element takes the mean of
+  velocity, smoothed by a tenth of the difference at every time step (with a
+  [VIV FRAME](#viv-frame-optional) row, the flow and the velocity relative to the cable's filtered
+  motion). An element takes the mean of
   its free nodes over its diameter as A/D (the one free node next to a fixed end or anchor), and
   from its table `Cv` (for the lift) and `CdAmp`
   (times `Cd`, for the normal Morison drag), linear between rows and held beyond the first and
@@ -1360,8 +1362,9 @@ Behaviour:
 
 The flow frame of the VIV model of a line type: the flow the model takes as its free stream, the
 ambient flow by default. A cable moved through the water by a tow or by its floater sees no
-ambient flow, so its wake oscillator never shed; with a filter time `Tf` the free stream is the
-ambient flow relative to the cable's own slow motion (see [Wake oscillator](theory.rst)).
+ambient flow, so its wake oscillator never shed and its amplitude estimate stayed at zero; with a
+filter time `Tf` the free stream is the ambient flow relative to the cable's own slow motion (see
+[Wake oscillator](theory.rst) and [Flow frame of the synchronisation model](theory.rst)).
 
 ```text
 --------------------- VIV FRAME ----------------------------------------
@@ -1372,7 +1375,7 @@ cable      10
 
 | Column | Meaning |
 |--------|---------|
-| `TypeName` | an existing LINE TYPES name (case-insensitive) with a WAKE OSCILLATOR row, at most one row each |
+| `TypeName` | an existing LINE TYPES name (case-insensitive) with a WAKE OSCILLATOR row or a VIV AMPLITUDE table, at most one row each |
 | `Tf` | filter time >= 0 [s], at most 1e15; `0` is the ambient flow |
 
 Behaviour:
@@ -1381,14 +1384,22 @@ Behaviour:
   the ambient flow less the node's velocity low-pass filtered over `Tf` (first order, started at
   the node's initial velocity). The slow motion then counts as flow; the cable's own VIV
   velocity, much faster than `Tf`, does not modulate the frequency.
+- On a synchronisation type (LINE TYPES `Cl > 0`) with a VIV AMPLITUDE table, the amplitude
+  estimate takes the node's velocity across that flow, both relative to the filtered velocity,
+  and with it the table's `Cv` and `CdAmp`; on a finite-EI cable with VIV DAMPING the split takes
+  its in-line and cross-flow axes, and its blend to Morison's drag, from that flow. The phase rate
+  keeps the published form (the relative flow), and the lift and drag the relative velocity.
 - Take `Tf` several VIV periods long and short against the motion. A taut cable towed at 0.15 m/s
   through still water (VIV at 0.28 Hz) with `Tf` 10 s locks in as the same cable held in a
   0.15 m/s current, A/D within 0.6 % and frequency within 0.001 Hz, where the ambient flow gave it
-  no lock-in. On a held cable in a current `Tf` changes A/D by 0.03 %.
+  no lock-in. On a held cable in a current `Tf` changes A/D by 0.03 %. With a VIV AMPLITUDE table
+  and VIV DAMPING the towed cable gives A/D 0.780 against 0.792 held in the current, 0.665
+  without the row; `Tf` changes the held cable's A/D by 0.2 %.
 - The filtered velocity is part of the step-recovery, snapshot and checkpoint state. A row with
   `Tf = 0` leaves the run exactly as without it. It acts on `EI = 0` lines and finite-EI cables,
   standalone and coupled. A row fails if it is not `TypeName Tf`, names an undefined or already
-  named type or one without a WAKE OSCILLATOR row, or holds a value out of range.
+  named type or one with neither a WAKE OSCILLATOR row nor a VIV AMPLITUDE table, or holds a value
+  out of range.
 
 ### VIV DAMPING (optional, finite-EI lines)
 
@@ -1417,7 +1428,8 @@ Behaviour:
   unit length becomes `1/2 rho D [Cdn CdAmp |w| w_x e_x + (C_dy |w_y| + c Cdn |w|) w_y e_y]`:
   Morison's in-line part, with the drag factor `CdAmp` of the type's amplitude table, and the
   cross-flow law of the row. Where the ambient normal flow falls below 0.01 m/s the axes are
-  undefined and the drag blends smoothly back to Morison's.
+  undefined and the drag blends smoothly back to Morison's. With a [VIV FRAME](#viv-frame-optional)
+  row the axes and the blend take the ambient flow relative to the cable's filtered motion.
 - **`0 0 1` amplifies the in-line drag alone.** With an amplitude table's `CdAmp` (for example
   Chaplin et al. 2005, Eq. 4), the mean in-line drag of a vibrating cable rises while its
   cross-flow drag stays Morison's. A `CdAmp` without this row multiplies the whole normal drag,

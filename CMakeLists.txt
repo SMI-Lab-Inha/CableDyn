@@ -1356,6 +1356,13 @@ add_executable(test_viv_cf_damping_deck tests/test_viv_cf_damping_deck.f90)
 target_link_libraries(test_viv_cf_damping_deck PRIVATE cabledyn_core)
 add_test(NAME viv_cf_damping_deck COMMAND test_viv_cf_damping_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(viv_cf_damping_deck PROPERTIES LABELS "fortran;integration;dynamic;viv;driver")
+# The flow frame (VIV FRAME section) of the synchronisation model on a deck: a Tf 0 row as no
+# section, a cable towed through still water against the same cable held in a current, the frame
+# leaving the held cable's response on both cores, and the refusals.
+add_executable(test_viv_frame_deck tests/test_viv_frame_deck.f90)
+target_link_libraries(test_viv_frame_deck PRIVATE cabledyn_core)
+add_test(NAME viv_frame_deck COMMAND test_viv_frame_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(viv_frame_deck PROPERTIES LABELS "fortran;integration;dynamic;viv;driver")
 
 # Amplitude-dependent VIV coefficients on a deck (VIV AMPLITUDE section), both line kinds: the
 # identity table, the amplitude channel against the response, self-limiting, drag amplification
@@ -1384,6 +1391,14 @@ add_executable(test_hermite_viv_inline tests/test_hermite_viv_inline.f90)
 target_link_libraries(test_hermite_viv_inline PRIVATE cabledyn_core)
 add_test(NAME hermite_viv_inline COMMAND test_hermite_viv_inline)
 set_tests_properties(hermite_viv_inline PROPERTIES LABELS "fortran;dynamic;viv")
+
+# The flow frame of the synchronisation model (Set_VIV tf): a pipe moved through still water
+# against the same pipe held in the water moving the other way, with the amplitude tables and the
+# cross-flow damping; the refusals, the all-zero identity and the snapshot replay.
+add_executable(test_hermite_viv_frame tests/test_hermite_viv_frame.f90)
+target_link_libraries(test_hermite_viv_frame PRIVATE cabledyn_core)
+add_test(NAME hermite_viv_frame COMMAND test_hermite_viv_frame)
+set_tests_properties(hermite_viv_frame PROPERTIES LABELS "fortran;dynamic;viv")
 
 add_executable(test_hermite_load_power tests/test_hermite_load_power.f90)
 target_link_libraries(test_hermite_load_power PRIVATE cabledyn_core)
