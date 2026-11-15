@@ -1,0 +1,307 @@
+{
+  "source": "Trim, Braaten, Lie & Tognarelli (2005), Journal of Fluids and Structures 21(3), 335-361 (the rig, Sec. 2.1; Figs. 16 and 18); Fontaine, Marcollo, Vandiver, Triantafyllou, Larsen, Tognarelli, Constantinides & Oakley (2011), OMAE2011, Vol. 7, 511-522 (Table 1, the riser); Thorsen, Saevik & Larsen (2016), Journal of Fluids and Structures 61, 1-19 (Table 1, Eq. 1, Figs. 4, 7 and 8); Ulveseter, Thorsen, Saevik & Larsen (2019), Applied Ocean Research 90, 101856 (Tables 1 and 3, Sec. 4.1); Andersen, Saevik, Wu, Leira & Langseth (2024b), Applied Ocean Research 153, 104284 (Table 3); Ulveseter, Thorsen, Saevik & Larsen (2018), Marine Structures 60, 241-260 (Table 3); Chaplin, Bearman, Huera Huarte & Pattenden (2005), Journal of Fluids and Structures 21(1), 3-24 (Eq. 4)",
+  "doi": [
+    "10.1016/j.jfluidstructs.2005.07.014",
+    "10.1115/OMAE2011-49820",
+    "10.1016/j.jfluidstructs.2015.11.006",
+    "10.1016/j.apor.2019.101856",
+    "10.1016/j.apor.2024.104284",
+    "10.1016/j.marstruc.2018.04.001",
+    "10.1016/j.jfluidstructs.2005.04.010"
+  ],
+  "bibliographic_data": "volumes, issues and pages from Crossref (api.crossref.org), 2026-11-16",
+  "data_used": "riser: 38.00 m between universal joints, OD 27 mm, EI 598.8 N m^2, EA 8.19e6 N, 0.933 kg/m water-filled, mass ratio 1.62 (Fontaine et al. 2011, Table 1); tension 4-6 kN over the tests (Trim et al. 2005, Sec. 2.1); the maximum r.m.s. cross-flow strain of the 22 uniform-flow tests, fundamental and total, and Thorsen et al.'s simulation (Thorsen et al. 2016, Fig. 8a; the sheared panel is extracted but not compared); Thorsen et al.'s fitted Cv(y0/D) (Fig. 7); the spatial mean sigma/D, CF and IL, at 22 speeds (Trim et al. 2005, Fig. 16, bare riser, uniform flow); the peak frequency of the dominant displacement mode, CF and IL, at 0.3, 1.0, 1.5, 2.0 and 2.4 m/s (Fig. 18)",
+  "extraction": "Thorsen et al. (2016) Figs. 7 and 8 are vector graphics: extract_thorsen2016.py maps the plotted coordinates through the plot frames (axis ends at the tick labels: 0-2.5 m/s and 0-5e-4 for Fig. 8a; y0/D 0-1 and Cv 0-1.5 for Fig. 7); 22 points per series. Trim et al. (2005) Figs. 16 and 18 are raster images with overlapping markers: read by eye on 4x enlarged crops with a guide at every speed and every 0.01 / 1 Hz, drawn by digitise_trim2005.py after calibrating the axes on the panel frames and grid lines; +-0.01 in sigma/D (about +-0.02 where neighbouring markers overlap), +-0.3 Hz (+-0.5 Hz for CF at 2.0 m/s)",
+  "assumptions": "fresh water 1000 kg/m^3 (the mass ratio 1.62 implies 1006 kg/m^3); the rig as an axial spring in series with the riser, T0 4 kN in still water, k_ax 3.5 kN/m derived from the reported 4-6 kN range with Morison drag at Cd 1.2 at 2.4 m/s (not tuned to the response); the riser 5 m below the surface in 10 m of water (not given; the current is uniform); Ca 1; VIVrmsWindow 0.5 s",
+  "coefficients": {
+    "b1": "the generic set of the Delta Flume case, nothing fitted to the NDP tests: Cl 0.8, cF 0.18, dF 0.08, Cd 1.2; VIV ClX 0.85, alpha 0.15 (Ulveseter et al. 2018, Table 3); VIV AMPLITUDE Cv 0.8 with CdAmp = 1 + 2.3 s + 1.7 s^2, s = (A/D)/sqrt(2), at A/D 0-1.5 (Chaplin et al. 2005, Eq. 4); VIV DAMPING 0 0 1",
+    "and24b": "Andersen et al. (2024b), Table 3, cross-flow average of the per-case optima for the 22 sheared-flow NDP tests: Cl 1.28, cF 0.131, dF 0.066, Cd 1.16, Ca 1.0; their in-line set (Cv,x 1.09, f0,x 0.321, df,x 0.161) left out",
+    "uls19": "Ulveseter et al. (2019), Table 1, fitted by them to these uniform-flow tests (Sec. 4.1): Cd 1.2, CM 2, Cl 0.85, cF 0.144, dF 0.064; VIV ClX 0.75, alpha 0.15, Chh 1.5",
+    "th16": "Thorsen et al. (2016), fitted by them to the 22 uniform and 22 sheared NDP tests: VIV AMPLITUDE with the Fig. 7 Cv curve (thorsen2016_fig7_cv.csv), VIV DAMPING 0.31 0.89 0 (Eq. 1), band 0.18 +- 0.08 for the 0.10-0.26 range of Fig. 4; Cd 1.2",
+    "th16c": "th16 with VIV DAMPING 0.31 0.89 1 (Morison's linear cross-flow damping kept): a variant"
+  },
+  "CableDyn_commit": "5114299 (dev)",
+  "validation_date": "2026-11-16",
+  "executable_name": "cabledyn.exe",
+  "executable_sha256": "see summary.json",
+  "compiler": "GNU Fortran 16.2.0",
+  "build_type": "Release",
+  "platform": "Windows 11 x86-64",
+  "segments": 200,
+  "dt_s": 0.001,
+  "tmax_s": 25.0,
+  "statistics_after_s": 10.0,
+  "sensitivity": {
+    "note": "fundamental strain [-], dominant CF frequency [Hz], spatial-mean CF sigma/D and mean tension [N] at the given speeds, against response_comparison.csv; tmax_55: 55 s runs, statistics over 45 s",
+    "dt_0p0005": {
+      "b1": {
+        "1.0": {
+          "strain_fund": 0.00014677,
+          "f_cf_hz": 7.133,
+          "sigma_D_cf": 0.43,
+          "mean_tension_N": 4847.0
+        },
+        "2.4": {
+          "strain_fund": 0.00033949,
+          "f_cf_hz": 15.6,
+          "sigma_D_cf": 0.423,
+          "mean_tension_N": 9998.0
+        }
+      },
+      "and24b": {
+        "1.0": {
+          "strain_fund": 0.00012909,
+          "f_cf_hz": 5.333,
+          "sigma_D_cf": 0.631,
+          "mean_tension_N": 4334.0
+        },
+        "2.4": {
+          "strain_fund": 0.00023507,
+          "f_cf_hz": 11.4,
+          "sigma_D_cf": 0.713,
+          "mean_tension_N": 7530.0
+        }
+      },
+      "uls19": {
+        "1.0": {
+          "strain_fund": 0.00010147,
+          "f_cf_hz": 5.6,
+          "sigma_D_cf": 0.429,
+          "mean_tension_N": 4235.0
+        },
+        "2.4": {
+          "strain_fund": 0.00024059,
+          "f_cf_hz": 13.0,
+          "sigma_D_cf": 0.45,
+          "mean_tension_N": 6916.0
+        }
+      },
+      "th16": {
+        "1.0": {
+          "strain_fund": 0.00016306,
+          "f_cf_hz": 7.4,
+          "sigma_D_cf": 0.375,
+          "mean_tension_N": 4220.0
+        },
+        "2.4": {
+          "strain_fund": 0.00041467,
+          "f_cf_hz": 15.733,
+          "sigma_D_cf": 0.44,
+          "mean_tension_N": 6593.0
+        }
+      },
+      "th16c": {
+        "1.0": {
+          "strain_fund": 8.8266e-05,
+          "f_cf_hz": 6.0,
+          "sigma_D_cf": 0.303,
+          "mean_tension_N": 4191.0
+        },
+        "2.4": {
+          "strain_fund": 0.0001733,
+          "f_cf_hz": 12.6,
+          "sigma_D_cf": 0.319,
+          "mean_tension_N": 6414.0
+        }
+      }
+    },
+    "segments_400": {
+      "b1": {
+        "1.0": {
+          "strain_fund": 0.00014716,
+          "f_cf_hz": 7.133,
+          "sigma_D_cf": 0.427,
+          "mean_tension_N": 4850.0
+        },
+        "2.4": {
+          "strain_fund": 0.00023388,
+          "f_cf_hz": 14.667,
+          "sigma_D_cf": 0.442,
+          "mean_tension_N": 10065.0
+        }
+      },
+      "and24b": {
+        "1.0": {
+          "strain_fund": 0.00012922,
+          "f_cf_hz": 5.333,
+          "sigma_D_cf": 0.627,
+          "mean_tension_N": 4335.0
+        },
+        "2.4": {
+          "strain_fund": 0.0002604,
+          "f_cf_hz": 11.4,
+          "sigma_D_cf": 0.688,
+          "mean_tension_N": 7556.0
+        }
+      },
+      "uls19": {
+        "1.0": {
+          "strain_fund": 9.34e-05,
+          "f_cf_hz": 5.267,
+          "sigma_D_cf": 0.511,
+          "mean_tension_N": 4259.0
+        },
+        "2.4": {
+          "strain_fund": 0.0002489,
+          "f_cf_hz": 13.067,
+          "sigma_D_cf": 0.478,
+          "mean_tension_N": 6919.0
+        }
+      },
+      "th16": {
+        "1.0": {
+          "strain_fund": 0.00016249,
+          "f_cf_hz": 7.333,
+          "sigma_D_cf": 0.391,
+          "mean_tension_N": 4223.0
+        },
+        "2.4": {
+          "strain_fund": 0.00033892,
+          "f_cf_hz": 15.0,
+          "sigma_D_cf": 0.406,
+          "mean_tension_N": 6528.0
+        }
+      },
+      "th16c": {
+        "1.0": {
+          "strain_fund": 8.8439e-05,
+          "f_cf_hz": 5.933,
+          "sigma_D_cf": 0.301,
+          "mean_tension_N": 4191.0
+        },
+        "2.4": {
+          "strain_fund": 0.00019447,
+          "f_cf_hz": 12.667,
+          "sigma_D_cf": 0.322,
+          "mean_tension_N": 6419.0
+        }
+      }
+    },
+    "tmax_55": {
+      "b1": {
+        "2.4": {
+          "strain_fund": 0.00038197,
+          "f_cf_hz": 17.4,
+          "sigma_D_cf": 0.419,
+          "mean_tension_N": 9978.0
+        }
+      },
+      "and24b": {
+        "2.4": {
+          "strain_fund": 0.00024892,
+          "f_cf_hz": 10.578,
+          "sigma_D_cf": 0.737,
+          "mean_tension_N": 7496.0
+        }
+      },
+      "th16c": {
+        "2.4": {
+          "strain_fund": 0.00025585,
+          "f_cf_hz": 12.667,
+          "sigma_D_cf": 0.325,
+          "mean_tension_N": 6421.0
+        }
+      }
+    },
+    "tmax_55_dt_0p0005": {
+      "b1": {
+        "2.4": {
+          "strain_fund": 0.00034314,
+          "f_cf_hz": 15.556,
+          "sigma_D_cf": 0.423,
+          "mean_tension_N": 9992.0
+        }
+      },
+      "and24b": {
+        "2.4": {
+          "strain_fund": 0.00026704,
+          "f_cf_hz": 10.6,
+          "sigma_D_cf": 0.744,
+          "mean_tension_N": 7469.0
+        }
+      },
+      "th16c": {
+        "2.4": {
+          "strain_fund": 0.00023366,
+          "f_cf_hz": 12.689,
+          "sigma_D_cf": 0.325,
+          "mean_tension_N": 6420.0
+        }
+      }
+    },
+    "tmax_55_segments_400": {
+      "b1": {
+        "2.4": {
+          "strain_fund": 0.00028176,
+          "f_cf_hz": 14.667,
+          "sigma_D_cf": 0.44,
+          "mean_tension_N": 10009.0
+        }
+      },
+      "and24b": {
+        "2.4": {
+          "strain_fund": 0.00025743,
+          "f_cf_hz": 11.4,
+          "sigma_D_cf": 0.689,
+          "mean_tension_N": 7555.0
+        }
+      },
+      "th16c": {
+        "2.4": {
+          "strain_fund": 0.00019833,
+          "f_cf_hz": 12.667,
+          "sigma_D_cf": 0.323,
+          "mean_tension_N": 6420.0
+        }
+      }
+    },
+    "full_sweep_dt_0p0005": {
+      "b1": {
+        "strain_fund_ratio_median": 1.2497,
+        "strain_fund_rms_log_error": 0.2786,
+        "strain_fund_rms_log_error_U_ge_0p5": 0.2791,
+        "fD_U_cf_mean_at_fig18_speeds": 0.1871,
+        "sigma_D_cf_mean": 0.4298,
+        "sigma_D_il_mean": 0.0342
+      },
+      "and24b": {
+        "strain_fund_ratio_median": 1.0034,
+        "strain_fund_rms_log_error": 0.1908,
+        "strain_fund_rms_log_error_U_ge_0p5": 0.1865,
+        "fD_U_cf_mean_at_fig18_speeds": 0.1341,
+        "sigma_D_cf_mean": 0.689,
+        "sigma_D_il_mean": 0.0887
+      },
+      "uls19": {
+        "strain_fund_ratio_median": 0.894,
+        "strain_fund_rms_log_error": 0.1886,
+        "strain_fund_rms_log_error_U_ge_0p5": 0.1713,
+        "fD_U_cf_mean_at_fig18_speeds": 0.1436,
+        "sigma_D_cf_mean": 0.4577,
+        "sigma_D_il_mean": 0.1476
+      },
+      "th16": {
+        "strain_fund_ratio_median": 1.4101,
+        "strain_fund_rms_log_error": 0.3735,
+        "strain_fund_rms_log_error_U_ge_0p5": 0.389,
+        "fD_U_cf_mean_at_fig18_speeds": 0.1862,
+        "sigma_D_cf_mean": 0.3896,
+        "sigma_D_il_mean": 0.0815
+      },
+      "th16c": {
+        "strain_fund_ratio_median": 0.7444,
+        "strain_fund_rms_log_error": 0.381,
+        "strain_fund_rms_log_error_U_ge_0p5": 0.3928,
+        "fD_U_cf_mean_at_fig18_speeds": 0.1552,
+        "sigma_D_cf_mean": 0.3043,
+        "sigma_D_il_mean": 0.0262
+      }
+    },
+    "water_1025_U_ge_0p5_rms_log_error": {
+      "b1": 0.286,
+      "and24b": 0.179,
+      "th16": 0.369,
+      "th16c": 0.352
+    }
+  }
+}

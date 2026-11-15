@@ -84,6 +84,7 @@ article's methods, are compared in
 | **L3-C** | Chaplin Delta Flume riser, still-water natural frequencies | measured modes 1–7 at five tensions | mean error +1.87%, mean absolute 2.28%, largest 4.88% (34 of 35; one outlier reported) | full published table, no fitted parameter | Pass |
 | **L3-D** | Chaplin Delta Flume riser in a stepped current, blind-trial cases 1–9, cross-flow and in-line VIV | measured dominant mode, peak cross-flow amplitude, mean in-line displacement, curvature standard deviations | mode right in 5/9, within one in 9/9; mean in-line within ±17% in 7/9 (−25% to +34%); cross-flow amplitude −45% to +4%; cross-flow curvature −39% to +26% | generic coefficient set, no fitted parameter | Pass measured |
 | **L3-W** | SJTU steel catenary riser in 0.2 m/s current, cross-flow VIV | measured r.m.s. strain (25 stations) and dominant frequency | frequency 0.992 vs 1.00 Hz; max r.m.s. strain +7.3%, station mean +3.6% | published coefficient set, no fitted parameter | Pass |
+| **L3-N** | NDP 38 m high-mode riser in uniform flow, 0.3–2.4 m/s (22 tests), cross-flow VIV | measured maximum r.m.s. cross-flow strain, dominant frequency, spatial-mean σ/D | strain r.m.s. log error: Ulveseter et al. (2019) set 0.165, Andersen et al. (2024b) 0.186, generic set 0.283, Thorsen et al. (2016) 0.354 (their own simulation 0.187); f D/U 0.143 / 0.134 / 0.191 / 0.183 vs 0.143 measured | generic set blind; the other sets fitted by their authors to NDP tests (implementation check) | Pass measured |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
 | **L4-1** | Coupled platform + mooring | synthetic reference | bit-for-bit | — | Pass |
 | **L4-1b** | VolturnUS-S coupled platform + power cable | OpenFAST v5.0.0 (CompMooring 5 vs 3) | platform DOFs <0.6% (3-seed DLC-1.1); fairlead and anchor <0.001% static | <3% platform | Pass |
@@ -372,6 +373,32 @@ scripts, results, and source provenance are in
   mean over the 25 stations 3.6% above. The response has one r.m.s. peak more along the span than
   the test, as theirs, so the station-by-station ratio scatters. 400 elements and half the time step
   change the largest r.m.s. strain by 0.2% and 0.1%.
+
+- **L3-N NDP high-mode riser, cross-flow VIV in uniform flow**
+  ([Trim et al., 2005](https://cabledyn.readthedocs.io/en/latest/references.html#ref-trim2005);
+  [Thorsen et al., 2016](https://cabledyn.readthedocs.io/en/latest/references.html#ref-thorsen2016)):
+  the 38 m bare riser towed horizontally at the 22 uniform-flow speeds, 0.3–2.4 m/s, with the
+  rig's clump-weight tension as an axial spring in series (4 kN in still water, 3.5 kN/m from the
+  reported 4–6 kN range). Four coefficient sets on the same model, compared with the maximum
+  r.m.s. cross-flow strain of each test (Thorsen et al.'s Fig. 8, read from the vector figure), the
+  dominant frequency and the spatial-mean σ/D (Trim et al.'s Figs. 18 and 16, read by eye from
+  raster figures):
+  - the set Ulveseter et al. (2019) fitted to these tests matches every metric: strain r.m.s. log
+    error 0.165 (Thorsen et al.'s own fitted simulation 0.187), f D/U 0.143 as measured, σ/D
+    within 6% cross-flow and 1% in line, an implementation check of the synchronisation,
+    in-line and higher-harmonic forces;
+  - the cross-flow average Andersen et al. (2024b) fitted to the sheared-flow tests gives 0.186 at
+    f D/U 0.134, with σ/D 58% high;
+  - the generic set, blind, gives 0.283 with σ/D within 1%, at f D/U 0.191;
+  - Thorsen et al.'s own fitted curve and damping give 0.354 at f D/U 0.183; keeping Morison's
+    linear cross-flow damping moves the frequency to 0.158.
+
+  At single speeds the response converges at 1.0 m/s (half the time step and 400 elements move
+  the strain by at most 0.9% for four of the five sets, 7.4% for the fifth) but not at 2.4 m/s,
+  where the mix of neighbouring high modes moves the strain by up to 39%. The statistics over
+  the 22 speeds hold: the full sweep at half the time step gives r.m.s. log errors 0.279, 0.191,
+  0.189 and 0.373 for the generic, Andersen, Ulveseter and Thorsen sets, f D/U within 0.004 and
+  σ/D within 1.2%.
 
 ## L4 coupled OpenFAST
 

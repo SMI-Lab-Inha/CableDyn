@@ -294,6 +294,20 @@ Verification and validation references
   laboratory measurements of vortex-induced vibrations of a tension riser. *Journal of Fluids and
   Structures* **21**\ (1), 25–40. https://doi.org/10.1016/j.jfluidstructs.2005.05.016
 
+.. _ref-trim2005:
+
+- **Trim, A. D., Braaten, H., Lie, H. & Tognarelli, M. A. (2005).** Experimental investigation
+  of vortex-induced vibration of long marine risers. *Journal of Fluids and Structures*
+  **21**\ (3), 335–361. https://doi.org/10.1016/j.jfluidstructs.2005.07.014
+
+.. _ref-fontaine2011:
+
+- **Fontaine, E., Marcollo, H., Vandiver, K., Triantafyllou, M., Larsen, C., Tognarelli, M.,
+  Constantinides, Y. & Oakley, O. (2011).** Reliability based factors of safety for VIV fatigue
+  using NDP riser high mode VIV tests. *ASME 2011 30th International Conference on Ocean,
+  Offshore and Arctic Engineering (OMAE2011)*, Volume 7: CFD and VIV; Offshore Geotechnics,
+  511–522. https://doi.org/10.1115/OMAE2011-49820
+
 Comparison codes
 ----------------
 
