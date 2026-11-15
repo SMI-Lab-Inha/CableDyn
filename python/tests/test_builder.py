@@ -1155,7 +1155,7 @@ def test_torsional_damping_round_trips_in_the_gj_column(tmp_path: Path) -> None:
     assert next(t for t in loaded.line_types if t.name == "cable").gj == (1.0e4, 0.0, -0.02)
 
 
-@pytest.mark.parametrize("ei", [(1.0e4, 250.0), (1.0e4, -0.02, 1.5)])
+@pytest.mark.parametrize("ei", [(1.0e4, 250.0), (1.0e4, -0.02, 1.5), (1.0e4, -0.02, 0.5, 2.0)])
 def test_bending_damping_round_trips_in_the_ei_column(
     tmp_path: Path, ei: tuple[float, ...]
 ) -> None:
@@ -1232,8 +1232,10 @@ def test_no_viv_section_without_inline_viv(tmp_path: Path) -> None:
 
 def test_bending_damping_ei_tuple_length_is_checked(tmp_path: Path) -> None:
     model = _chain_model(tmp_path)
-    model.add_line_type("cable", diam=0.2, mass=40.0, ea=5.0e8, ei=(1.0e4, 1.0, 2.0, 3.0))
-    with pytest.raises(ValueError, match=r"ei is EI, \(EI, Bb\) or \(EI, -zeta, f\)"):
+    model.add_line_type("cable", diam=0.2, mass=40.0, ea=5.0e8, ei=(1.0e4, -0.02, 1.0, 2.0, 3.0))
+    with pytest.raises(
+        ValueError, match=r"ei is EI, \(EI, Bb\), \(EI, -zeta, f\) or \(EI, -zeta, f1, f2\)"
+    ):
         model.to_text()
 
 

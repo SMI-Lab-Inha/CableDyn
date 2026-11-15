@@ -45,6 +45,8 @@ MODULE CableDyn_HermiteCable
   PUBLIC :: CD_HermiteCable_Gauss_Rule
   PUBLIC :: CD_HermiteCable_Dry_Buoyancy
   PUBLIC :: CD_HermiteCable_Bending_Damping
+  PUBLIC :: CD_HermiteCable_Mass_Damping
+  PUBLIC :: CD_HermiteCable_Rayleigh_Pair
   INTEGER, PARAMETER, PUBLIC :: CD_HCABLE_OK = 0, CD_HCABLE_BADINPUT = 1
 
   INTEGER, PARAMETER :: NG = 4                       !! default Gauss points per element
@@ -614,6 +616,129 @@ CONTAINS
     END SUBROUTINE fail
 
   END SUBROUTINE CD_HermiteCable_Bending_Damping
+
+  SUBROUTINE CD_HermiteCable_Mass_Damping(qr, vr, L, cm, fdamp, Kq, Kv, ErrStat, ErrMsg)
+    !! Mass-proportional (Rayleigh alpha) transverse damping of one cubic-Hermite element: the
+    !! dissipation function
+    !!   psi = integral_0^L 1/2 cm |(I - t t^T) v|^2 ds,   cm = alpha rho_a [N s/m^2],
+    !! with v = dr/dt the interpolated velocity (the shape functions of the consistent mass), t =
+    !! a/|a| the unit tangent (a = dr/ds) and s the unstretched arc length. The force is alpha
+    !! times the line's own mass on the velocity normal to the tangent: on a straight element it is
+    !! alpha M v in the two transverse directions (M the consistent mass, CD_HermiteCable_Mass) and
+    !! zero along the axis, so a transverse mode whose mass is the line's own has the damping
+    !! ratio alpha/(2 omega) and axial sliding is not damped. The velocity is absolute: a rigid
+    !! transverse translation or a pendulum swing of the line is damped as well.
+    !!
+    !! fdamp = d psi / d v is an INTERNAL generalised force (v . fdamp = 2 psi >= 0); Kq = d fdamp/dq
+    !! and Kv = d fdamp/dv are the exact Jacobians (Kv symmetric, Kq not). qr and vr are the element
+    !! DOFs [r1, m1, r2, m2] and their rates; L the unstretched length; cm >= 0. Four-point Gauss
+    !! quadrature, as the consistent mass.
+    REAL(wp), INTENT(IN) :: qr(12), vr(12), L, cm
+    REAL(wp), INTENT(OUT) :: fdamp(12)
+    REAL(wp), INTENT(OUT), OPTIONAL :: Kq(12, 12), Kv(12, 12)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    REAL(wp) :: gp(MAX_NG), gw(MAX_NG), H(4), dH(4), ddH(4), b1(4), av(3), vv(3), tv(3), un(3)
+    REAL(wp) :: Pm(3, 3), Dm(3, 3), s2, sp, st, wc, wkm
+    INTEGER :: qg, c, dd, kn, mn, ic, jc
+    INTEGER, PARAMETER :: sd(4) = [0, 3, 6, 9]
+
+    ErrStat = CD_HCABLE_OK
+    ErrMsg = ''
+    fdamp = CD_ZERO
+    IF (PRESENT(Kq)) Kq = CD_ZERO
+    IF (PRESENT(Kv)) Kv = CD_ZERO
+    IF (.NOT. CD_All_Finite(qr) .OR. .NOT. CD_All_Finite(vr) .OR. .NOT. CD_Is_Finite(L) .OR. &
+        .NOT. CD_Is_Finite(cm)) THEN
+      CALL fail('inputs must be finite'); RETURN
+    END IF
+    IF (L <= GEOM_TOL) THEN
+      CALL fail('element length must be positive'); RETURN
+    END IF
+    IF (cm < CD_ZERO) THEN
+      CALL fail('the damping coefficient must be non-negative'); RETURN
+    END IF
+    IF (.NOT. (cm > CD_ZERO)) RETURN
+
+    CALL CD_HermiteCable_Gauss_Rule(NG, gp, gw)
+    DO qg = 1, NG
+      CALL hermite_shapes(gp(qg), L, H, dH, ddH)
+      b1 = dH/L
+      DO c = 1, 3
+        av(c) = SUM(b1*qr(sd + c)); vv(c) = SUM(H*vr(sd + c))
+      END DO
+      s2 = SUM(av*av)
+      IF (s2 <= GEOM_TOL*GEOM_TOL) THEN
+        CALL fail('degenerate centreline: |dr/ds| ~ 0 at a Gauss point'); RETURN
+      END IF
+      sp = SQRT(s2)
+      tv = av/sp
+      st = SUM(tv*vv)
+      un = vv - st*tv                          ! (I - t t^T) v
+      wc = gw(qg)*L*cm
+      DO kn = 1, 4
+        DO c = 1, 3
+          fdamp(sd(kn) + c) = fdamp(sd(kn) + c) + wc*H(kn)*un(c)
+        END DO
+      END DO
+      IF (.NOT. (PRESENT(Kq) .OR. PRESENT(Kv))) CYCLE
+      ! P = I - t t^T; D(c, k) = d (P v)_c / d a_k = -((I - t t^T)_ck (t . v) + t_c (P v)_k)/|a|
+      DO dd = 1, 3
+        DO c = 1, 3
+          Pm(c, dd) = -tv(c)*tv(dd)
+        END DO
+        Pm(dd, dd) = Pm(dd, dd) + CD_ONE
+      END DO
+      DO dd = 1, 3
+        DO c = 1, 3
+          Dm(c, dd) = -(Pm(c, dd)*st + tv(c)*un(dd))/sp
+        END DO
+      END DO
+      DO mn = 1, 4
+        DO kn = 1, 4
+          wkm = wc*H(kn)
+          DO dd = 1, 3
+            jc = sd(mn) + dd
+            DO c = 1, 3
+              ic = sd(kn) + c
+              IF (PRESENT(Kv)) Kv(ic, jc) = Kv(ic, jc) + wkm*H(mn)*Pm(c, dd)
+              IF (PRESENT(Kq)) Kq(ic, jc) = Kq(ic, jc) + wkm*b1(mn)*Dm(c, dd)
+            END DO
+          END DO
+        END DO
+      END DO
+    END DO
+    IF (.NOT. CD_All_Finite(fdamp)) THEN
+      CALL fail('non-finite mass damping force'); RETURN
+    END IF
+
+  CONTAINS
+
+    SUBROUTINE fail(msg)
+      CHARACTER(*), INTENT(IN) :: msg
+      ErrStat = CD_HCABLE_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Mass_Damping: '//msg
+      fdamp = CD_ZERO
+      IF (PRESENT(Kq)) Kq = CD_ZERO
+      IF (PRESENT(Kv)) Kv = CD_ZERO
+    END SUBROUTINE fail
+
+  END SUBROUTINE CD_HermiteCable_Mass_Damping
+
+  PURE SUBROUTINE CD_HermiteCable_Rayleigh_Pair(zeta, f1, f2, EI, Bb, alpha)
+    !! The bending damping Bb [N m^2 s] and the mass-proportional coefficient alpha [1/s] that give
+    !! the damping ratio zeta(omega) = alpha/(2 omega) + (Bb/EI) omega/2 the value zeta at the two
+    !! frequencies f1 and f2 [Hz] (omega = 2 pi f): Bb = zeta EI/(pi (f1 + f2)) and
+    !! alpha = 4 pi zeta f1 f2/(f1 + f2). Between f1 and f2 the ratio is lower, at least
+    !! 2 zeta sqrt(f1 f2)/(f1 + f2) at sqrt(f1 f2); outside it is higher. The caller checks
+    !! 0 < zeta and f1, f2 > 0.
+    REAL(wp), INTENT(IN) :: zeta, f1, f2, EI
+    REAL(wp), INTENT(OUT) :: Bb, alpha
+    REAL(wp), PARAMETER :: PI_L = 3.14159265358979323846_wp
+    Bb = zeta*EI/(PI_L*(f1 + f2))
+    alpha = 4.0_wp*PI_L*zeta*f1*f2/(f1 + f2)
+  END SUBROUTINE CD_HermiteCable_Rayleigh_Pair
 
   SUBROUTINE CD_HermiteCable_Mass(rho_a, L, M, ErrStat, ErrMsg)
     !! Consistent (kinetic-energy) mass matrix of the cubic-Hermite bending-cable element.

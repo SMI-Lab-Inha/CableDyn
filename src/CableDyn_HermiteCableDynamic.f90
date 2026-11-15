@@ -62,7 +62,7 @@ MODULE CableDyn_HermiteCableDynamic
                                    CD_HermiteCable_Gauss_Rule, &
                                    CD_HermiteCable_Axial_Resultant, &
                                    CD_HermiteCable_Axial_Strain_Lower_Bound, CD_HermiteCable_Dry_Buoyancy, &
-                                   CD_HermiteCable_Bending_Damping, &
+                                   CD_HermiteCable_Bending_Damping, CD_HermiteCable_Mass_Damping, &
                                    CD_HCABLE_OK
   USE CableDyn_Linalg, ONLY: CD_Factor_Banded, CD_Solve_Factored_Banded, CD_LINALG_OK
   USE CableDyn_VIV, ONLY: CD_VIV_Lift_Per_Length, CD_VIV_Crossflow_Along, CD_VIV_Phase_Rate, CD_VIV_Mean_Square, &
@@ -99,6 +99,7 @@ MODULE CableDyn_HermiteCableDynamic
   PUBLIC :: CD_HermiteCable_Dyn_Set_Drag
   PUBLIC :: CD_HermiteCable_Dyn_Set_Axial_Damping
   PUBLIC :: CD_HermiteCable_Dyn_Set_Bending_Damping
+  PUBLIC :: CD_HermiteCable_Dyn_Set_Mass_Damping
   PUBLIC :: CD_HermiteCable_Dyn_Set_EndConnection
   PUBLIC :: CD_HermiteCable_Dyn_Set_Torsion
   PUBLIC :: CD_HermiteCable_Dyn_Torsion_State
@@ -277,6 +278,11 @@ MODULE CableDyn_HermiteCableDynamic
     ! element-load column 2 and the Kvel tangent). Off by default.
     LOGICAL :: has_bend_damping = .FALSE.
     REAL(wp), ALLOCATABLE :: Bb(:)
+    ! Optional mass-proportional (Rayleigh alpha) transverse damping (CD_HermiteCable_Mass_Damping):
+    ! ray_alpha [1/s] per element, the force ray_alpha rho_a on the velocity normal to the tangent.
+    ! It joins the structural-damping load (not its bending part). No state. Off by default.
+    LOGICAL :: has_mass_damping = .FALSE.
+    REAL(wp), ALLOCATABLE :: ray_alpha(:)
     ! Active line control (CD_HermiteCable_Dyn_Set_SegmentLength): a host changes the
     ! unstretched lengths l0 of chosen elements between steps. has_ctrl is set by the first
     ! change; from then on l0_dot(ne) holds the unstretched-length rate of every element
@@ -2292,7 +2298,7 @@ CONTAINS
     DO e = 1, model%ne
       qe(1:6) = model%q(6*(e - 1) + 1:6*e); qe(7:12) = model%q(6*e + 1:6*(e + 1))
       ve(1:6) = model%v(6*(e - 1) + 1:6*e); ve(7:12) = model%v(6*e + 1:6*(e + 1))
-      IF (model%has_axial_damping .OR. model%has_bend_damping) THEN
+      IF (model%has_axial_damping .OR. model%has_bend_damping .OR. model%has_mass_damping) THEN
         ! an internal force: the load on the nodes is -fe
         CALL structural_damping_element(model, e, qe, ve, fe, ErrStat, ErrMsg)
         IF (ErrStat /= CD_HCDYN_OK) THEN
@@ -4067,14 +4073,80 @@ CONTAINS
     END SUBROUTINE fail
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Bending_Damping
 
+  SUBROUTINE CD_HermiteCable_Dyn_Set_Mass_Damping(model, alpha, ErrStat, ErrMsg)
+    !! Install the per-element mass-proportional (Rayleigh alpha) coefficients alpha [1/s]: the
+    !! damping force alpha rho_a on the velocity normal to the tangent (CD_HermiteCable_Mass_Damping),
+    !! the alpha M part of a Rayleigh damping alpha M + beta K beside the bending damping Bb = beta EI.
+    !! An all-zero array disables the contribution exactly. Transactional, and it refreshes the
+    !! consistent acceleration, as CD_HermiteCable_Dyn_Set_Bending_Damping.
+    TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    REAL(wp), INTENT(IN) :: alpha(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    REAL(wp), ALLOCATABLE :: old_alpha(:), new_alpha(:), old_a(:)
+    LOGICAL :: old_has
+    INTEGER :: es, istat
+    CHARACTER(1024) :: em
+
+    ErrStat = CD_HCDYN_OK
+    model%rc_epoch = model%rc_epoch + 1
+    model%fc_valid = .FALSE.
+    model%fc_clears = model%fc_clears + 1
+    model%tr_valid = .FALSE.
+    ErrMsg = ''
+    IF (.NOT. model%initialized) THEN
+      CALL fail('model not initialised'); RETURN
+    END IF
+    IF (SIZE(alpha) /= model%ne) THEN
+      CALL fail('alpha must have length ne'); RETURN
+    END IF
+    IF (.NOT. CD_All_Finite(alpha) .OR. ANY(alpha < CD_ZERO)) THEN
+      CALL fail('alpha must be finite and non-negative'); RETURN
+    END IF
+
+    ALLOCATE (new_alpha(model%ne), old_a(model%ndof), STAT=istat)
+    IF (istat /= 0) THEN
+      CALL fail('workspace allocation failed'); RETURN
+    END IF
+    new_alpha = alpha
+    old_a = model%a
+    old_has = model%has_mass_damping
+    CALL MOVE_ALLOC(model%ray_alpha, old_alpha)
+    IF (ANY(new_alpha > CD_ZERO)) THEN
+      CALL MOVE_ALLOC(new_alpha, model%ray_alpha)
+      model%has_mass_damping = .TRUE.
+    ELSE
+      model%has_mass_damping = .FALSE.
+    END IF
+
+    CALL solve_consistent_acceleration(model, es, em)
+    IF (es /= CD_HCDYN_OK) THEN
+      IF (ALLOCATED(model%ray_alpha)) DEALLOCATE (model%ray_alpha)
+      CALL MOVE_ALLOC(old_alpha, model%ray_alpha)
+      model%has_mass_damping = old_has
+      model%a = old_a
+      CALL fail('initial acceleration refresh failed: '//TRIM(em)); RETURN
+    END IF
+
+  CONTAINS
+    SUBROUTINE fail(msg)
+      CHARACTER(*), INTENT(IN) :: msg
+      ErrStat = CD_HCDYN_BADINPUT
+      ErrMsg = 'CD_HermiteCable_Dyn_Set_Mass_Damping: '//msg
+    END SUBROUTINE fail
+  END SUBROUTINE CD_HermiteCable_Dyn_Set_Mass_Damping
+
   SUBROUTINE structural_damping_element(model, e, qe, ve, fdamp, ErrStat, ErrMsg, kdq, kdv, fixed_length, &
                                         fbend)
-    !! The structural (Kelvin-Voigt) damping load of element e: the axial dashpot (BA, with the
-    !! controlled-length rate) and the bending dashpot (Bb), summed, as an internal generalised
-    !! force, with their exact Jacobians kdq = d/dq, kdv = d/dv when requested. Without bending
-    !! damping the axial kernel's output is returned as it stands (bit for bit). Under active line
-    !! control both rates include the controlled-length rate l0_dot; fixed_length = .TRUE. leaves it
-    !! out (the node recovery's form). fbend (optional) returns the bending part of fdamp alone.
+    !! The structural damping load of element e: the axial dashpot (BA, with the controlled-length
+    !! rate), the bending dashpot (Bb) and the mass-proportional transverse damping (ray_alpha),
+    !! summed in that order, as an internal generalised force, with their exact Jacobians
+    !! kdq = d/dq, kdv = d/dv when requested. Without bending and mass damping the axial kernel's
+    !! output is returned as it stands (bit for bit). Under active line control the axial and
+    !! bending rates include the controlled-length rate l0_dot; fixed_length = .TRUE. leaves it out
+    !! (the node recovery's form). The mass damping takes the interpolated velocity, as the inertia.
+    !! fbend (optional) returns the bending part of fdamp alone.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: e
     REAL(wp), INTENT(IN) :: qe(12), ve(12)
@@ -4087,6 +4159,7 @@ CONTAINS
     REAL(wp) :: fb(12), kbq(12, 12), kbv(12, 12)
     LOGICAL :: want, ctrl
     INTEGER :: es
+    CHARACTER(160) :: emk
     want = PRESENT(kdq) .AND. PRESENT(kdv)
     ctrl = model%has_ctrl
     IF (PRESENT(fixed_length)) ctrl = ctrl .AND. .NOT. fixed_length
@@ -4114,26 +4187,47 @@ CONTAINS
       END IF
       IF (ErrStat /= CD_HCDYN_OK) RETURN
     END IF
-    IF (.NOT. model%has_bend_damping) RETURN
-    IF (.NOT. (model%Bb(e) > CD_ZERO)) RETURN
-    IF (want .AND. ctrl) THEN
-      CALL CD_HermiteCable_Bending_Damping(qe, ve, model%l0(e), model%Bb(e), fb, kbq, kbv, es, ErrMsg, &
-                                           quadrature_order=model%bending_quadrature_order, l0_dot=model%l0_dot(e))
-    ELSE IF (want) THEN
-      CALL CD_HermiteCable_Bending_Damping(qe, ve, model%l0(e), model%Bb(e), fb, kbq, kbv, es, ErrMsg, &
-                                           quadrature_order=model%bending_quadrature_order)
-    ELSE IF (ctrl) THEN
-      CALL CD_HermiteCable_Bending_Damping(qe, ve, model%l0(e), model%Bb(e), fb, ErrStat=es, ErrMsg=ErrMsg, &
-                                           quadrature_order=model%bending_quadrature_order, l0_dot=model%l0_dot(e))
+    IF (model%has_bend_damping) THEN
+      IF (model%Bb(e) > CD_ZERO) THEN
+        IF (want .AND. ctrl) THEN
+          CALL CD_HermiteCable_Bending_Damping(qe, ve, model%l0(e), model%Bb(e), fb, kbq, kbv, es, ErrMsg, &
+                                               quadrature_order=model%bending_quadrature_order, &
+                                               l0_dot=model%l0_dot(e))
+        ELSE IF (want) THEN
+          CALL CD_HermiteCable_Bending_Damping(qe, ve, model%l0(e), model%Bb(e), fb, kbq, kbv, es, ErrMsg, &
+                                               quadrature_order=model%bending_quadrature_order)
+        ELSE IF (ctrl) THEN
+          CALL CD_HermiteCable_Bending_Damping(qe, ve, model%l0(e), model%Bb(e), fb, ErrStat=es, ErrMsg=ErrMsg, &
+                                               quadrature_order=model%bending_quadrature_order, &
+                                               l0_dot=model%l0_dot(e))
+        ELSE
+          CALL CD_HermiteCable_Bending_Damping(qe, ve, model%l0(e), model%Bb(e), fb, ErrStat=es, ErrMsg=ErrMsg, &
+                                               quadrature_order=model%bending_quadrature_order)
+        END IF
+        IF (es /= CD_HCABLE_OK) THEN
+          ErrStat = CD_HCDYN_NOCONVERGE; RETURN
+        END IF
+        fdamp = fdamp + fb
+        IF (PRESENT(fbend)) fbend = fb
+        IF (want) THEN
+          kdq = kdq + kbq; kdv = kdv + kbv
+        END IF
+      END IF
+    END IF
+    IF (.NOT. model%has_mass_damping) RETURN
+    IF (.NOT. (model%ray_alpha(e) > CD_ZERO)) RETURN
+    ! alpha times the line's own mass rho_a: a transverse mode of the bare cable has alpha/(2 omega)
+    IF (want) THEN
+      CALL CD_HermiteCable_Mass_Damping(qe, ve, model%l0(e), model%ray_alpha(e)*model%rho_a(e), fb, kbq, kbv, &
+                                        es, emk)
     ELSE
-      CALL CD_HermiteCable_Bending_Damping(qe, ve, model%l0(e), model%Bb(e), fb, ErrStat=es, ErrMsg=ErrMsg, &
-                                           quadrature_order=model%bending_quadrature_order)
+      CALL CD_HermiteCable_Mass_Damping(qe, ve, model%l0(e), model%ray_alpha(e)*model%rho_a(e), fb, ErrStat=es, &
+                                        ErrMsg=emk)
     END IF
     IF (es /= CD_HCABLE_OK) THEN
-      ErrStat = CD_HCDYN_NOCONVERGE; RETURN
+      ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = TRIM(emk); RETURN
     END IF
     fdamp = fdamp + fb
-    IF (PRESENT(fbend)) fbend = fb
     IF (want) THEN
       kdq = kdq + kbq; kdv = kdv + kbv
     END IF
@@ -7836,7 +7930,7 @@ CONTAINS
       ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_End_Force: '//TRIM(em2); RETURN
     END IF
     r3 = fe(i0 + 1:i0 + 3)
-    IF (model%has_axial_damping .OR. model%has_bend_damping) THEN
+    IF (model%has_axial_damping .OR. model%has_bend_damping .OR. model%has_mass_damping) THEN
       CALL structural_damping_element(model, e, qe, ve, fdamp, es, em2)
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'CD_HermiteCable_Dyn_End_Force: '//TRIM(em2); RETURN
@@ -8750,7 +8844,7 @@ CONTAINS
                                  bending_quadrature_order=model%bending_quadrature_order)
     IF (es /= CD_HCABLE_OK) GOTO 900
     g = fe
-    IF (model%has_axial_damping .OR. model%has_bend_damping) THEN
+    IF (model%has_axial_damping .OR. model%has_bend_damping .OR. model%has_mass_damping) THEN
       CALL structural_damping_element(model, e, qe, ve, fx, es, em2, fixed_length=.TRUE., fbend=fbd)
       IF (es /= CD_HCDYN_OK) GOTO 900
       g = g + fx
@@ -9668,6 +9762,8 @@ CONTAINS
     model%has_axial_damping = .FALSE.
     IF (ALLOCATED(model%Bb)) DEALLOCATE (model%Bb)
     model%has_bend_damping = .FALSE.
+    IF (ALLOCATED(model%ray_alpha)) DEALLOCATE (model%ray_alpha)
+    model%has_mass_damping = .FALSE.
     IF (ALLOCATED(model%trib)) DEALLOCATE (model%trib)
     IF (ALLOCATED(model%contact_kn)) DEALLOCATE (model%contact_kn)
     IF (ALLOCATED(model%contact_cn)) DEALLOCATE (model%contact_cn)
@@ -10102,7 +10198,8 @@ CONTAINS
     CALL asm_mark(HC_ASM_CONTACT, asm_t)
     ! Scatter the element-private hydrodynamic tangents in the same phase and element
     ! order as the serial formulation, retaining its floating-point accumulation order.
-    IF (tangent_only .AND. (model%has_drag .OR. model%has_axial_damping .OR. model%has_bend_damping)) THEN
+    IF (tangent_only .AND. (model%has_drag .OR. model%has_axial_damping .OR. model%has_bend_damping .OR. &
+                            model%has_mass_damping)) THEN
       DO e = 1, ne
         CALL scatter12_band(Kb, model%ws_elem_Kdrag(:, :, e), e)
         CALL scatter12_band(Kvb, model%ws_elem_Kv(:, :, e), e)
@@ -10122,7 +10219,7 @@ CONTAINS
     CALL asm_mark(HC_ASM_SCATTER, asm_t)
     ! Axial Kelvin-Voigt damping is an internal constitutive force. It uses the same
     ! reference-arc Hermite interpolation and axial quadrature as the elastic resultant.
-    IF ((model%has_axial_damping .OR. model%has_bend_damping) .AND. .NOT. tangent_only) THEN
+    IF ((model%has_axial_damping .OR. model%has_bend_damping .OR. model%has_mass_damping) .AND. .NOT. tangent_only) THEN
       DO e = e_lo, e_hi
         IF (kept) THEN
           DO a = 1, 12
@@ -11719,7 +11816,7 @@ CONTAINS
       ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'element: '//TRIM(em); RETURN
     END IF
 
-    IF (model%has_axial_damping .OR. model%has_bend_damping) THEN
+    IF (model%has_axial_damping .OR. model%has_bend_damping .OR. model%has_mass_damping) THEN
       CALL structural_damping_element(model, e, qe, ve, fload, es, em, djq, djv)
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = TRIM(em); RETURN

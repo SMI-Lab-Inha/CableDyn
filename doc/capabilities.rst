@@ -119,6 +119,11 @@ Line and constitutive capability
      - a bending Kelvin–Voigt damping on the curvature rate (stiffness-proportional in ``EI``;
        a mode is damped in its bending share), on every dynamic route that carries the cable,
        beside the axial (``BA``) and torsional (``GJ|K|Bt``) damping (:doc:`theory`)
+   * - Rayleigh damping of finite-EI cables (``EI|-zeta|f1|f2``)
+     - Supported
+     - the bending damping plus a mass-proportional transverse damping ``alpha m`` on the
+       velocity normal to the tangent, holding a damping ratio at two frequencies; absolute
+       velocity, so rigid transverse and pendulum motion is damped too (:doc:`theory`)
    * - Hockling loops, nonlinear cross-section laws
      - Not provided
      - the buckling onset and the post-buckled shape are computed, but a loop that closes on

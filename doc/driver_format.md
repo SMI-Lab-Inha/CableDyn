@@ -244,7 +244,7 @@ Inside OUTPUTS, a row whose first token is `END` also closes the channel list.
 | `MassDenInAir` | dry mass per unstretched metre [kg/m] | submerged weight = (m − ρ_w·πd²/4)·g; its magnitude at most 1e6 where used |
 | `EA` | axial stiffness [N] | linear (T = EA·ε); at least 1e-3 and at most 1e15 where used; see the viscoelastic and Syrope forms below |
 | `BA/-zeta` | axial damping: ≥ 0 is BA [N·s], < 0 is −ζ (damping ratio): by default (MoorDyn's convention) of each segment, BA = ζ L0 √(EA m) per element, which damps the line's first axial mode at about ζ π/(2N) on N elements and so depends on the mesh (a run notes the ratio); under `mode1 axialDampingRatio` of the line's first axial mode, on any mesh (see the OPTIONS table) | active in EI = 0 and finite-EI dynamics; ignored in a static-only run |
-| `EI` | bending stiffness [N·m²]; `EI|Bb` or `EI|-zeta|f` adds bending damping (below) | finite and ≥ 0; see [EI routing](#ei-routing) |
+| `EI` | bending stiffness [N·m²]; `EI|Bb` or `EI|-zeta|f` adds bending damping, `EI|-zeta|f1|f2` Rayleigh damping (below) | finite and ≥ 0; see [EI routing](#ei-routing) |
 | `Cd_n`, `Cd_t` | normal / tangential drag coefficients | used by EI = 0 dynamic current and Airy-wave runs |
 | `Ca_n`, `Ca_t` | normal / tangential added-mass coefficients | used by EI = 0 dynamic Froude–Krylov and added-mass runs |
 
@@ -294,6 +294,17 @@ tension `T`. `EI|-zeta|f` gives it as the damping ratio `0 < ζ < 1` of a pure b
 frequency `f` [Hz], `Bb = ζ EI/(π f)`, set once per line type (it does not depend on the mesh).
 `EI|0` is the plain `EI`. It needs `EI > 0` and acts in the dynamics only (a static solve has no
 rates).
+
+**Rayleigh damping.** `EI|-zeta|f1|f2` gives the ratio `0 < ζ < 1` at two frequencies `f1` and `f2`
+[Hz]: beside the bending damping `Bb = ζ EI/(π (f1 + f2))` it adds a mass-proportional transverse
+damping `α = 4π ζ f1 f2/(f1 + f2)` [1/s], the force `α m` (`m` the line's mass per metre) on the
+velocity normal to the cable's tangent (see [Mass-proportional damping](theory.rst)). A mode then
+has `ζ(ω) = α/(2ω) + ω Bb/(2 EI) · EI k²/(EI k² + T)`: `ζ` at `f1` and `f2` for a mode whose
+stiffness is all bending, less between them and more outside. In water the `α` share falls with
+the added mass, `m/(m + m_a)`. The velocity is absolute, so the term also damps the rigid
+transverse motion and pendulum swing of a span, increasingly below `f1` (`α/(2ω)`): set `f1` at
+the lowest frequency of interest. It needs `EI > 0`, is set once per line type and acts in the
+dynamics only.
 
 **Cross-flow VIV columns (MoorDyn v2).** A 10-column row may end with `Cl` (11 columns) or
 `Cl dF cF` (13 columns), and a 14-column row likewise (15 or 17 columns, so a line restrained in
@@ -1924,7 +1935,7 @@ bending moment. None of these channels is mandatory.
 | `Twist<L>` | line L total twist `Phi − Theta = M C`, end-spring windup included; on a line free at one end the twist of its elements, the free end's turn. Only on a line solved in torsion | deg |
 | `VIVPow<L>` | line L power of the VIV loads (cross-flow lift, and the in-line force of a `VIV` section row) at the committed state, positive into the line ([Outputs](outputs.rst)); 0 in static runs | W |
 | `DragPow<L>` | line L power of the Morison drag (and, on a finite-EI line, its ATTACHMENTS' drag) | W |
-| `DampPow<L>` | line L power of the structural damping (`BA`, and `EI|Bb` on a finite-EI line); never positive | W |
+| `DampPow<L>` | line L power of the structural damping (`BA`, and `EI|Bb` and the mass-proportional part of `EI|-zeta|f1|f2` on a finite-EI line); never positive | W |
 | `VIVPow<L>N<J>`, `DragPow<L>N<J>`, `DampPow<L>N<J>` | the same per unit unstretched length about node J (node J's share: half of each of its elements' power and its own node loads', over half their unstretched length) | W/m |
 | `VIVAmp<L>N<J>` | line L smoothed cross-flow amplitude estimate at node J (Thorsen et al. 2016, Eq. 9), which a [VIV AMPLITUDE](#viv-amplitude-optional) table reads; only on a line with such a table; 0 at a node without VIV | m |
 

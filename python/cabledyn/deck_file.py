@@ -4195,7 +4195,7 @@ class DeckFile:
                 if len(row.tokens) >= 14 and index == 7:
                     continue  # the GJ column, GJ, GJ|K or GJ|K|Bt, is read below
                 if index == 5:
-                    continue  # the EI column, EI, EI|Bb or EI|-zeta|f, is read below
+                    continue  # the EI column (EI, EI|Bb, EI|-zeta|f, EI|-zeta|f1|f2) is read below
                 numeric(row.tokens[index], row, f"LINE TYPES column {index + 1}")
             ea_parts = row.tokens[3].split("|")
             ba_parts = row.tokens[4].split("|")
@@ -4257,12 +4257,13 @@ class DeckFile:
                     f"{self._at(row)}: LINE TYPES drag and added-mass coefficients "
                     "(Cd_n Cd_t Ca_n Ca_t) must be non-negative"
                 )
-            # native parse_ei_column: EI, EI|Bb (bending damping, N m^2 s) or EI|-zeta|f
+            # native parse_ei_column: EI, EI|Bb (bending damping, N m^2 s), EI|-zeta|f or
+            # EI|-zeta|f1|f2 (the Rayleigh pair of Bb and the mass-proportional alpha)
             ei_parts = row.tokens[5].split("|")
-            if len(ei_parts) > 3:
+            if len(ei_parts) > 4:
                 raise DeckFormatError(
-                    f'{self._at(row)}: LINE TYPES EI column "{row.tokens[5]}" takes EI, EI|Bb '
-                    "or EI|-zeta|f"
+                    f'{self._at(row)}: LINE TYPES EI column "{row.tokens[5]}" takes EI, EI|Bb, '
+                    "EI|-zeta|f or EI|-zeta|f1|f2"
                 )
             ei = numeric(ei_parts[0], row, "EI")
             bend_damping = 0.0
@@ -4287,9 +4288,24 @@ class DeckFile:
                         "of EI|-zeta|f must be positive [Hz]"
                     )
                 bend_damping = -ratio * ei / (math.pi * frequency)
-            # a damping asked for (the ratio form, or Bb > 0) needs a finite EI: on EI = 0 the
+            elif len(ei_parts) == 4:
+                ratio = numeric(ei_parts[1], row, "EI|-zeta|f1|f2 ratio")
+                f_one = numeric(ei_parts[2], row, "EI|-zeta|f1|f2 frequency f1")
+                f_two = numeric(ei_parts[3], row, "EI|-zeta|f1|f2 frequency f2")
+                if not -1.0 < ratio < 0.0:
+                    raise DeckFormatError(
+                        f'{self._at(row)}: LINE TYPES EI column "{row.tokens[5]}": '
+                        "EI|-zeta|f1|f2 takes a damping ratio 0 < zeta < 1, written negative"
+                    )
+                if not (f_one > 0.0 and f_two > 0.0):
+                    raise DeckFormatError(
+                        f'{self._at(row)}: LINE TYPES EI column "{row.tokens[5]}": the '
+                        "frequencies f1 and f2 of EI|-zeta|f1|f2 must be positive [Hz]"
+                    )
+                bend_damping = -ratio * ei / (math.pi * (f_one + f_two))
+            # a damping asked for (a ratio form, or Bb > 0) needs a finite EI: on EI = 0 the
             # ratio form resolves to Bb = 0 and would pass unnoticed
-            if (len(ei_parts) == 3 or bend_damping > 0.0) and not ei > 0.0:
+            if (len(ei_parts) >= 3 or bend_damping > 0.0) and not ei > 0.0:
                 raise DeckFormatError(
                     f"{self._at(row)}: LINE TYPES {row.tokens[0]}: bending damping (EI|Bb) needs "
                     "a finite-EI cable (EI > 0)"
