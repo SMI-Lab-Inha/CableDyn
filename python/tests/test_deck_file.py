@@ -4991,6 +4991,40 @@ def test_viv_diameter_takes_a_wake_oscillator_type():
     DeckFile.from_text(_with_section(text, "VIV DIAMETER", "chain 0.9"))
 
 
+def test_viv_frame_rows_are_read_and_kept(tmp_path):
+    from cabledyn import DeckModel
+
+    text = _with_section(
+        _with_section(_DYNAMIC, "WAKE OSCILLATOR", "chain 0.3"),
+        "VIV FRAME",
+        "TypeName Tf",
+        "chain 8",
+    )
+    DeckFile.from_text(text)
+    path = tmp_path / "frame.dat"
+    path.write_text(text, encoding="utf-8")
+    assert DeckModel.load(path).line_types["chain"].viv_frame_tf == 8.0
+    saved = tmp_path / "saved.dat"
+    DeckModel.load(path).save(saved)
+    assert DeckModel.load(saved).line_types["chain"].viv_frame_tf == 8.0
+
+
+@pytest.mark.parametrize(
+    "wake, rows, message",
+    [
+        (True, ("chain 8 1",), "rows must be: TypeName Tf"),
+        (True, ("cable 8",), 'undefined LINE TYPE "cable"'),
+        (True, ("chain 8", "chain 4"), 'names LINE TYPE "chain" twice'),
+        (True, ("chain -1",), "filter time Tf must be >= 0"),
+        (False, ("chain 8",), "give the type a WAKE OSCILLATOR row"),
+    ],
+)
+def test_viv_frame_rows_follow_the_native_checks(wake, rows, message):
+    text = _with_section(_DYNAMIC, "WAKE OSCILLATOR", "chain 0.3") if wake else _DYNAMIC
+    with pytest.raises(DeckFormatError, match=re.escape(message)):
+        DeckFile.from_text(_with_section(text, "VIV FRAME", *rows))
+
+
 _DAMP_BASE = _with_section(
     _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8")),
     "VIV AMPLITUDE",

@@ -281,6 +281,26 @@ def test_viv_amplitude_rows_are_written_with_the_values_given(tmp_path: Path) ->
         model.to_text(validate=False)
 
 
+def test_viv_frame_rows_are_written(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type(
+        "towed",
+        diam=0.1,
+        mass=10.0,
+        ea=5.0e7,
+        ei=1.0,
+        cdn=1.2,
+        can=1.0,
+        wake_cl0=0.3,
+        viv_frame_tf=8.0,
+    )
+    deck = DeckFile.from_text(model.to_text(validate=False), path=tmp_path / "deck.dat")
+    assert [row.tokens for row in deck._rows("VIV FRAME")] == [("towed", "8.0")]
+    model.add_line_type("plain", diam=0.1, mass=10.0, ea=5.0e7, viv_frame_tf=8.0)
+    with pytest.raises(ValueError, match="set wake_cl0"):
+        model.to_text(validate=False)
+
+
 def test_viv_diameter_rows_are_written(tmp_path: Path) -> None:
     model = _chain_model(tmp_path)
     model.add_line_type(

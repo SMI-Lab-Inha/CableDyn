@@ -87,6 +87,8 @@ _SECTION_ALIASES = {
     "VIV DIAMETER": "VIV DIAMETER",
     "VIV DIAMETERS": "VIV DIAMETER",
     "VIV DAMPING": "VIV DAMPING",
+    "VIV FRAME": "VIV FRAME",
+    "VIV FRAMES": "VIV FRAME",
 }
 # Table sections whose rows the native reader takes through a Fortran
 # list-directed READ. Their descriptive and units rows are recognized by the
@@ -120,6 +122,7 @@ _WHITESPACE_TABLE_SECTIONS = frozenset(
         "VIV AMPLITUDE",
         "VIV DIAMETER",
         "VIV DAMPING",
+        "VIV FRAME",
     }
 )
 _TABLE_SECTIONS = _LIST_DIRECTED_SECTIONS | _WHITESPACE_TABLE_SECTIONS
@@ -3384,6 +3387,44 @@ class DeckFile:
                     "VIV: give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row"
                 )
 
+    def _check_viv_frame_section(self, wake_type_names: set[str]) -> None:
+        """Native ``apply_type_viv_frame`` for the VIV FRAME section.
+
+        A row ``TypeName Tf`` sets the flow frame of a line type's VIV model: with the filter
+        time ``Tf > 0`` [s] the free stream is the ambient flow relative to the cable's velocity
+        low-pass filtered over ``Tf`` (0: the ambient flow), at most 1e15. It sets the wake
+        oscillator's frequency, so the type needs a WAKE OSCILLATOR row with ``CL0 > 0``; a type
+        takes one row.
+        """
+        types = {row.tokens[0].lower(): row.tokens[0] for row in self.line_types}
+        named: set[str] = set()
+        for row in self._rows("VIV FRAME"):
+            where = self._at(row)
+            if len(row.tokens) != 2:
+                raise DeckFormatError(f"{where}: VIV FRAME rows must be: TypeName Tf")
+            name = row.tokens[0].lower()
+            if name not in types:
+                raise DeckFormatError(
+                    f'{where}: VIV FRAME row names undefined LINE TYPE "{row.tokens[0]}"'
+                )
+            if name in named:
+                raise DeckFormatError(f'{where}: VIV FRAME names LINE TYPE "{types[name]}" twice')
+            named.add(name)
+            try:
+                value = _native_float(row.tokens[1])
+            except ValueError as exc:
+                raise DeckFormatError(f"{where}: VIV FRAME Tf must be a plain number") from exc
+            if not (math.isfinite(value) and 0.0 <= value <= _NATIVE_MAX_COEFFICIENT):
+                raise DeckFormatError(
+                    f"{where}: VIV FRAME filter time Tf must be >= 0 (0 = the ambient flow), "
+                    "at most 1e15"
+                )
+            if name not in wake_type_names:
+                raise DeckFormatError(
+                    f'{where}: VIV FRAME of LINE TYPE "{types[name]}" sets the flow frame of its '
+                    "wake oscillator: give the type a WAKE OSCILLATOR row"
+                )
+
     def _check_viv_damp_section(self, amp_type_names: set[str]) -> set[str]:
         """Native ``apply_type_viv_damp`` for the VIV DAMPING section; the types it names.
 
@@ -4783,6 +4824,7 @@ class DeckFile:
         wake_type_names = self._check_wake_section(viv_type_names)
         amp_type_names = self._check_viv_amp_section(viv_type_names)
         self._check_viv_diam_section(viv_type_names | wake_type_names)
+        self._check_viv_frame_section(wake_type_names)
         damp_type_names = self._check_viv_damp_section(amp_type_names)
         amp_lines = {
             line_id

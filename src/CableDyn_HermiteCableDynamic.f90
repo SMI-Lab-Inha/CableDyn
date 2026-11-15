@@ -358,9 +358,14 @@ MODULE CableDyn_HermiteCableDynamic
     ! van der Pol eps and coupling A (length-weighted over its lifting elements), the state
     ! wo_s(:, k) = (q, dq/dt), q at the step's evaluation point (wo_q_eval, as viv_phi_eval), the
     ! step-start cross-flow acceleration and wake frequency (wo_ydd0, wo_om0) the step end
-    ! integrates from, and the recovery and snapshot copies of the state.
-    LOGICAL :: viv_wake = .FALSE.
+    ! integrates from, and the recovery and snapshot copies of the state. With a filter time
+    ! wo_tf(k) > 0 on some node (wo_filter) wo_s has three more rows, the node's velocity
+    ! low-pass filtered over wo_tf (first order), and the wake frequency takes the flow normal to
+    ! the line relative to it: a cable moved through still water sheds, the cable's own VIV
+    ! velocity (much faster than wo_tf) does not modulate it.
+    LOGICAL :: viv_wake = .FALSE., wo_filter = .FALSE.
     REAL(wp), ALLOCATABLE :: wo_st(:), wo_eps(:), wo_a(:), wo_s(:, :), wo_q_eval(:), wo_ydd0(:), wo_om0(:)
+    REAL(wp), ALLOCATABLE :: wo_tf(:)
     REAL(wp), ALLOCATABLE :: ws_recovery_wo_s(:, :), snap_wo_s(:, :)
     ! Amplitude-dependent VIV coefficients (Set_VIV amp, amp_n; VIV AMPLITUDE section): per element
     ! a table of viv_amp_n rows (A/D, C_v, drag factor) in viv_amp(:, 1:n, e). With it viv_ms carries
@@ -1174,7 +1179,9 @@ CONTAINS
     !! df unused. The lift per unit length is 1/4 rho D C_L0 q U^2 along the cross-flow axis, with
     !! q'' + eps om (q^2 - 1) q' + om^2 q = (A/D) y'' at each lifting node (om = 2 pi St U/D, y''
     !! its cross-flow acceleration); q starts on its limit cycle at the phase seed, q = 2 cos(phi_0)
-    !! and q' = 0.
+    !! and q' = 0. U is the ambient flow normal to the line; an optional fourth row wake(4, e) = Tf
+    !! [s] > 0 takes U relative to the node velocity low-pass filtered over Tf (first order), for
+    !! a cable moved through the water (0: the ambient flow).
     !!
     !! Amplitude-dependent coefficients (both or neither; not with the wake oscillator): amp (3,
     !! CD_VIV_AMP_MAXP, ne) and amp_n (ne), per element a table of amp_n rows (0: none; only where
@@ -1209,7 +1216,8 @@ CONTAINS
     INTEGER, INTENT(IN), OPTIONAL :: amp_n(:)
     REAL(wp), INTENT(IN), OPTIONAL :: dviv(:)
     REAL(wp), INTENT(IN), OPTIONAL :: cdy(:, :)
-    INTEGER :: e, k, ne, nn, es, nms
+    INTEGER :: e, k, ne, nn, es, nms, nw
+    LOGICAL :: had_filter
     REAL(wp) :: wsum, tw_old, rest_old
     LOGICAL :: had_viv, had_il, want_il, had_wake, want_wake, bad_band, had_amp, want_amp
     CHARACTER(LEN=1024) :: em
@@ -1223,7 +1231,7 @@ CONTAINS
                              x_ms_next(:, :), x_rec_phi(:), x_rec_ms(:, :), x_snap_phi(:), x_snap_ms(:, :), &
                              x_hcx(:), x_hk(:)
     REAL(wp), ALLOCATABLE :: w_st(:), w_eps(:), w_a(:), w_s(:, :), w_qe(:), w_y0(:), w_om(:), w_rec(:, :), &
-                             w_snap(:, :)
+                             w_snap(:, :), w_tf(:)
     LOGICAL, ALLOCATABLE :: o_node(:), x_node(:)
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''
@@ -1242,12 +1250,21 @@ CONTAINS
     END IF
     want_wake = PRESENT(wake)
     IF (want_wake) THEN
-      IF (SIZE(wake, 1) /= 3 .OR. SIZE(wake, 2) /= ne) THEN
+      IF ((SIZE(wake, 1) /= 3 .AND. SIZE(wake, 1) /= 4) .OR. SIZE(wake, 2) /= ne) THEN
         ErrStat = CD_HCDYN_BADINPUT
-        ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: wake must be shaped (3, ne): St, eps, A per element'; RETURN
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: wake must be shaped (3 or 4, ne): St, eps, A[, Tf] per element'
+        RETURN
       END IF
-      IF (.NOT. CD_All_Finite(RESHAPE(wake, [3*ne]))) THEN
+      IF (.NOT. CD_All_Finite(RESHAPE(wake, [SIZE(wake)]))) THEN
         ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: wake must be finite'; RETURN
+      END IF
+      IF (SIZE(wake, 1) == 4) THEN
+        IF (ANY(wake(4, :) < CD_ZERO) .OR. ANY(wake(4, :) > 1.0e15_wp)) THEN
+          ErrStat = CD_HCDYN_BADINPUT
+          ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: the wake filter time Tf must be >= 0 (0 = the ambient flow) and '// &
+                   'at most 1e15'
+          RETURN
+        END IF
       END IF
       IF (ANY(cl > CD_ZERO .AND. .NOT. (wake(1, :) > CD_ZERO .AND. wake(2, :) > CD_ZERO .AND. &
                                         wake(3, :) >= CD_ZERO))) THEN
@@ -1387,6 +1404,7 @@ CONTAINS
     had_viv = model%has_viv
     had_il = model%has_viv_il
     had_wake = model%viv_wake
+    had_filter = model%wo_filter
     had_amp = model%has_viv_amp
     tw_old = model%viv_tw
     rest_old = model%viv_phi_rest
@@ -1483,8 +1501,25 @@ CONTAINS
       model%has_viv_il = .TRUE.
     END IF
     IF (want_wake) THEN
-      ALLOCATE (model%wo_st(nn), model%wo_eps(nn), model%wo_a(nn), model%wo_s(2, nn), model%wo_q_eval(nn), &
-                model%wo_ydd0(nn), model%wo_om0(nn), model%ws_recovery_wo_s(2, nn), model%snap_wo_s(2, nn))
+      ! the filter time per node, length-weighted over its lifting elements like St, eps and A
+      ALLOCATE (model%wo_tf(nn))
+      model%wo_tf = CD_ZERO
+      IF (SIZE(wake, 1) == 4) THEN
+        DO k = 1, nn
+          IF (.NOT. model%viv_node(k)) CYCLE
+          wsum = CD_ZERO
+          DO e = MAX(1, k - 1), MIN(ne, k)
+            IF (.NOT. (cl(e) > CD_ZERO)) CYCLE
+            wsum = wsum + model%l0(e)
+            model%wo_tf(k) = model%wo_tf(k) + model%l0(e)*wake(4, e)
+          END DO
+          model%wo_tf(k) = model%wo_tf(k)/wsum
+        END DO
+      END IF
+      model%wo_filter = ANY(model%wo_tf > CD_ZERO)
+      nw = MERGE(5, 2, model%wo_filter)
+      ALLOCATE (model%wo_st(nn), model%wo_eps(nn), model%wo_a(nn), model%wo_s(nw, nn), model%wo_q_eval(nn), &
+                model%wo_ydd0(nn), model%wo_om0(nn), model%ws_recovery_wo_s(nw, nn), model%snap_wo_s(nw, nn))
       ! the lift scale 1/2 rho D viv_cl is then 1/4 rho D C_L0, the lift 1/4 rho D C_L0 q U^2
       model%viv_cl = 0.5_wp*cl
       model%wo_st = CD_ZERO
@@ -1506,6 +1541,8 @@ CONTAINS
         model%wo_a(k) = model%wo_a(k)/wsum
         ! on the limit cycle at the node's phase seed
         model%wo_s(1, k) = 2.0_wp*COS(model%viv_phi(k))
+        ! the filtered velocity starts at the node's velocity
+        IF (model%wo_filter) model%wo_s(3:5, k) = model%v(6*(k - 1) + 1:6*(k - 1) + 3)
       END DO
       model%wo_q_eval = model%wo_s(1, :)
       model%wo_ydd0 = CD_ZERO
@@ -1538,6 +1575,7 @@ CONTAINS
       model%has_viv = had_viv
       model%has_viv_il = had_il
       model%viv_wake = had_wake
+      model%wo_filter = had_filter
       model%has_viv_amp = had_amp
       model%viv_tw = tw_old
       model%viv_phi_rest = rest_old
@@ -1570,7 +1608,7 @@ CONTAINS
         CALL MOVE_ALLOC(w_a, model%wo_a); CALL MOVE_ALLOC(w_s, model%wo_s)
         CALL MOVE_ALLOC(w_qe, model%wo_q_eval); CALL MOVE_ALLOC(w_y0, model%wo_ydd0)
         CALL MOVE_ALLOC(w_om, model%wo_om0); CALL MOVE_ALLOC(w_rec, model%ws_recovery_wo_s)
-        CALL MOVE_ALLOC(w_snap, model%snap_wo_s)
+        CALL MOVE_ALLOC(w_snap, model%snap_wo_s); CALL MOVE_ALLOC(w_tf, model%wo_tf)
         CALL MOVE_ALLOC(p_amp, model%viv_amp); CALL MOVE_ALLOC(p_ampn, model%viv_amp_n)
         CALL MOVE_ALLOC(p_dv, model%viv_dv)
         CALL MOVE_ALLOC(p_cdy, model%viv_cdy)
@@ -1595,7 +1633,7 @@ CONTAINS
         CALL MOVE_ALLOC(model%wo_a, w_a); CALL MOVE_ALLOC(model%wo_s, w_s)
         CALL MOVE_ALLOC(model%wo_q_eval, w_qe); CALL MOVE_ALLOC(model%wo_ydd0, w_y0)
         CALL MOVE_ALLOC(model%wo_om0, w_om); CALL MOVE_ALLOC(model%ws_recovery_wo_s, w_rec)
-        CALL MOVE_ALLOC(model%snap_wo_s, w_snap)
+        CALL MOVE_ALLOC(model%snap_wo_s, w_snap); CALL MOVE_ALLOC(model%wo_tf, w_tf)
         CALL MOVE_ALLOC(model%viv_amp, p_amp); CALL MOVE_ALLOC(model%viv_amp_n, p_ampn)
         CALL MOVE_ALLOC(model%viv_dv, p_dv)
         CALL MOVE_ALLOC(model%viv_cdy, p_cdy)
@@ -1619,6 +1657,8 @@ CONTAINS
     IF (ALLOCATED(model%vhh_k)) DEALLOCATE (model%vhh_cx, model%vhh_k)
     IF (ALLOCATED(model%wo_s)) DEALLOCATE (model%wo_st, model%wo_eps, model%wo_a, model%wo_s, model%wo_q_eval, &
                                            model%wo_ydd0, model%wo_om0, model%ws_recovery_wo_s, model%snap_wo_s)
+    IF (ALLOCATED(model%wo_tf)) DEALLOCATE (model%wo_tf)
+    model%wo_filter = .FALSE.
     IF (ALLOCATED(model%viv_amp)) DEALLOCATE (model%viv_amp)
     IF (ALLOCATED(model%viv_amp_n)) DEALLOCATE (model%viv_amp_n)
     IF (ALLOCATED(model%viv_dv)) DEALLOCATE (model%viv_dv)
@@ -1747,16 +1787,19 @@ CONTAINS
     yd = CD_VIV_Ambient_Crossflow_Rate(model%q(i0 + 4:i0 + 6), model%v(i0 + 1:i0 + 3), uu)
   END FUNCTION viv_node_ambient_yd
 
-  REAL(wp) FUNCTION viv_node_ambient_speed(model, k) RESULT(ua)
+  REAL(wp) FUNCTION viv_node_ambient_speed(model, k, vslow) RESULT(ua)
     !! Speed of the ambient flow (current plus a held field) normal to node k's tangent (the slope
-    !! DOFs) at the committed state; 0 for a degenerate tangent.
+    !! DOFs) at the committed state, relative to the velocity vslow (optional; the node's filtered
+    !! velocity of the wake filter); 0 for a degenerate tangent.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: k
+    REAL(wp), INTENT(IN), OPTIONAL :: vslow(3)
     REAL(wp) :: uu(3), t(3), un(3), speed
     INTEGER :: i0
     i0 = 6*(k - 1)
     uu = model%current
     IF (model%has_held_field) uu = uu + model%hf_u(:, k)
+    IF (PRESENT(vslow)) uu = uu - vslow
     speed = NORM2(model%q(i0 + 4:i0 + 6))
     ua = CD_ZERO
     IF (.NOT. (speed > CD_ZERO)) RETURN
@@ -1816,10 +1859,20 @@ CONTAINS
           ErrStat = CD_HCDYN_NOCONVERGE; ErrMsg = 'VIV wake oscillator: degenerate node tangent'; RETURN
         END IF
         ! the wake frequency of the ambient flow normal to the line (the free stream of the
-        ! paper), not of the relative flow, which the cable's own cross-flow motion modulates
-        model%wo_om0(k) = CD_VIV_TWO_PI*model%wo_st(k)*viv_node_ambient_speed(model, k)/model%viv_dn(k)
+        ! paper), not of the relative flow, which the cable's own cross-flow motion modulates; with
+        ! the wake filter, of the flow relative to the node's slowly filtered motion
+        IF (model%wo_filter) THEN
+          IF (model%wo_tf(k) > CD_ZERO) THEN
+            model%wo_om0(k) = CD_VIV_TWO_PI*model%wo_st(k)*viv_node_ambient_speed(model, k, model%wo_s(3:5, k))/ &
+                              model%viv_dn(k)
+          ELSE
+            model%wo_om0(k) = CD_VIV_TWO_PI*model%wo_st(k)*viv_node_ambient_speed(model, k)/model%viv_dn(k)
+          END IF
+        ELSE
+          model%wo_om0(k) = CD_VIV_TWO_PI*model%wo_st(k)*viv_node_ambient_speed(model, k)/model%viv_dn(k)
+        END IF
         model%wo_ydd0(k) = ydd
-        sw = model%wo_s(:, k)
+        sw = model%wo_s(1:2, k)
         CALL CD_VIV_Wake_Advance(sw, model%wo_om0(k), model%wo_eps(k), model%wo_a(k)/model%viv_dn(k), ydd, ydd, &
                                  frac*dt)
         model%wo_q_eval(k) = sw(1)
@@ -1876,15 +1929,22 @@ CONTAINS
         IF (.NOT. model%viv_node(k)) CYCLE
         CALL viv_node_motion(model, k, yd, ydd, un, ok)
         IF (.NOT. (ok .AND. CD_Is_Finite(ydd))) ydd = model%wo_ydd0(k)
-        sw = model%wo_s(:, k)
+        sw = model%wo_s(1:2, k)
         CALL CD_VIV_Wake_Advance(sw, model%wo_om0(k), model%wo_eps(k), model%wo_a(k)/model%viv_dn(k), &
                                  model%wo_ydd0(k), ydd, dt)
         IF (.NOT. (CD_Is_Finite(sw(1)) .AND. CD_Is_Finite(sw(2)))) THEN
-          sw = model%wo_s(:, k)
+          sw = model%wo_s(1:2, k)
           CALL CD_VIV_Wake_Advance(sw, model%wo_om0(k), model%wo_eps(k), model%wo_a(k)/model%viv_dn(k), &
                                    model%wo_ydd0(k), model%wo_ydd0(k), dt)
         END IF
-        model%wo_s(:, k) = sw
+        model%wo_s(1:2, k) = sw
+        ! the filtered velocity, exact for the first-order filter of the converged end velocity
+        ! held over the step (a non-finite end velocity keeps it)
+        IF (model%wo_filter) THEN
+          IF (model%wo_tf(k) > CD_ZERO .AND. CD_All_Finite(model%v(6*(k - 1) + 1:6*(k - 1) + 3))) &
+            model%wo_s(3:5, k) = model%wo_s(3:5, k) + (CD_ONE - EXP(-dt/model%wo_tf(k)))* &
+                                 (model%v(6*(k - 1) + 1:6*(k - 1) + 3) - model%wo_s(3:5, k))
+        END IF
       END DO
       model%wo_q_eval = model%wo_s(1, :)
       RETURN

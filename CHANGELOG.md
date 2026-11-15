@@ -108,6 +108,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   with its source, its test data and the line-type columns it maps to, and Thorsen et al.'s
   excitation curve as a `VIV AMPLITUDE` table.
 
+- Wake oscillator for moving cables: an optional `VIV FRAME` section, rows `TypeName Tf`, takes
+  the free stream of a line type's VIV model relative to the cable's velocity low-pass filtered
+  over `Tf` [s] (first order). The wake frequency then follows a cable towed or moved by its
+  floater through still water, which the ambient flow alone never made shed. A taut cable towed
+  at 0.15 m/s with `Tf` 10 s locks in as the cable held in a 0.15 m/s current (A/D within
+  0.6 %); on a held cable `Tf` changes A/D by 0.03 %. On `EI = 0` lines and finite-EI cables,
+  the filtered velocity in the step-recovery, snapshot and checkpoint state; `Tf` 0 or no row
+  leaves runs unchanged to the bit. The Python deck reader and builder (`viv_frame_tf`) take the
+  section.
+
 ### Fixed
 
 - The statics of a finite-EI line through the free surface could fail at isolated currents:

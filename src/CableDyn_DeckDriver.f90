@@ -462,6 +462,11 @@ MODULE CableDyn_DeckDriver
     ! has_wake_row marks a type the section names.
     REAL(wp) :: wo_cl0 = CD_ZERO, wo_st = CD_VIV_WAKE_DEFAULT_ST, wo_eps = CD_VIV_WAKE_DEFAULT_EPS
     REAL(wp) :: wo_a = CD_VIV_WAKE_DEFAULT_A
+    ! The VIV frame of a line type (the optional VIV FRAME section, a row per type: TypeName Tf):
+    ! the filter time Tf [s] of the cable velocity that the VIV model's flow frame moves with
+    ! (0: the ambient flow); has_vivf_row marks a type the section names.
+    REAL(wp) :: viv_tf = CD_ZERO
+    LOGICAL :: has_vivf_row = .FALSE.
     LOGICAL :: has_wake_row = .FALSE.
     ! Amplitude-dependent VIV coefficients (the optional VIV AMPLITUDE section, rows TypeName AD Cv
     ! [CdAmp]): amp_n rows of (A/D, C_v, drag factor) in amp_tab, A/D increasing; amp_cols the
@@ -1917,7 +1922,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:), viv_hh(:)
     REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :), viv_dva(:), cdy_a(:), cdy_b(:), cdy_c(:)
     INTEGER, ALLOCATABLE :: viv_ampn(:)
-    REAL(wp), ALLOCATABLE :: wo_cl0(:), wo_st(:), wo_eps(:), wo_a(:)
+    REAL(wp), ALLOCATABLE :: wo_cl0(:), wo_st(:), wo_eps(:), wo_a(:), wo_tf(:)
     REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:), bb_el(:)
     REAL(wp) :: mode1_omega
     REAL(wp), ALLOCATABLE :: contact_kn(:), contact_cn(:)
@@ -3316,8 +3321,8 @@ CONTAINS
     ALLOCATE (viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), viv_df(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)), &
               viv_hh(SIZE(l0)))
     CALL finite_viv_arrays(ln, sections, types, viv_cl, viv_cf, viv_df, viv_clx, viv_al, viv_hh)
-    ALLOCATE (wo_cl0(SIZE(l0)), wo_st(SIZE(l0)), wo_eps(SIZE(l0)), wo_a(SIZE(l0)))
-    CALL finite_wake_arrays(ln, sections, types, wo_cl0, wo_st, wo_eps, wo_a)
+    ALLOCATE (wo_cl0(SIZE(l0)), wo_st(SIZE(l0)), wo_eps(SIZE(l0)), wo_a(SIZE(l0)), wo_tf(SIZE(l0)))
+    CALL finite_wake_arrays(ln, sections, types, wo_cl0, wo_st, wo_eps, wo_a, wo_tf)
     ALLOCATE (viv_tix(SIZE(l0)))
     CALL viv_amp_type_index(ln, sections, types, viv_tix)
     ALLOCATE (viv_dva(SIZE(l0)))
@@ -3334,6 +3339,7 @@ CONTAINS
       CALL remap_elem_by_reference_arc(wo_st, l0, l0_am)
       CALL remap_elem_by_reference_arc(wo_eps, l0, l0_am)
       CALL remap_elem_by_reference_arc(wo_a, l0, l0_am)
+      CALL remap_elem_by_reference_arc(wo_tf, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_cl, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_cf, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_df, l0, l0_am)
@@ -3712,7 +3718,8 @@ CONTAINS
                                                    REAL(CD_VIV_NM, wp)*MERGE(opts%dtM, dt, opts%has_dtm), &
                                                    opts%viv_rms_window > CD_ZERO), es, em, phase_seed=seed, &
                                              tangent_reversed=.NOT. ln%ends_swapped, &
-                                             wake=RESHAPE([wo_st, wo_eps, wo_a], [3, SIZE(wo_st)], ORDER=[2, 1]), &
+                                             wake=RESHAPE([wo_st, wo_eps, wo_a, wo_tf], [4, SIZE(wo_st)], &
+                                                          ORDER=[2, 1]), &
                                              dviv=viv_dva)
           ELSE IF (ANY(viv_clx > CD_ZERO)) THEN
             CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
@@ -10449,7 +10456,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: ve_ead(:), ve_bas(:), ve_bad(:), ve_ambl(:), ve_vbet(:)
     REAL(wp), ALLOCATABLE :: viv_cl(:), viv_cf(:), viv_df(:), viv_clx(:), viv_al(:), viv_hh(:)
     REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :), viv_dia(:)
-    ! the WAKE OSCILLATOR rows per element (C_L0, St, eps, A; C_L0 0 where none)
+    ! the WAKE OSCILLATOR rows per element (C_L0, St, eps, A, Tf; C_L0 0 where none)
     REAL(wp), ALLOCATABLE :: viv_wo(:, :)
     INTEGER, ALLOCATABLE :: viv_ampn(:)
     LOGICAL, ALLOCATABLE :: syr_el(:)
@@ -10491,7 +10498,7 @@ CONTAINS
               hydro_can(SIZE(l0)), hydro_cat(SIZE(l0)), ve_ead(SIZE(l0)), ve_bas(SIZE(l0)), &
               ve_bad(SIZE(l0)), ve_ambl(SIZE(l0)), ve_vbet(SIZE(l0)), viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), &
               viv_df(SIZE(l0)), syr_el(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)), viv_hh(SIZE(l0)), &
-              viv_tix(SIZE(l0)), viv_dia(SIZE(l0)), viv_wo(4, SIZE(l0)))
+              viv_tix(SIZE(l0)), viv_dia(SIZE(l0)), viv_wo(5, SIZE(l0)))
     viv_tix = CD_ZERO
     viv_wo = CD_ZERO
     viv_dia = CD_ZERO
@@ -10561,7 +10568,8 @@ CONTAINS
           viv_wo(:, e) = [types(line_section_type(sections, ln%id, i))%wo_cl0, &
                           types(line_section_type(sections, ln%id, i))%wo_st, &
                           types(line_section_type(sections, ln%id, i))%wo_eps, &
-                          types(line_section_type(sections, ln%id, i))%wo_a]
+                          types(line_section_type(sections, ln%id, i))%wo_a, &
+                          types(line_section_type(sections, ln%id, i))%viv_tf]
         END IF
         IF (types(line_section_type(sections, ln%id, i))%cdy_a >= CD_ZERO) THEN
           CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(ln%id))//': the cross-flow damping (VIV '// &
@@ -10892,7 +10900,7 @@ CONTAINS
           IF (ANY(viv_wo(1, :) > CD_ZERO)) THEN
             ! the wake oscillator: cl is C_L0, the band unused
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, viv_dia, viv_cf, viv_df, tw, es, em, &
-                                  phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, wake=viv_wo(2:4, :))
+                                  phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, wake=viv_wo(2:5, :))
           ELSE IF (ANY(viv_clx > CD_ZERO)) THEN
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, viv_dia, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, &
@@ -11740,13 +11748,13 @@ CONTAINS
     chh = chh(SIZE(chh):1:-1)
   END SUBROUTINE finite_viv_arrays
 
-  SUBROUTINE finite_wake_arrays(ln, sections, types, cl0, st, eps, a)
-    !! Expand the WAKE OSCILLATOR rows (CL0, St, eps, A) to finite-EI element arrays, in the
+  SUBROUTINE finite_wake_arrays(ln, sections, types, cl0, st, eps, a, tf)
+    !! Expand the WAKE OSCILLATOR rows (CL0, St, eps, A, Tf) to finite-EI element arrays, in the
     !! element order of finite_hydro_arrays.
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
-    REAL(wp), INTENT(OUT) :: cl0(:), st(:), eps(:), a(:)
+    REAL(wp), INTENT(OUT) :: cl0(:), st(:), eps(:), a(:), tf(:)
     INTEGER :: i, j, e, tidx
 
     e = 0
@@ -11759,12 +11767,14 @@ CONTAINS
         st(e) = types(tidx)%wo_st
         eps(e) = types(tidx)%wo_eps
         a(e) = types(tidx)%wo_a
+        tf(e) = types(tidx)%viv_tf
       END DO
     END DO
     cl0 = cl0(SIZE(cl0):1:-1)
     st = st(SIZE(st):1:-1)
     eps = eps(SIZE(eps):1:-1)
     a = a(SIZE(a):1:-1)
+    tf = tf(SIZE(tf):1:-1)
   END SUBROUTINE finite_wake_arrays
 
   SUBROUTINE viv_amp_type_index(ln, sections, types, tix)
@@ -13993,6 +14003,9 @@ CONTAINS
     INTEGER :: n_vdmp
     INTEGER, ALLOCATABLE :: vdia_lines(:)
     INTEGER :: n_vdia
+    CHARACTER(DECK_RECLEN), ALLOCATABLE :: vfrm_rows(:)
+    INTEGER, ALLOCATABLE :: vfrm_lines(:)
+    INTEGER :: n_vfrm
     CHARACTER(2*NAMELEN), ALLOCATABLE :: channel_keys(:)
     LOGICAL :: ext_march, types_stock_cols, rodtypes_legacy_cols, turb_ok, static_finite_ok, tors_marched
     INTEGER :: unit, ios, section, nt, nb, nrt, nr, np, nlin, nsec, neq, nch, nfl, nct, nec, lineno
@@ -14011,7 +14024,7 @@ CONTAINS
                           SEC_EQUIV = 10, SEC_FAILURE = 11, SEC_CONTROL = 12, SEC_SYROPE_IC = 13, &
                           SEC_ENDCONN = 14, SEC_TURBINES = 15, SEC_EXTLOADS = 16, SEC_ATTACH = 17, &
                           SEC_STIFF = 18, SEC_VIV = 19, SEC_WAKE = 20, SEC_VIVAMP = 21, SEC_VIVDIA = 22, &
-                          SEC_VIVDAMP = 23
+                          SEC_VIVDAMP = 23, SEC_VIVFRAME = 25
 
     ErrStat = 0; ErrMsg = ''
     ext_march = .FALSE.
@@ -14041,6 +14054,8 @@ CONTAINS
     ALLOCATE (vdia_rows(0), vdia_lines(0))
     ALLOCATE (vdmp_rows(0), vdmp_lines(0))
     n_vdmp = 0
+    ALLOCATE (vfrm_rows(0), vfrm_lines(0))
+    n_vfrm = 0
     n_vdia = 0
     n_wake = 0
     nt = 0; nb = 0; nrt = 0; nr = 0; np = 0; nlin = 0; nsec = 0; neq = 0; nch = 0; nfl = 0; nct = 0; nec = 0
@@ -14204,6 +14219,15 @@ CONTAINS
         END IF
         vdmp_rows(n_vdmp) = line(1:MIN(LEN(line), DECK_RECLEN))
         vdmp_lines(n_vdmp) = lineno
+      CASE (SEC_VIVFRAME)
+        IF (.NOT. has_numeric_token(line)) CYCLE
+        n_vfrm = n_vfrm + 1
+        IF (n_vfrm > SIZE(vfrm_rows)) THEN
+          vfrm_rows = [vfrm_rows, [(REPEAT(' ', DECK_RECLEN), i_ch=1, 8)]]
+          vfrm_lines = [vfrm_lines, [(0, i_ch=1, 8)]]
+        END IF
+        vfrm_rows(n_vfrm) = line(1:MIN(LEN(line), DECK_RECLEN))
+        vfrm_lines(n_vfrm) = lineno
       CASE (SEC_VIVDIA)
         IF (.NOT. has_numeric_token(line)) CYCLE
         n_vdia = n_vdia + 1
@@ -14342,6 +14366,13 @@ CONTAINS
       CALL apply_type_viv_damp(vdmp_rows(i_ch), types, ErrStat, ErrMsg)
       IF (ErrStat /= 0) THEN
         CALL add_row_context('deck', vdmp_lines(i_ch), vdmp_rows(i_ch), ErrMsg)
+        RETURN
+      END IF
+    END DO
+    DO i_ch = 1, n_vfrm
+      CALL apply_type_viv_frame(vfrm_rows(i_ch), types, ErrStat, ErrMsg)
+      IF (ErrStat /= 0) THEN
+        CALL add_row_context('deck', vfrm_lines(i_ch), vfrm_rows(i_ch), ErrMsg)
         RETURN
       END IF
     END DO
@@ -16026,6 +16057,8 @@ CONTAINS
       section = 22
     CASE ('VIV DAMPING')
       section = 23
+    CASE ('VIV FRAME', 'VIV FRAMES')
+      section = 25
     CASE ('WAKE OSCILLATOR', 'WAKE OSCILLATORS', 'WAKE')
       section = 20
     CASE DEFAULT
@@ -17632,7 +17665,7 @@ CONTAINS
     !! type (Facchinetti et al. 2004; the defaults St 0.2, eps 0.3, A 12 are theirs): the reference
     !! lift coefficient C_L0 >= 0 (0 = off; the lift of a fixed cylinder is C_L0 U^2 rho D/2), the
     !! Strouhal number St > 0 of the wake frequency 2 pi St U/D, the van der Pol eps > 0 and the
-    !! acceleration coupling A >= 0. The wake oscillator replaces the synchronisation model, so the
+    !! acceleration coupling A >= 0 (U: the flow of the type's VIV FRAME, the ambient flow without one). The wake oscillator replaces the synchronisation model, so the
     !! type takes no LINE TYPES lift Cl (and so no in-line VIV, which needs it). A type takes one
     !! row.
     CHARACTER(*), INTENT(IN) :: row
@@ -17846,6 +17879,51 @@ CONTAINS
     types(it)%viv_dv = v
     types(it)%has_vivd_row = .TRUE.
   END SUBROUTINE apply_type_viv_diam
+
+  SUBROUTINE apply_type_viv_frame(row, types, ErrStat, ErrMsg)
+    !! One VIV FRAME row: TypeName Tf -- the flow frame of a line type's VIV model: with the filter
+    !! time Tf > 0 [s] (at most 1e15) the flow the model takes as the free stream is the ambient
+    !! flow relative to the cable's velocity low-pass filtered over Tf (first order), so that a
+    !! cable moved through the water by a tow or its floater sees that motion as flow, and its own
+    !! VIV velocity, much faster than Tf, does not count; Tf 0 is the ambient flow. It sets the
+    !! wake oscillator's frequency; the type needs a WAKE OSCILLATOR row. A type takes one row.
+    CHARACTER(*), INTENT(IN) :: row
+    TYPE(DeckLineType), INTENT(INOUT) :: types(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(DECK_RECLEN) :: tok
+    INTEGER :: it
+    REAL(wp) :: v
+    LOGICAL :: found, ok
+
+    ErrStat = 0; ErrMsg = ''
+    IF (count_tokens(row) /= 2) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV FRAME rows must be: TypeName Tf'); RETURN
+    END IF
+    CALL get_token(row, 1, tok, found)
+    it = find_type(types, TRIM(tok))
+    IF (it == 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV FRAME row names undefined LINE TYPE "'//TRIM(tok)//'"'); RETURN
+    END IF
+    IF (types(it)%has_vivf_row) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV FRAME names LINE TYPE "'//TRIM(types(it)%name)//'" twice'); RETURN
+    END IF
+    CALL get_token(row, 2, tok, found)
+    CALL parse_real_token(tok, v, ok)
+    IF (.NOT. ok) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV FRAME Tf must be a plain number'); RETURN
+    END IF
+    IF (.NOT. (IEEE_IS_FINITE(v) .AND. v >= CD_ZERO .AND. v <= MAX_COEFFICIENT)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV FRAME filter time Tf must be >= 0 (0 = the ambient flow), at most 1e15')
+      RETURN
+    END IF
+    IF (.NOT. (types(it)%wo_cl0 > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV FRAME of LINE TYPE "'//TRIM(types(it)%name)//'" sets the flow frame of '// &
+                'its wake oscillator: give the type a WAKE OSCILLATOR row'); RETURN
+    END IF
+    types(it)%viv_tf = v
+    types(it)%has_vivf_row = .TRUE.
+  END SUBROUTINE apply_type_viv_frame
 
   SUBROUTINE append_line_stiffener(row, lines, ErrStat, ErrMsg)
     !! One STIFFENERS row: LineID End Length RootOD TipOD InnerD E Density -- a conical segment of

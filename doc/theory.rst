@@ -1289,7 +1289,23 @@ mass):
 with :math:`U_a` the speed of the ambient flow (current and host field) normal to the line, the
 free stream of the paper, so that the cable's own cross-flow velocity does not modulate the wake
 frequency, and :math:`\ddot y` along the cross-flow axis :math:`\mathbf t\times\mathbf v_n/U` of
-the synchronisation model. The lift per unit length acts across the relative normal flow
+the synchronisation model. The ambient flow sets no frequency for a cable moved through still
+water, which then never sheds; a ``VIV FRAME`` row with the filter time :math:`T_f > 0` takes
+:math:`U_a` relative to the node's velocity low-pass filtered over :math:`T_f`,
+
+.. math::
+
+   U_a = \bigl|(\mathbf u - \bar{\mathbf v})_n\bigr|,\qquad
+   \bar{\mathbf v}_{n+1} = \bar{\mathbf v}_n + \bigl(1 - e^{-\delta t/T_f}\bigr)
+   (\mathbf v_{n+1} - \bar{\mathbf v}_n),
+
+the exact first-order filter of the converged end velocity held over the step, started at the
+node's initial velocity. The slow motion (a tow, a floater's response) then counts as flow, and the
+VIV velocity, far faster than :math:`T_f`, is filtered out. On a cable towed at 0.15 m/s through
+still water (the taut cable of the deck gate, VIV at 0.28 Hz) :math:`T_f` 10 s gives the lock-in of
+the cable held in a 0.15 m/s current to 0.6 % in A/D and 0.001 Hz, where the ambient flow gave no
+lock-in; on the held cable it changes A/D by 0.03 %. :math:`\bar{\mathbf v}` is part of the wake
+state. The lift per unit length acts across the relative normal flow
 :math:`\mathbf v_n` of speed :math:`U`, as the synchronisation lift does:
 
 .. math::
@@ -1318,7 +1334,8 @@ its exact position and velocity derivatives in the tangent at fixed :math:`q`. O
 line it acts at the free nodes as the synchronisation lift does, over the node's tributary length,
 with the node's smoothed cross-flow acceleration (the average with its two neighbours) as the
 forcing, and :math:`(q, \dot q)` takes the place of the phase and the first motion statistic in
-the line's VIV state. :math:`q` starts on
+the line's VIV state (with :math:`T_f`, :math:`\bar{\mathbf v}` the next three statistics, and three
+more state rows on a finite-EI cable). :math:`q` starts on
 its limit cycle at the node's phase seed, :math:`q = 2\cos\phi_0`, :math:`\dot q = 0`, and the
 state is part of the step-recovery, snapshot and checkpoint state.
 
