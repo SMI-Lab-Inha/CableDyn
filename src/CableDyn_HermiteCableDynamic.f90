@@ -4878,7 +4878,7 @@ CONTAINS
     INTEGER :: axial_worst_element, iv, attempt, n_attempt
     INTEGER :: n_ls_tan  ! tangents the step's line searches assembled at their accepted trial
     REAL(wp) :: c_a, c_v, c_a2, am, af, bt, gm, rnorm, fscale, rnt, lambda, chosen, lam_ok, cw, t_alpha, dth_lin
-    REAL(wp) :: e_bal, e_ma, tors_theta_new, tors_mt_new
+    REAL(wp) :: e_bal, e_ma, tors_theta_new, tors_mt_new, t_inc, t_len
     REAL(wp) :: axial_qe(12), axial_min
     REAL(wp) :: axial_threshold, axial_margin, axial_worst_margin, axial_worst_force, axial_worst_xi
     REAL(wp) :: axial_worst_threshold
@@ -4901,6 +4901,9 @@ CONTAINS
     REAL(wp), PARAMETER :: MN_CONTRACT = 0.25_wp
     ! Constant-acceleration predictor gate: relative force imbalance of the committed state.
     REAL(wp), PARAMETER :: PRED_BALANCE = 0.5_wp
+    ! Largest change of the length of a free nodal tangent by the predictor, relative to that
+    ! length; a larger change holds the tangent at its committed value (see the predictor).
+    REAL(wp), PARAMETER :: PRED_STRETCH_MAX = 0.25_wp
     ! Cross-step reuse: at most this many accepted iterations on the carried factor per step;
     ! a solve still short of the tolerance then refreshes (quadratic convergence from there).
     INTEGER, PARAMETER :: XS_MAX_STALE = 3
@@ -5229,6 +5232,40 @@ CONTAINS
         model%ws_qk(iv) = model%ws_qn(iv) + dt*model%ws_vn(iv) + (0.5_wp - bt)*dt*dt*model%ws_an(iv)
       END DO
     END IF
+    ! Both guesses assume a resolved motion. The length of a nodal tangent m = dr/ds is the
+    ! line's stretch there, its stiffest motion (EA against the tangent's small consistent mass),
+    ! whose committed velocity and acceleration are those of the generalised-alpha recursion far
+    ! outside its resolved range: with little or no numerical damping (rho_inf near 1) it keeps
+    ! ringing about its balance at the offset it started from, and dt v_n or dt^2 a_n along the
+    ! tangent can exceed the tangent itself. A taut 20 m line of 2 m elements (EA 5e7 N) seeded
+    ! with unit tangents at a strain of 7.6e-5 started that mode 7.6e-5 off its balance, with
+    ! a_n = 4.9e3 1/s^2 along the tangents (omega ~ 8e3 rad/s, omega dt ~ 300 at dt 0.037 s, 50
+    ! steps per cycle of its VIV); at rho_inf 1 both guesses carried every tangent across zero
+    ! (dt^2/2 a_n = 3.4, dt^2/4 a_n = 1.7), and Newton converged quadratically to the root with
+    ! every tangent reversed (each element folded into a Z along its chord, 2.4e8 J of strain
+    ! energy against 3.5 J), from which the march failed a few steps on. A guess that changes
+    ! the length of a free tangent by more than PRED_STRETCH_MAX of it (a strain change of 0.25
+    ! in one step, which no step resolves) took that tangent's committed velocity and
+    ! acceleration from the ringing, so the tangent starts at its committed value: the stiff
+    ! mode's true increment, of the order of the strain, is a Newton step from there. Holding
+    ! only its length and keeping the turn of the guess converged too, but the turn rings as
+    ! well (the tangent's rotation is under-resolved at that step): over 20 cycles at 25 steps
+    ! per cycle and rho_inf 0.9 and 1, 132 steps took more than 12 iterations against 31. The
+    ! test is on the length alone because a guess that turns a tangent fast is often right: a
+    ! seabed cable whose span was lengthened 1.3 times turns two tangents 19 degrees in its
+    ! first 0.01 s step, and does not converge from the held tangents. Every other start is
+    ! unchanged.
+    DO i = 1, model%nn
+      iv = 6*(i - 1)
+      IF (.NOT. ALL(model%freemask(iv + 4:iv + 6))) CYCLE
+      t_len = NORM2(model%ws_qn(iv + 4:iv + 6))
+      IF (.NOT. (t_len > CD_ZERO)) CYCLE
+      t_inc = DOT_PRODUCT(model%ws_qk(iv + 4:iv + 6) - model%ws_qn(iv + 4:iv + 6), model%ws_qn(iv + 4:iv + 6))/t_len
+      IF (ABS(t_inc) <= PRED_STRETCH_MAX*t_len) CYCLE
+      DO ip = iv + 4, iv + 6
+        model%ws_qk(ip) = model%ws_qn(ip)
+      END DO
+    END DO
     ! Hold the prescribed DOFs at their target position for the whole solve (Newton never touches
     ! them -- they are in fixed_dofs, hence not in fmap).
     IF (has_pres) THEN
@@ -5631,6 +5668,27 @@ CONTAINS
       END DO
       IF (model%tw_active) CALL tw_accept()
       rnorm = rnt
+    END DO
+    ! A nodal tangent turned by 90 degrees or more over one step is a root of the step's
+    ! equations with the element folded back on itself (the reversed-tangent root above), not a
+    ! motion one step resolves: the attempt fails (the next one, or the recovering step's
+    ! subdivision, re-solves the step).
+    DO i = 1, model%nn
+      iv = 6*(i - 1)
+      IF (.NOT. ANY(model%freemask(iv + 4:iv + 6))) CYCLE
+      IF (DOT_PRODUCT(model%ws_qk(iv + 4:iv + 6), model%ws_qn(iv + 4:iv + 6)) > CD_ZERO) CYCLE
+      ErrStat = CD_HCDYN_NOCONVERGE
+      BLOCK
+        CHARACTER(1024) :: wbuf
+        INTEGER :: wios
+        wbuf = ''
+        WRITE (wbuf, '(A,I0,A)', IOSTAT=wios) 'CD_HermiteCable_Dyn_Step: Newton converged with the tangent of node ', &
+          i, ' turned by 90 deg or more in one step (a spurious root with the element folded back); '// &
+          'a smaller dt resolves the step'
+        ErrMsg = wbuf
+      END BLOCK
+      IF (attempt < n_attempt) CYCLE predict
+      RETURN
     END DO
     EXIT predict
     END DO predict

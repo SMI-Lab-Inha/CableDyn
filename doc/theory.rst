@@ -2899,6 +2899,16 @@ over the translational free DOFs, and from the Newmark predictor otherwise (and 
 under-resolved mode rings, a loosely converged step would keep the extrapolated acceleration,
 whereas the zero guess damps it. A failed constant-acceleration attempt is re-solved from the
 Newmark predictor. The test uses only the committed state, so a restart is exact.
+On a Hermite step either guess holds a free nodal tangent at its committed value where it
+would change the tangent's length, the stretch, by more than a quarter (a strain change of 0.25
+in one step). The stretch is the line's stiffest motion (:math:`EA` against the tangents' small
+consistent mass), and with little numerical damping (:math:`\rho_\infty` near 1) an offset of it
+rings on with a committed velocity and acceleration far larger than the motion they make: a
+taut line seeded with unit tangents, :math:`7.6\times10^{-5}` off its elements' stretch, had
+every tangent carried across zero at 50 steps per VIV cycle, and Newton converged to the root
+with every element folded back along its chord. A guess that only turns a tangent is kept (a
+line turning fast is often right). A step that still ends with a tangent turned by 90° or more
+fails, and the next attempt or the step recovery re-solves it.
 The ``EI = 0`` path uses an Armijo line search on :math:`\tfrac{1}{2}\lVert\mathbf{G}\rVert^2`
 and converges when :math:`\lVert\mathbf{G}\rVert_\infty` relative to the larger of the external
 load and the initial residual falls below the relative tolerance, or below the absolute

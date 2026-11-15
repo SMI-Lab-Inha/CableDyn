@@ -170,6 +170,19 @@ All notable changes to CableDyn are recorded in this file. The format follows
   the force scale and the correction moves no free coordinate by more than `16 eps` times its
   scale. A step that meets the tolerance is unchanged: every example and test deck gives
   bit-identical outputs.
+- A finite-EI step could converge to a spurious root with every nodal tangent reversed, and the
+  march then failed: a taut 20 m line locked in by the VIV lift, seeded with unit tangents while
+  its elements were stretched by 7.6e-5, failed within 13 steps at `rho_inf` 0.8 to 1 at 25 and
+  50 steps per VIV cycle (and without the lift too). The tangents' stretch is the line's stiffest
+  motion; with little numerical damping its seed offset rang on with a committed acceleration of
+  4.9e3 1/s^2, and the constant-acceleration and Newmark guesses carried every tangent across
+  zero (by 3.4 and 1.7 of its length), from where Newton converged to the folded root (2.4e8 J of
+  strain energy against 3.5 J). A guess that changes the length of a free tangent by more than a
+  quarter now holds that tangent at its committed value, and a step that ends with a tangent
+  turned by 90 degrees or more fails, so the step recovery re-solves it. The line now runs at
+  `rho_inf` 0.5 to 1 and 25 and 50 steps per cycle, with the response of the same line seeded
+  at its stretch (largest A/D within 0.75 %). Every other step starts as before: every example
+  and test deck gives bit-identical outputs.
 
 ## [0.4.2] - 2026-11-09
 

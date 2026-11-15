@@ -1387,6 +1387,14 @@ target_link_libraries(test_hermite_viv PRIVATE cabledyn_core)
 add_test(NAME hermite_viv COMMAND test_hermite_viv)
 set_tests_properties(hermite_viv PROPERTIES LABELS "fortran;dynamic;viv")
 
+# The Newton predictor against the ringing stretch of the nodal tangents: a taut line seeded with
+# unit tangents (off the elements' stretch) at rho_inf 0.5 to 1 and 25 and 50 steps per VIV cycle,
+# with and without the lift, against the same line seeded at the stretch.
+add_executable(test_hermite_tangent_predictor tests/test_hermite_tangent_predictor.f90)
+target_link_libraries(test_hermite_tangent_predictor PRIVATE cabledyn_core)
+add_test(NAME hermite_tangent_predictor COMMAND test_hermite_tangent_predictor)
+set_tests_properties(hermite_tangent_predictor PROPERTIES LABELS "fortran;dynamic;viv")
+
 add_executable(test_hermite_viv_inline tests/test_hermite_viv_inline.f90)
 target_link_libraries(test_hermite_viv_inline PRIVATE cabledyn_core)
 add_test(NAME hermite_viv_inline COMMAND test_hermite_viv_inline)
