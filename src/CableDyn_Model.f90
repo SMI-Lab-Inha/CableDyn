@@ -439,12 +439,13 @@ MODULE CableDyn_Model
     LOGICAL :: has_viv_amp = .FALSE.
     REAL(wp), ALLOCATABLE :: viv_amp(:, :, :)
     INTEGER, ALLOCATABLE :: viv_amp_n(:)
-    ! The flow frame of the synchronisation model (CD_Set_Model_VIV tf; VIV FRAME section, with
-    ! amplitude tables): with a filter time viv_ftf(nd) > 0 on some node (viv_frame) viv_ms has
-    ! CD_VIV_NMS_FRAME rows, rows 7:9 the node's (smoothed) velocity low-pass filtered over viv_ftf
-    ! (first order; the length-weighted average over its lifting elements), and the amplitude
-    ! estimate takes the node's velocity across the ambient flow both relative to it. The phase
-    ! keeps the relative flow.
+    ! The flow frame of the synchronisation model (CD_Set_Model_VIV tf; VIV FRAME section): with a
+    ! filter time viv_ftf(nd) > 0 on some node (viv_frame) viv_ms has CD_VIV_NMS_FRAME rows, rows
+    ! 7:9 the node's (smoothed) velocity low-pass filtered over viv_ftf (first order; the
+    ! length-weighted average over its lifting elements), rows 3:6 the amplitude estimate (0
+    ! without amplitude tables). The node's velocity relative to it drives the phases (the relative
+    ! flow, and so the shedding speed, unchanged), and the amplitude estimate takes the node's
+    ! velocity across the ambient flow both relative to it (frame_node).
     LOGICAL :: viv_frame = .FALSE.
     REAL(wp), ALLOCATABLE :: viv_ftf(:)
     ! Wake-oscillator VIV (CD_Set_Model_VIV wake; Facchinetti et al. 2004): the van der Pol wake
@@ -4004,10 +4005,11 @@ CONTAINS
     !! optional fourth row wake(4, :) = Tf [s] >= 0 takes the flow relative to the node velocity
     !! low-pass filtered over Tf (0: the ambient flow).
     !! tf (optional, n_elem; not with wake), per element the filter time Tf [s] of the flow frame of
-    !! the synchronisation model (0: the ambient flow; > 0 only where amp_n > 0, at most 1e15): the
-    !! amplitude estimate takes the node's velocity across the ambient flow both relative to the
-    !! node's velocity low-pass filtered over Tf (first order), so a line moved through the water
-    !! sees that motion as flow. The phase rate keeps the flow relative to the node.
+    !! the synchronisation model (0: the ambient flow; > 0 only where cl > 0, at most 1e15), vbar
+    !! the node's smoothed velocity low-pass filtered over Tf (first order): the cross-flow and
+    !! in-line motion of the phases takes the node's velocity relative to vbar, and the amplitude
+    !! estimate takes it across the ambient flow relative to vbar, so a line moved through the
+    !! water sees that motion as flow. The shedding speed stays the relative normal speed.
     TYPE(CD_ModelType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: rho, cl(:), diameter(:), cf(:), df(:), t_window
     INTEGER, INTENT(OUT) :: ErrStat
@@ -4165,16 +4167,10 @@ CONTAINS
                   'at most 1e15')
         RETURN
       END IF
-      DO e = 1, n_elem
-        IF (.NOT. (tf(e) > CD_ZERO)) CYCLE
-        want_frame = want_amp
-        IF (want_frame) want_frame = amp_n(e) > 0
-        IF (.NOT. want_frame) THEN
-          CALL fail(ErrStat, ErrMsg, 'the VIV flow frame (tf > 0) acts on the amplitude estimate: an element '// &
-                    'with it needs an amplitude table (amp, amp_n)')
-          RETURN
-        END IF
-      END DO
+      IF (ANY(tf > CD_ZERO .AND. .NOT. (cl > CD_ZERO))) THEN
+        CALL fail(ErrStat, ErrMsg, 'the VIV flow frame (tf > 0) acts on the VIV model: tf > 0 only where cl > 0')
+        RETURN
+      END IF
       want_frame = ANY(tf > CD_ZERO)
     END IF
     CALL clear_viv(model)
@@ -4846,8 +4842,16 @@ CONTAINS
       IF (.NOT. model%viv_node(nd)) CYCLE
       CALL viv_node_coef(model, model%q, nd, coef, uu)
       ia = 3*nd - 2
-      CALL CD_VIV_Crossflow_Motion(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), smoothed(model%v, ia), &
-                                   smoothed(model%a, ia), uu, yd, ydd, un, ok, xd, xdd)
+      IF (frame_node(model, nd)) THEN
+        ! with the flow frame, the node's velocity relative to its filtered one (the relative flow,
+        ! and so the axes and the shedding speed, unchanged; viv_frame)
+        CALL CD_VIV_Crossflow_Motion(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), &
+                                     smoothed(model%v, ia) - model%viv_ms(7:9, nd), smoothed(model%a, ia), &
+                                     uu - model%viv_ms(7:9, nd), yd, ydd, un, ok, xd, xdd)
+      ELSE
+        CALL CD_VIV_Crossflow_Motion(model%q(ia - 3:ia - 1), model%q(ia + 3:ia + 5), smoothed(model%v, ia), &
+                                     smoothed(model%a, ia), uu, yd, ydd, un, ok, xd, xdd)
+      END IF
       IF (.NOT. ok) THEN
         CALL fail(ErrStat, ErrMsg, 'VIV phase: the neighbours of a node coincide (no line tangent)')
         RETURN
@@ -4905,9 +4909,16 @@ CONTAINS
       IF (.NOT. model%viv_node(nd)) CYCLE
       CALL viv_node_coef(model, model%q_step, nd, coef, uu)
       ia = 3*nd - 2
-      CALL CD_VIV_Crossflow_Motion(model%q_step(ia - 3:ia - 1), model%q_step(ia + 3:ia + 5), &
-                                   smoothed(model%v_step, ia), smoothed(model%a_step, ia), uu, yd, ydd, un, ok, &
-                                   xd, xdd)
+      IF (frame_node(model, nd)) THEN
+        CALL CD_VIV_Crossflow_Motion(model%q_step(ia - 3:ia - 1), model%q_step(ia + 3:ia + 5), &
+                                     smoothed(model%v_step, ia) - model%viv_ms(7:9, nd), &
+                                     smoothed(model%a_step, ia), uu - model%viv_ms(7:9, nd), yd, ydd, un, ok, &
+                                     xd, xdd)
+      ELSE
+        CALL CD_VIV_Crossflow_Motion(model%q_step(ia - 3:ia - 1), model%q_step(ia + 3:ia + 5), &
+                                     smoothed(model%v_step, ia), smoothed(model%a_step, ia), uu, yd, ydd, un, ok, &
+                                     xd, xdd)
+      END IF
       IF (model%viv_wake) THEN
         ! the wake state over the step with the cross-flow acceleration linear from its step-start
         ! value to the converged end one (held where the end tangent is degenerate), at the
@@ -4940,31 +4951,29 @@ CONTAINS
       END IF
       IF (model%has_viv_amp) THEN
         ! the amplitude estimate over the step, from the committed one (repeatable), on the
-        ! cross-flow velocity across the ambient flow
+        ! cross-flow velocity across the ambient flow; with the flow frame, the velocity and the
+        ! flow both relative to the step-start filtered velocity
         st = model%viv_ms(3:6, nd)
-        IF (model%viv_frame) THEN
-          ! with the flow frame, the velocity and the flow both relative to the step-start filtered
-          ! velocity, which then follows the converged end velocity held over the step (exact for
-          ! the first-order filter; a non-finite end velocity keeps it)
-          vsm = smoothed(model%v_step, ia)
-          IF (model%viv_ftf(nd) > CD_ZERO) THEN
-            CALL CD_VIV_Amplitude_Update(st, CD_VIV_Ambient_Crossflow_Rate(model%q_step(ia + 3:ia + 5) - &
-                                                                           model%q_step(ia - 3:ia - 1), &
-                                                                           vsm - model%viv_ms(7:9, nd), &
-                                                                           uu - model%viv_ms(7:9, nd)), dt)
-            IF (CD_All_Finite(vsm)) &
-              model%viv_ms_next(7:9, nd) = model%viv_ms(7:9, nd) + (CD_ONE - EXP(-dt/model%viv_ftf(nd)))* &
-                                           (vsm - model%viv_ms(7:9, nd))
-          ELSE
-            CALL CD_VIV_Amplitude_Update(st, CD_VIV_Ambient_Crossflow_Rate(model%q_step(ia + 3:ia + 5) - &
-                                                                           model%q_step(ia - 3:ia - 1), vsm, uu), dt)
-          END IF
+        IF (frame_node(model, nd)) THEN
+          CALL CD_VIV_Amplitude_Update(st, CD_VIV_Ambient_Crossflow_Rate(model%q_step(ia + 3:ia + 5) - &
+                                                                         model%q_step(ia - 3:ia - 1), &
+                                                                         smoothed(model%v_step, ia) - &
+                                                                         model%viv_ms(7:9, nd), &
+                                                                         uu - model%viv_ms(7:9, nd)), dt)
         ELSE
           CALL CD_VIV_Amplitude_Update(st, CD_VIV_Ambient_Crossflow_Rate(model%q_step(ia + 3:ia + 5) - &
                                                                          model%q_step(ia - 3:ia - 1), &
                                                                          smoothed(model%v_step, ia), uu), dt)
         END IF
         model%viv_ms_next(3:6, nd) = st
+      END IF
+      IF (frame_node(model, nd)) THEN
+        ! the filtered velocity follows the converged end velocity held over the step (exact for
+        ! the first-order filter; a non-finite end velocity keeps it)
+        vsm = smoothed(model%v_step, ia)
+        IF (CD_All_Finite(vsm)) &
+          model%viv_ms_next(7:9, nd) = model%viv_ms(7:9, nd) + (CD_ONE - EXP(-dt/model%viv_ftf(nd)))* &
+                                       (vsm - model%viv_ms(7:9, nd))
       END IF
       ms1 = CD_VIV_Mean_Square(model%viv_ms_next(1, nd), yd, w)
       ms2 = CD_VIV_Mean_Square(model%viv_ms_next(2, nd), ydd, w)
@@ -4997,6 +5006,15 @@ CONTAINS
       END IF
     END IF
   END SUBROUTINE viv_step_end
+
+  PURE LOGICAL FUNCTION frame_node(model, nd) RESULT(on)
+    !! Node nd takes the flow frame of the synchronisation model (viv_frame, viv_ftf(nd) > 0).
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: nd
+    on = .FALSE.
+    IF (.NOT. model%viv_frame) RETURN
+    on = model%viv_ftf(nd) > CD_ZERO
+  END FUNCTION frame_node
 
   PURE REAL(wp) FUNCTION viv_node_ambient_speed(q, ia, uu) RESULT(ua)
     !! Speed of the ambient flow uu normal to the tangent of the node whose x component is ia (the

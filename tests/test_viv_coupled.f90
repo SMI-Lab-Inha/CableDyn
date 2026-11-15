@@ -42,7 +42,10 @@ PROGRAM test_viv_coupled
   !!   the restarted run continues bit for bit with it, a rebuild without the VIV state does not,
   !!   and a rewound step repeats; with the flow frame (VIV FRAME Tf 5 s on both types, and VIV
   !!   DAMPING on the cable) both blocks carry the filtered velocity too (3 more per node, 9 motion
-  !!   statistics), with the same restart and rewind checks.
+  !!   statistics), with the same restart and rewind checks;
+  !! * the flow frame on the lift alone (VIV FRAME Tf 5 s, no tables): both blocks carry the
+  !!   filtered velocity in rows 7-9 of 9 motion statistics (rows 3-6 unused), with the same restart
+  !!   and rewind checks.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_End, CD_AGG_OK, &
                                          CD_AGG_NMovingPoints, CD_AGG_GetMovingPointMesh, CD_AGG_Step_Moving, &
@@ -63,6 +66,7 @@ PROGRAM test_viv_coupled
   ! the deck of the restart and rewind cases, and whether its lines carry in-line VIV
   CHARACTER(32) :: deck_name = 'viv_coupled.dat'
   LOGICAL :: il_case = .FALSE., wake_case = .FALSE., amp_case = .FALSE., wakef_case = .FALSE., ampf_case = .FALSE.
+  LOGICAL :: frame_case = .FALSE.
 
   nfail = 0
   CALL write_deck('viv_coupled.dat', 0.8_wp)
@@ -72,6 +76,7 @@ PROGRAM test_viv_coupled
   CALL write_deck('viv_coupled_wakef.dat', 0.8_wp, wake=.TRUE., wake_tf='5.0')
   CALL write_deck('viv_coupled_amp.dat', 0.8_wp, amp=.TRUE.)
   CALL write_deck('viv_coupled_ampf.dat', 0.8_wp, amp=.TRUE., wake_tf='5.0', damp=.TRUE.)
+  CALL write_deck('viv_coupled_frame.dat', 0.8_wp, wake_tf='5.0')
   CALL case_lockin()
   CALL case_restart()
   CALL case_rewind()
@@ -90,6 +95,13 @@ PROGRAM test_viv_coupled
   wakef_case = .TRUE.
   CALL case_restart()
   CALL case_rewind()
+  deck_name = 'viv_coupled_frame.dat'
+  wake_case = .FALSE.
+  wakef_case = .FALSE.
+  frame_case = .TRUE.
+  CALL case_restart()
+  CALL case_rewind()
+  frame_case = .FALSE.
   deck_name = 'viv_coupled_amp.dat'
   wake_case = .FALSE.
   wakef_case = .FALSE.
@@ -388,7 +400,7 @@ CONTAINS
       ok = ok .AND. es == CD_SYSTEM_OK
       nv = CD_System_Line_VIV_MirrorSize(a%sys%fast%system, il)
       ok = ok .AND. nv == (MERGE(6, 3, il_case) + MERGE(4, 0, amp_case .OR. wakef_case) + &
-                           MERGE(3, 0, ampf_case))*(ndof/3) + 1
+                           MERGE(3, 0, ampf_case) + MERGE(7, 0, frame_case))*(ndof/3) + 1
       IF (with_viv .AND. nv > 0) THEN
         ALLOCATE (buf(nv))
         CALL CD_Get_System_Line_VIV_State(a%sys%fast%system, il, buf, es, em)
@@ -402,7 +414,8 @@ CONTAINS
     CALL CD_HFMF_PackMirror(a%cables(1), buf, es, em)
     nvc = CD_HFMF_VIVMirrorSize(a%cables(1))
     ok = ok .AND. nvc == (MERGE(6, 3, il_case) + MERGE(MERGE(5, 2, wakef_case), 0, wake_case) + &
-                          MERGE(4, 0, amp_case) + MERGE(3, 0, ampf_case))*a%cables(1)%line%nn + 1
+                          MERGE(4, 0, amp_case) + MERGE(3, 0, ampf_case) + MERGE(7, 0, frame_case))* &
+         a%cables(1)%line%nn + 1
     IF (.NOT. with_viv) THEN
       ! the cable's VIV block as the fresh build has it (the torsion-free cable ends with it)
       CALL CD_HFMF_PackMirror(b%cables(1), fresh, es, em)
@@ -428,6 +441,14 @@ CONTAINS
                                      a%sys%fast%system%lines(1)%viv_wake .AND. &
                                      MAXVAL(ABS(a%sys%fast%system%lines(1)%viv_ms - &
                                                 b%sys%fast%system%lines(1)%viv_ms)) <= 0.0_wp
+    IF (same .AND. frame_case) THEN
+      ! the filtered velocity in rows 7-9 of the motion statistics on both lines, no tables
+      same = a%cables(1)%line%viv_frame .AND. .NOT. a%cables(1)%line%has_viv_amp .AND. &
+             a%sys%fast%system%lines(1)%viv_frame .AND. .NOT. a%sys%fast%system%lines(1)%has_viv_amp .AND. &
+             SIZE(a%cables(1)%line%viv_ms, 1) == 9 .AND. SIZE(a%sys%fast%system%lines(1)%viv_ms, 1) == 9 .AND. &
+             MAXVAL(ABS(a%sys%fast%system%lines(1)%viv_ms - b%sys%fast%system%lines(1)%viv_ms)) <= 0.0_wp .AND. &
+             MAXVAL(ABS(a%cables(1)%line%viv_ms - b%cables(1)%line%viv_ms)) <= 0.0_wp
+    END IF
     IF (same .AND. amp_case) THEN
       ! the motion statistics with the amplitude estimate (rows 3-6) on both lines
       same = a%sys%fast%system%lines(1)%has_viv_amp .AND. a%cables(1)%line%has_viv_amp .AND. &

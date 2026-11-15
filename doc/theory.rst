@@ -1467,47 +1467,84 @@ and the drag, damping and VIV powers balance within 0.2 %.
 Flow frame of the synchronisation model
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The amplitude estimate and the cross-flow damping are defined across the ambient flow. A cable
-moved through still water, by a tow or by its floater, has none: its estimate stays at
-:math:`y_0^* = 0`, its table gives :math:`C_v(0)` and the drag factor at 0, and its damping blends
-to Morison's, while the same problem in the cable's frame (the water moving past the held cable)
-takes the amplitude-dependent values. A ``VIV FRAME`` row with :math:`T_f > 0` on a type with a
-``VIV AMPLITUDE`` table takes these quantities relative to the node's filtered velocity
+The synchronisation model takes the node's motion in the earth frame. Its phase reads the
+cross-flow velocity :math:`\dot{\mathbf r}\cdot\mathbf e` across the relative flow, which is
+:math:`\mathbf u\cdot\mathbf e` and so zero in still water; the amplitude estimate and the
+cross-flow damping are defined across the ambient flow, which still water does not have. A cable
+moved through still water, by a tow or by its floater, therefore locks its phase on
+:math:`\ddot y` alone, keeps :math:`y_0^* = 0`, :math:`C_v(0)` and the drag factor at 0, and its
+damping blends to Morison's, while the same problem in the cable's frame (the water moving past
+the held cable) does not. A ``VIV FRAME`` row with :math:`T_f > 0` on a synchronisation type
+(LINE TYPES ``Cl > 0``) takes these quantities in the frame of the node's filtered velocity
 :math:`\bar{\mathbf v}` of :ref:`theory-viv-wake` (the same filter, started at the node's
-velocity). The estimate takes
+velocity):
 
-.. math::
+- the phases (cross-flow, and in-line where it runs) take :math:`\dot{\mathbf r} -
+  \bar{\mathbf v}` along their axes, which the relative flow sets, so the axes and the shedding
+  speed :math:`U` stay those of the relative flow; the acceleration stays the node's, since
+  :math:`\bar{\mathbf v}` changes slowly and its rate :math:`(\mathbf v - \bar{\mathbf v})/T_f`
+  would carry the VIV velocity;
+- the amplitude estimate takes
 
-   \dot y = (\dot{\mathbf r} - \bar{\mathbf v})\cdot
-   \frac{\mathbf t\times(\mathbf u - \bar{\mathbf v})_n}{|(\mathbf u - \bar{\mathbf v})_n|},
+  .. math::
 
-and with it the table's :math:`C_v`, drag factor and :math:`C_{dy}`; the damping takes
-:math:`\mathbf e_x`, :math:`\mathbf e_y` and the blend :math:`\beta` from
-:math:`(\mathbf u - \bar{\mathbf v})_n`, an element the mean :math:`\bar{\mathbf v}` of its end
-nodes. :math:`\bar{\mathbf v}` is held over a step (the step-start value), so the Jacobians are
-unchanged, and it is updated at the converged end. The relative velocity of the drag and the lift
-does not depend on the frame and is unchanged. For a frame moving at a constant velocity (a steady
-tow) the quantities are those of the held cable exactly; the estimate's :math:`\dot y` then loses
-the part of the VIV velocity that passes the filter, a factor
-:math:`\omega T_f/\sqrt{1 + \omega^2 T_f^2}` (0.9985 at 0.29 Hz with :math:`T_f` 10 s). For a
-motion at :math:`\omega_m` the filter lags by :math:`\arctan\omega_m T_f`, so :math:`T_f` is taken
+     \dot y = (\dot{\mathbf r} - \bar{\mathbf v})\cdot
+     \frac{\mathbf t\times(\mathbf u - \bar{\mathbf v})_n}{|(\mathbf u - \bar{\mathbf v})_n|},
+
+  and with it the table's :math:`C_v`, drag factor and :math:`C_{dy}`;
+- the damping takes :math:`\mathbf e_x`, :math:`\mathbf e_y` and the blend :math:`\beta` from
+  :math:`(\mathbf u - \bar{\mathbf v})_n`, an element the mean :math:`\bar{\mathbf v}` of its end
+  nodes.
+
+:math:`\bar{\mathbf v}` is held over a step (the step-start value), so the Jacobians are
+unchanged, and it is updated at the converged end. The lift and the drag act on the relative
+velocity, which does not depend on the frame, and are unchanged. For a frame moving at a constant
+velocity (a steady tow) the model is that of the held cable exactly. The velocity relative to
+:math:`\bar{\mathbf v}` loses the part of the VIV velocity that passes the filter: for a response
+at :math:`\omega` it is scaled by :math:`\omega T_f/\sqrt{1 + \omega^2 T_f^2}` and led by
+:math:`\arctan(1/\omega T_f)` (0.9985 and 3.1° at 0.29 Hz with :math:`T_f` 10 s). For a motion at
+:math:`\omega_m` the filter lags by :math:`\arctan\omega_m T_f`. :math:`T_f` is therefore taken
 several VIV periods long and short against the motion.
 
-The phase rate keeps the published form, :math:`U` the relative normal speed and
-:math:`\phi_{\dot y}` from the node's motion along :math:`\mathbf e`, across the relative flow.
-That velocity, :math:`\dot{\mathbf r}\cdot\mathbf e = \mathbf u\cdot\mathbf e`, is not the same in
-the two frames: in still water it is zero, and the phase follows :math:`\ddot y` alone. A pipe of
-the displaced mass (20 m, :math:`D` 0.1 m, the table and Thorsen's damping) moved in still water
-with velocity amplitude 0.6 m/s and period 40 s, against the same pipe held in the water moving
-the other way (the held fluid field, so the Froude-Krylov load acts; a pipe of another mass would
-differ by :math:`(m - \rho A)\dot V`): with :math:`T_f` 0.6 s the peak cross-flow A/D is 0.84 and
-0.83, the RMS 0.41 and 0.45; without the frame the moving pipe gives 0.71 against 0.85. A taut
-cable towed at 0.15 m/s with :math:`T_f` 10 s gives A/D 0.780 against 0.792 held in the current,
-0.665 without the frame; on the held cable :math:`T_f` changes A/D by 0.2 % (finite-EI) and less
-than 0.01 % (``EI = 0``). :math:`\bar{\mathbf v}` takes rows 7-9 of the node's motion statistics
-on both line kinds (nine rows), so it is part of the step-recovery, snapshot and checkpoint state;
-an ``EI = 0`` line filters its smoothed node velocity. :math:`T_f` 0 or no row leaves the run
-unchanged to the bit.
+A pipe of the displaced mass (20 m, :math:`D` 0.1 m, ``Cl`` 0.8) moved in still water with
+velocity amplitude 0.6 m/s and period 40 s, against the same pipe held in the water moving the
+other way (the held fluid field, so the Froude-Krylov load acts; a pipe of another mass would
+differ by :math:`(m - \rho A)\dot V`), with :math:`T_f` 0.6 s:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Pipe
+     - Frame
+     - Peak A/D moving / held
+     - RMS A/D moving / held
+   * - Amplitude table and Thorsen's damping
+     - ``Tf`` 0.6 s
+     - 0.819 / 0.819
+     - 0.446 / 0.447
+   * -
+     - none
+     - 0.711 / 0.850
+     - 0.349 / 0.450
+   * - ``Cl`` alone
+     - ``Tf`` 0.6 s
+     - 0.713 / 0.714
+     - 0.372 / 0.371
+   * -
+     - none
+     - 0.711 / 0.736
+     - 0.349 / 0.375
+
+The two frames agree within 0.7 % with the row (Release and Debug builds, both OpenBLAS kernels),
+the rest being the filter's lag
+(:math:`\omega_m T_f` = 0.094). A taut cable towed at 0.15 m/s with :math:`T_f` 10 s gives A/D
+0.7905 against 0.7906 held in the current with the same row (0.792 without it; 0.665 towed without
+the row) with the table and damping, and 0.6764 against 0.6764 with ``Cl`` alone. On the held
+cable :math:`T_f` changes A/D by at most 0.23 % on both line kinds. :math:`\bar{\mathbf v}` takes
+rows 7-9 of the node's motion statistics on both line kinds (nine rows; rows 3-6, the amplitude
+estimate, stay 0 without a table), so it is part of the step-recovery, snapshot and checkpoint
+state; an ``EI = 0`` line filters its smoothed node velocity. :math:`T_f` 0 or no row leaves the
+run unchanged to the bit.
 
 .. _theory-viv-coefficients:
 

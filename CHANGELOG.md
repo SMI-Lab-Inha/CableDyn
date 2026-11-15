@@ -118,16 +118,19 @@ All notable changes to CableDyn are recorded in this file. The format follows
   leaves runs unchanged to the bit. The Python deck reader and builder (`viv_frame_tf`) take the
   section.
 
-- The `VIV FRAME` section on the synchronisation model: on a type with a `VIV AMPLITUDE` table,
-  `Tf > 0` takes the amplitude estimate (and so `Cv` and `CdAmp`) and the axes and blend of the
-  `VIV DAMPING` split relative to the cable's filtered velocity. A cable moved through still water
-  had `y0 = 0`, `Cv(0)`, `CdAmp(0)` and Morison's drag. A pipe moved at 0.6 m/s amplitude and
-  40 s period in still water now gives peak A/D 0.84 against 0.83 for the same pipe held in the
-  moving water (0.71 against 0.85 without the row); a cable towed at 0.15 m/s, 0.780 against 0.792
-  held in the current. The phase rate keeps the published form. On `EI = 0` lines and finite-EI
-  cables, the filtered velocity in rows 7-9 of the VIV motion statistics, so in the step-recovery,
-  snapshot and checkpoint state; `Tf` 0 or no row leaves runs unchanged to the bit. The Python
-  deck reader and builder take it.
+- The `VIV FRAME` section on the synchronisation model (LINE TYPES `Cl > 0`): `Tf > 0` takes the
+  cable's filtered velocity as the frame of the cross-flow and in-line phases (the node's
+  velocity relative to it; the shedding speed stays the relative normal speed), of the amplitude
+  estimate (and so `Cv` and `CdAmp`) and of the axes and blend of the `VIV DAMPING` split. A cable
+  moved through still water had a phase input of zero cross-flow velocity, `y0 = 0`, `Cv(0)`,
+  `CdAmp(0)` and Morison's drag. A pipe moved at 0.6 m/s amplitude and 40 s period in still water
+  now gives peak A/D 0.819 against 0.819 for the same pipe held in the moving water with the
+  amplitude table and damping (0.711 against 0.850 without the row), and 0.713 against 0.714 with
+  the lift alone (0.711 against 0.736); a cable towed at 0.15 m/s gives the A/D of the cable held
+  in the current with the same row within 0.01 %. On `EI = 0` lines and finite-EI cables, the
+  filtered velocity in rows 7-9 of the VIV motion statistics, so in the step-recovery, snapshot
+  and checkpoint state; `Tf` 0 or no row leaves runs unchanged to the bit. A VIV FRAME row now
+  needs LINE TYPES `Cl > 0` or a WAKE OSCILLATOR row; the Python deck reader and builder follow.
 
 ### Fixed
 

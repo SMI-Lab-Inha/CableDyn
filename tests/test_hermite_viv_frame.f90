@@ -3,15 +3,17 @@
 ! Copyright (c) 2026 Jae Hoon Seo, SMI Lab, Inha University
 PROGRAM test_hermite_viv_frame
   !! The flow frame of the synchronisation model on the cubic-Hermite cable
-  !! (CD_HermiteCable_Dyn_Set_VIV tf): with a filter time Tf > 0 the amplitude estimate and the
-  !! cross-flow damping split take the ambient flow relative to the node velocity low-pass
-  !! filtered over Tf, so these quantities are the same in the cylinder's frame and in the water's.
+  !! (CD_HermiteCable_Dyn_Set_VIV tf): with a filter time Tf > 0 the motion of the phase (the node's
+  !! velocity relative to its velocity low-pass filtered over Tf), the amplitude estimate and the
+  !! cross-flow damping split take the cable's filtered motion as their frame, so they are the same
+  !! in the cylinder's frame and in the water's.
   !!
   !! The pipe: 20 m, 10 elements, D 0.1 m, EI 1000 N m^2, pinned, about 21 kN, its mass that of the
-  !! water it displaces (8.05 kg/m, no net weight), Cd 1.2, Ca 1, Cl 0.8 with an amplitude table
-  !! (Cv 0.8, 0.6, 0.0 and CdAmp 1.0, 1.3, 1.6 at A/D 0, 0.5, 1) and Thorsen's cross-flow damping
-  !! (a, b) = (0.31, 0.89). The flow along y oscillates with amplitude 0.6 m/s and period 40 s
-  !! (KC 240), its amplitude ramped up over the first period; the cross-flow axis is z.
+  !! water it displaces (8.05 kg/m, no net weight), Cd 1.2, Ca 1, Cl 0.8, alone or with an
+  !! amplitude table (Cv 0.8, 0.6, 0.0 and CdAmp 1.0, 1.3, 1.6 at A/D 0, 0.5, 1) and Thorsen's
+  !! cross-flow damping (a, b) = (0.31, 0.89). The flow along y oscillates with amplitude 0.6 m/s
+  !! and period 40 s (KC 240), its amplitude ramped up over the first period; the cross-flow axis
+  !! is z.
   !! * moving: still water, both ends moved along y with velocity V(t);
   !! * fixed: the ends held, the water moving at -V(t) (a held fluid field with its acceleration,
   !!   so the Froude-Krylov and added-mass loads act).
@@ -22,19 +24,18 @@ PROGRAM test_hermite_viv_frame
   !!
   !! Gates:
   !! * F1 the setter refuses tf of the wrong size, a negative or non-finite tf, tf > 0 on an element
-  !!   without an amplitude table, and tf with the wake oscillator; an all-zero tf installs no
-  !!   frame and reproduces the run without tf bit for bit;
-  !! * F2 with Tf 0.6 s the moving and the fixed pipe agree: the peak cross-flow response of the
-  !!   mid node over the second period within 5 % (measured 1.0-2.2 % over the Release and Debug
-  !!   builds and the two OpenBLAS kernels), its RMS within 12 % (measured 7 %). Two differences
-  !!   are left. The filter lags the imposed velocity by about omega Tf = 0.094 rad (5 degrees).
-  !!   The phase rate keeps the published form: its cross-flow velocity is the node's velocity
-  !!   across the relative flow, r'.e = u.e, which is zero in still water, so the moving pipe's
-  !!   phase follows y'' alone (the RMS gap, and the moving run carries round-off further; with y'
-  !!   taken relative to the frame the two runs agree within 0.1 %);
-  !! * F3 without the frame they differ: the moving pipe in still water takes Cv and CdAmp at A/D
-  !!   0 and the Morison drag (no ambient flow); its peak response is more than 10 % (measured
-  !!   16 %) and its RMS more than 15 % (measured 23 %) from the fixed pipe's;
+  !!   without lift and tf with the wake oscillator; tf on the lift alone installs the frame (nine
+  !!   motion statistics, no table); an all-zero tf installs no frame and reproduces the run
+  !!   without tf bit for bit;
+  !! * F2 with Tf 0.6 s the moving and the fixed pipe agree, with the tables and with the lift
+  !!   alone: the peak and the RMS cross-flow response of the mid node over the second period within
+  !!   1 % (measured at most 0.7 % over the Release and Debug builds and the two OpenBLAS kernels).
+  !!   What is left is the filter's lag of the imposed velocity, about omega Tf = 0.094 rad;
+  !! * F3 without the frame they differ: in still water the moving pipe's phase sees no cross-flow
+  !!   velocity (r'.e = u.e = 0 across the relative flow), and with the tables it takes Cv and CdAmp
+  !!   at A/D 0 and the Morison drag; with the tables the peak response is more than 10 % (measured
+  !!   16 %) and the RMS more than 15 % (measured 23 %) from the fixed pipe's, with the lift alone
+  !!   the RMS more than 4 % (measured 7 %);
   !! * F4 a snapshot taken mid-run and restored replays the following steps bit for bit, the
   !!   filtered velocity included.
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
@@ -52,12 +53,16 @@ PROGRAM test_hermite_viv_frame
   REAL(wp), PARAMETER :: SPAN = 20.0_wp, DT = 0.01_wp, U0 = 0.6_wp, TP = 40.0_wp, TF = 0.6_wp
   REAL(wp), PARAMETER :: MLIN = RHOW*0.25_wp*PI*D*D
   INTEGER, PARAMETER :: NE = 10, NN = NE + 1, MID = 6*(NE/2), NSTEP = NINT(2.0_wp*TP/DT)
+  ! the agreement of the moving and the fixed pipe with the flow frame (F2)
+  REAL(wp), PARAMETER :: TOL_F2 = 0.01_wp
 
   TYPE(CD_HermiteCableDynType) :: model, twin
   REAL(wp) :: cl(NE), cf(NE), df(NE), amp(3, CD_VIV_AMP_MAXP, NE), cdy(2, NE), tf0(NE), tfv(NE)
   INTEGER :: ampn(NE)
   REAL(wp) :: pk_mf, rms_mf, pk_ff, rms_ff, pk_m0, rms_m0, pk_f0, rms_f0
-  INTEGER :: es, nfail, k
+  INTEGER :: es, nfail, k, it
+  LOGICAL :: tables
+  CHARACTER(12) :: lab
   CHARACTER(1024) :: em
 
   nfail = 0
@@ -79,25 +84,25 @@ PROGRAM test_hermite_viv_frame
   CALL require(es /= CD_HCDYN_OK .AND. INDEX(em, 'must be >= 0') > 0, 'F1: a negative tf is refused: '//TRIM(em))
   BLOCK
     REAL(wp) :: bad(NE)
-    INTEGER :: an(NE)
+    REAL(wp) :: cl2(NE)
     bad = tfv
     bad(4) = IEEE_VALUE(1.0_wp, IEEE_QUIET_NAN)
     CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, tf=bad)
     CALL require(es /= CD_HCDYN_OK, 'F1: a non-finite tf is refused')
-    CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, tf=tfv)
-    CALL require(es /= CD_HCDYN_OK .AND. INDEX(em, 'needs an amplitude table') > 0, &
-                 'F1: tf > 0 without amplitude tables is refused: '//TRIM(em))
-    an = ampn
-    an(3) = 0
-    CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=an, tf=tfv)
-    CALL require(es /= CD_HCDYN_OK .AND. INDEX(em, 'needs an amplitude table') > 0, &
-                 'F1: tf > 0 on an element without its table is refused: '//TRIM(em))
+    cl2 = cl
+    cl2(3) = 0.0_wp
+    CALL CD_HermiteCable_Dyn_Set_VIV(model, cl2, cf, df, 2.0_wp, es, em, tf=tfv)
+    CALL require(es /= CD_HCDYN_OK .AND. INDEX(em, 'only where cl > 0') > 0, &
+                 'F1: tf > 0 on an element without lift is refused: '//TRIM(em))
     CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, &
                                      wake=RESHAPE([(0.2_wp, 0.3_wp, 12.0_wp, k=1, NE)], [3, NE]), tf=tf0)
     CALL require(es /= CD_HCDYN_OK .AND. INDEX(em, 'wake(4, :)') > 0, 'F1: tf with the wake oscillator is refused: '// &
                  TRIM(em))
   END BLOCK
   CALL require(.NOT. model%has_viv .AND. .NOT. model%viv_frame, 'F1: a refused call installs nothing')
+  CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, tf=tfv)
+  CALL require(es == CD_HCDYN_OK .AND. model%viv_frame .AND. .NOT. model%has_viv_amp .AND. &
+               SIZE(model%viv_ms, 1) == CD_VIV_NMS_FRAME, 'F1: the frame installs on the lift alone: '//TRIM(em))
   CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy, tf=tf0)
   CALL require(es == CD_HCDYN_OK .AND. .NOT. model%viv_frame .AND. SIZE(model%viv_ms, 1) == 6, &
                'F1: an all-zero tf installs no frame: '//TRIM(em))
@@ -114,18 +119,25 @@ PROGRAM test_hermite_viv_frame
   CALL CD_HermiteCable_Dyn_End(model)
   CALL CD_HermiteCable_Dyn_End(twin)
 
-  ! ---- F2 and F3 the two frames, with and without the flow frame ----
-  CALL run_case(.TRUE., tfv, pk_mf, rms_mf)
-  CALL run_case(.FALSE., tfv, pk_ff, rms_ff)
-  CALL run_case(.TRUE., tf0, pk_m0, rms_m0)
-  CALL run_case(.FALSE., tf0, pk_f0, rms_f0)
-  WRITE (*, '(A,2F9.4,A,2F9.4)') '  F2 with Tf: moving peak, RMS A/D ', pk_mf/D, rms_mf/D, '; fixed ', pk_ff/D, rms_ff/D
-  WRITE (*, '(A,2F9.4,A,2F9.4)') '  F3 without: moving peak, RMS A/D ', pk_m0/D, rms_m0/D, '; fixed ', pk_f0/D, rms_f0/D
-  CALL require(pk_ff > 0.2_wp*D, 'F2: the fixed pipe locks in')
-  CALL require(ABS(pk_mf/pk_ff - 1.0_wp) <= 0.05_wp .AND. ABS(rms_mf/rms_ff - 1.0_wp) <= 0.12_wp, &
-               'F2: with the flow frame the moving and the fixed pipe agree')
-  CALL require(ABS(pk_m0/pk_f0 - 1.0_wp) > 0.10_wp .AND. ABS(rms_m0/rms_f0 - 1.0_wp) > 0.15_wp, &
-               'F3: without it the moving pipe responds otherwise')
+  ! ---- F2 and F3 the two frames, with and without the flow frame, with and without the tables ----
+  DO it = 1, 2
+    tables = it == 1
+    lab = MERGE(' (tables)   ', ' (lift only)', tables)
+    CALL run_case(.TRUE., tfv, tables, pk_mf, rms_mf)
+    CALL run_case(.FALSE., tfv, tables, pk_ff, rms_ff)
+    CALL run_case(.TRUE., tf0, tables, pk_m0, rms_m0)
+    CALL run_case(.FALSE., tf0, tables, pk_f0, rms_f0)
+    WRITE (*, '(A,2F9.4,A,2F9.4)') '  F2'//lab//' with Tf: moving peak, RMS A/D ', pk_mf/D, rms_mf/D, '; fixed ', &
+      pk_ff/D, rms_ff/D
+    WRITE (*, '(A,2F9.4,A,2F9.4)') '  F3'//lab//' without: moving peak, RMS A/D ', pk_m0/D, rms_m0/D, '; fixed ', &
+      pk_f0/D, rms_f0/D
+    CALL require(pk_ff > 0.2_wp*D, 'F2: the fixed pipe locks in'//lab)
+    CALL require(ABS(pk_mf/pk_ff - 1.0_wp) <= TOL_F2 .AND. ABS(rms_mf/rms_ff - 1.0_wp) <= TOL_F2, &
+                 'F2: with the flow frame the moving and the fixed pipe agree'//lab)
+    CALL require(ABS(pk_m0/pk_f0 - 1.0_wp) > MERGE(0.10_wp, 0.0_wp, tables) .AND. &
+                 ABS(rms_m0/rms_f0 - 1.0_wp) > MERGE(0.15_wp, 0.04_wp, tables), &
+                 'F3: without it the moving pipe responds otherwise'//lab)
+  END DO
 
   ! ---- F4 snapshot replay with the filtered velocity ----
   BLOCK
@@ -257,10 +269,11 @@ CONTAINS
     IF (es /= CD_HCDYN_OK) CALL require(.FALSE., 'step: '//TRIM(em))
   END SUBROUTINE advance
 
-  SUBROUTINE run_case(moving, tfe, pk, rms)
-    !! Two periods of the moving or the fixed pipe with the filter times tfe; over the second
-    !! period the peak and RMS cross-flow (z) displacement of the mid node from its rest depth.
-    LOGICAL, INTENT(IN) :: moving
+  SUBROUTINE run_case(moving, tfe, tables, pk, rms)
+    !! Two periods of the moving or the fixed pipe with the filter times tfe, with the amplitude
+    !! tables and the cross-flow damping (tables) or the lift Cl alone; over the second period
+    !! the peak and RMS cross-flow (z) displacement of the mid node from its rest depth.
+    LOGICAL, INTENT(IN) :: moving, tables
     REAL(wp), INTENT(IN) :: tfe(NE)
     REAL(wp), INTENT(OUT) :: pk, rms
     TYPE(CD_HermiteCableDynType), ALLOCATABLE :: m
@@ -268,7 +281,11 @@ CONTAINS
     INTEGER :: s, n
     ALLOCATE (m)
     CALL build(m)
-    CALL CD_HermiteCable_Dyn_Set_VIV(m, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy, tf=tfe)
+    IF (tables) THEN
+      CALL CD_HermiteCable_Dyn_Set_VIV(m, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy, tf=tfe)
+    ELSE
+      CALL CD_HermiteCable_Dyn_Set_VIV(m, cl, cf, df, 2.0_wp, es, em, tf=tfe)
+    END IF
     CALL require(es == CD_HCDYN_OK, 'VIV: '//TRIM(em))
     pk = 0.0_wp
     s2 = 0.0_wp

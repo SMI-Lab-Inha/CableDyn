@@ -1393,8 +1393,9 @@ add_test(NAME hermite_viv_inline COMMAND test_hermite_viv_inline)
 set_tests_properties(hermite_viv_inline PROPERTIES LABELS "fortran;dynamic;viv")
 
 # The flow frame of the synchronisation model (Set_VIV tf): a pipe moved through still water
-# against the same pipe held in the water moving the other way, with the amplitude tables and the
-# cross-flow damping; the refusals, the all-zero identity and the snapshot replay.
+# against the same pipe held in the water moving the other way, with the lift alone and with the
+# amplitude tables and the cross-flow damping; the refusals, the all-zero identity and the
+# snapshot replay.
 add_executable(test_hermite_viv_frame tests/test_hermite_viv_frame.f90)
 target_link_libraries(test_hermite_viv_frame PRIVATE cabledyn_core)
 add_test(NAME hermite_viv_frame COMMAND test_hermite_viv_frame)

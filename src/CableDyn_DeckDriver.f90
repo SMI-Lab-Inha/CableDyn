@@ -17893,10 +17893,11 @@ CONTAINS
     !! flow relative to the cable's velocity low-pass filtered over Tf (first order), so that a
     !! cable moved through the water by a tow or its floater sees that motion as flow, and its own
     !! VIV velocity, much faster than Tf, does not count; Tf 0 is the ambient flow. It sets the
-    !! wake oscillator's frequency, or the ambient-frame quantities of the synchronisation model:
-    !! the amplitude estimate (and so the VIV AMPLITUDE coefficients) and the axes of the VIV
-    !! DAMPING split; the phase rate keeps the flow relative to the cable. The type needs a WAKE
-    !! OSCILLATOR row or a VIV AMPLITUDE table (read before this section). A type takes one row.
+    !! wake oscillator's frequency, or on the synchronisation model (LINE TYPES Cl > 0) the motion
+    !! of the phases (the cable's velocity relative to the filtered one) and the ambient-frame
+    !! quantities: the amplitude estimate (and so the VIV AMPLITUDE coefficients) and the axes of
+    !! the VIV DAMPING split; the shedding speed stays the relative normal speed. The type needs
+    !! LINE TYPES Cl > 0 or a WAKE OSCILLATOR row. A type takes one row.
     CHARACTER(*), INTENT(IN) :: row
     TYPE(DeckLineType), INTENT(INOUT) :: types(:)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -17927,10 +17928,9 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'VIV FRAME filter time Tf must be >= 0 (0 = the ambient flow), at most 1e15')
       RETURN
     END IF
-    IF (.NOT. (types(it)%wo_cl0 > CD_ZERO .OR. types(it)%amp_n > 0)) THEN
+    IF (.NOT. (types(it)%wo_cl0 > CD_ZERO .OR. types(it)%cl > CD_ZERO)) THEN
       CALL fail(ErrStat, ErrMsg, 'VIV FRAME of LINE TYPE "'//TRIM(types(it)%name)//'" sets the flow frame of '// &
-                'its wake oscillator or of its amplitude estimate: give the type a WAKE OSCILLATOR row or a VIV '// &
-                'AMPLITUDE table'); RETURN
+                'its VIV model: give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row'); RETURN
     END IF
     types(it)%viv_tf = v
     types(it)%has_vivf_row = .TRUE.

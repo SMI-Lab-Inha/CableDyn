@@ -234,10 +234,10 @@ class LineType:
         ``Name Tf``: the filter time [s] of the cable velocity the model's free
         stream is taken relative to (0: the ambient flow; set it for a cable
         moved through the water by a tow or its floater). It sets the wake
-        oscillator's frequency, or the amplitude estimate (and so the
-        ``viv_amplitude`` coefficients) and the ``viv_damping`` split of the
-        synchronisation model, so it needs ``wake_cl0`` or ``viv_amplitude``.
-        ``None`` writes no row.
+        oscillator's frequency, or on the synchronisation model the motion of
+        the phases, the amplitude estimate (and so the ``viv_amplitude``
+        coefficients) and the ``viv_damping`` split, so it needs ``cl > 0`` or
+        ``wake_cl0``. ``None`` writes no row.
     viv_amplitude : list of tuples | None
         Optional amplitude-dependent VIV coefficients of a type (Thorsen et al.
         2016), the rows of a ``VIV AMPLITUDE`` section table ``Name AD Cv
@@ -3105,10 +3105,9 @@ class DeckModel:
             if item.viv_frame_tf is None:
                 continue
             what = f"line type {item.name!r}"
-            if item.wake_cl0 is None and not item.viv_amplitude:
+            if item.wake_cl0 is None and not (item.cl is not None and item.cl > 0.0):
                 raise ValueError(
-                    f"{what}: viv_frame_tf sets the frame of its wake oscillator or of its "
-                    "amplitude estimate, set wake_cl0 or viv_amplitude"
+                    f"{what}: viv_frame_tf sets the frame of its VIV model, set cl > 0 or wake_cl0"
                 )
             rows.append([_text(item.name, what), _num(item.viv_frame_tf, what)])
         return "Name Tf", "(-) (s)", rows

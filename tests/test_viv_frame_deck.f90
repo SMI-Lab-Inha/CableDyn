@@ -2,25 +2,30 @@
 ! SPDX-License-Identifier: Apache-2.0
 ! Copyright (c) 2026 Jae Hoon Seo, SMI Lab, Inha University
 PROGRAM test_viv_frame_deck
-  !! The VIV FRAME section (TypeName Tf) on the synchronisation model: with Tf > 0 the amplitude
+  !! The VIV FRAME section (TypeName Tf) on the synchronisation model: with Tf > 0 the motion of the
+  !! phases (the cable's velocity relative to its velocity low-pass filtered over Tf), the amplitude
   !! estimate (and so the VIV AMPLITUDE coefficients Cv and CdAmp) and the axes and blend of the
-  !! VIV DAMPING split take the ambient flow relative to the cable's velocity low-pass filtered
-  !! over Tf. The cable is the taut cable of the VIV amplitude and damping gates (100 m, D 0.1 m,
-  !! 50 kN, pinned at 50 m depth, 50 elements, Cl 0.8), its type with a VIV AMPLITUDE table (Cv 0.8,
-  !! 0.6, 0.0 and CdAmp 1.0, 1.3, 1.6 at A/D 0, 0.5, 1) and, on the finite-EI cable (EI 1 N m^2),
-  !! Thorsen's VIV DAMPING (0.31 0.89).
+  !! VIV DAMPING split take the cable's filtered motion as their frame. The cable is the taut cable
+  !! of the VIV amplitude and damping gates (100 m, D 0.1 m, 50 kN, pinned at 50 m depth, 50
+  !! elements, Cl 0.8), its type with the lift alone, or ("tables") with a VIV AMPLITUDE table (Cv
+  !! 0.8, 0.6, 0.0 and CdAmp 1.0, 1.3, 1.6 at A/D 0, 0.5, 1) and, on the finite-EI cable (EI 1
+  !! N m^2), Thorsen's VIV DAMPING (0.31 0.89).
   !!   G1 a Tf 0 row is the deck without the section, bit for bit, on the finite-EI cable and on the
-  !!      EI = 0 line;
+  !!      EI = 0 line, with and without the tables;
   !!   G2 the finite-EI cable towed through still water (both ends at 0.15 m/s against y after a
   !!      10 s half-cosine ramp) with Tf 10 s responds as the cable held in a 0.15 m/s current: the
-  !!      A/D over 50-80 s within 5 % (measured 1.5 %) and the frequency within 0.005 Hz (the
-  !!      30 s window resolves 0.033 Hz; the scan peak moves by 0.002 Hz). The towed cable without
-  !!      the frame takes Cv and CdAmp at A/D 0 and the Morison drag (no ambient flow) and responds
-  !!      otherwise (A/D more than 10 % off; measured 16 %);
+  !!      A/D over 50-80 s within 1 % of the held cable's (measured 0.24 % with the tables, 0.16 %
+  !!      with the lift alone) and within 0.2 % of the held cable's with Tf 10 s (measured 0.01 %;
+  !!      the frame moves at a constant velocity, so the two are the same problem), the frequency
+  !!      within 0.005 and 0.0015 Hz (the 30 s window resolves 0.033 Hz; the scan peak moves by
+  !!      0.002 Hz). With the tables the towed cable without the frame takes Cv and CdAmp at A/D 0
+  !!      and the Morison drag (no ambient flow) and responds otherwise (A/D more than 10 % off;
+  !!      measured 16 %); with the lift alone it is reported (1.9 % off);
   !!   G3 held in the current, Tf 10 s leaves the response as the ambient flow gives it (A/D within
-  !!      2 %, frequency within 0.005 Hz), on both cores (an EI = 0 line cannot run between two
-  !!      moving points, so the towed case is finite-EI only);
-  !!   G4 refusals by name: a VIV FRAME row on a synchronisation type without a VIV AMPLITUDE table.
+  !!      0.5 %, measured at most 0.23 %, frequency within 0.005 Hz), on both cores, with and without
+  !!      the tables (an EI = 0 line cannot run between two moving points, so the towed case is
+  !!      finite-EI only);
+  !!   G4 refusals by name: a VIV FRAME row on a type without VIV (no Cl, no WAKE OSCILLATOR row).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   IMPLICIT NONE
@@ -28,13 +33,18 @@ PROGRAM test_viv_frame_deck
   CHARACTER(*), PARAMETER :: AMP = 'riser 0.0 0.8 1.0;riser 0.5 0.6 1.3;riser 1.0 0.0 1.6'
   REAL(wp), PARAMETER :: TMAX = 80.0_wp, T0 = 50.0_wp
   INTEGER :: nfail = 0
-  REAL(wp) :: fe_cur(2), fe_cur_tf(2), l_cur(2), l_cur_tf(2)
+  REAL(wp) :: fe_cur(2), fe_cur_tf(2), l_cur(2), l_cur_tf(2), fs_cur(2), fs_cur_tf(2), ls_cur(2), ls_cur_tf(2)
+  ! the agreement of the towed cable with the held one, without and with Tf (G2)
+  REAL(wp), PARAMETER :: TOL_TOW = 0.01_wp, TOL_TOW_TF = 0.002_wp
 
   CALL write_current('vfd_current.dat')
   CALL write_tow('vfd_tow.txt')
-  CALL check_fixed('1.0', 'riser 0.31 0.89', 'vfd_fe', fe_cur, fe_cur_tf)
-  CALL check_fixed('0.0', '', 'vfd_l', l_cur, l_cur_tf)
-  CALL check_tow(fe_cur)
+  CALL check_fixed('1.0', AMP, 'riser 0.31 0.89', 'vfd_fe', fe_cur, fe_cur_tf)
+  CALL check_fixed('0.0', AMP, '', 'vfd_l', l_cur, l_cur_tf)
+  CALL check_fixed('1.0', '', '', 'vfd_fs', fs_cur, fs_cur_tf)
+  CALL check_fixed('0.0', '', '', 'vfd_ls', ls_cur, ls_cur_tf)
+  CALL check_tow('vfd_tow', AMP, 'riser 0.31 0.89', fe_cur, fe_cur_tf, ' (tables)')
+  CALL check_tow('vfd_tows', '', '', fs_cur, fs_cur_tf, ' (lift only)')
   CALL check_refusals()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -123,21 +133,25 @@ CONTAINS
     END DO
   END SUBROUTINE write_rows
 
-  SUBROUTINE write_deck(path, ei, amp_rows, damp_rows, tmax_, tow, frame_rows)
+  SUBROUTINE write_deck(path, ei, amp_rows, damp_rows, tmax_, tow, frame_rows, cl)
     !! ei the type's EI; amp_rows/damp_rows: the VIV AMPLITUDE and VIV DAMPING data rows,
     !! ';'-separated ('' for no section); tow: no current, both ends Coupled and moved by the motion
     !! file vfd_tow.txt; frame_rows: the VIV FRAME data rows (no section without it).
     CHARACTER(*), INTENT(IN) :: path, ei, amp_rows, damp_rows
     REAL(wp), INTENT(IN) :: tmax_
     LOGICAL, INTENT(IN) :: tow
-    CHARACTER(*), INTENT(IN), OPTIONAL :: frame_rows
+    CHARACTER(*), INTENT(IN), OPTIONAL :: frame_rows, cl
+    CHARACTER(8) :: cl_col
     INTEGER :: u
+    cl_col = '0.8'
+    IF (PRESENT(cl)) cl_col = cl
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') '--------------------- CableDyn Input File ---------------------------------'
     WRITE (u, '(A)') 'VIV FRAME deck gate: taut cable in a uniform current or towed through still water'
     WRITE (u, '(A)') '----------------------- LINE TYPES ------------------------------------------'
     WRITE (u, '(A)') 'TypeName   Diam   Mass/m   EA        BA/-zeta  EI   Cd    Ca    CdAx  CaAx  Cl   dF    cF'
-    WRITE (u, '(A)') 'riser      0.10   10.0     5.0e7     -0.8      '//ei//'  1.2   1.0   0.0   0.0   0.8  0.08  0.18'
+  WRITE (u, '(A)') 'riser      0.10   10.0     5.0e7     -0.8      '//ei//'  1.2   1.0   0.0   0.0   '//TRIM(cl_col)// &
+      '  0.08  0.18'
     WRITE (u, '(A)') '----------------------- POINTS ----------------------------------------------'
     WRITE (u, '(A)') 'ID   Attachment   X       Y     Z      M    V     CdA   CA'
     WRITE (u, '(A)') '1    Coupled      0.0     0.0   -50.0  0    0     0     0'
@@ -268,24 +282,24 @@ CONTAINS
     CLOSE (ub)
   END FUNCTION same_file
 
-  SUBROUTINE check_fixed(ei, damp_rows, tag, res, res_tf)
+  SUBROUTINE check_fixed(ei, amp_rows, damp_rows, tag, res, res_tf)
     !! G1 and G3 on the cable of EI ei held in the current: without the section, with a Tf 0 row
     !! and with Tf 10 s; res and res_tf (A/D, f) without the section and with Tf 10 s.
-    CHARACTER(*), INTENT(IN) :: ei, damp_rows, tag
+    CHARACTER(*), INTENT(IN) :: ei, amp_rows, damp_rows, tag
     REAL(wp), INTENT(OUT) :: res(2), res_tf(2)
     LOGICAL :: ok, ok2
     CHARACTER(1024) :: msg
     CHARACTER(:), ALLOCATABLE :: lab
-    lab = ' (EI '//ei//')'
-    CALL write_deck(tag//'_amb.dat', ei, AMP, damp_rows, TMAX, .FALSE.)
+    lab = ' (EI '//ei//', '//TRIM(MERGE('tables', 'lift  ', LEN_TRIM(amp_rows) > 0))//')'
+    CALL write_deck(tag//'_amb.dat', ei, amp_rows, damp_rows, TMAX, .FALSE.)
     CALL run(tag//'_amb.dat', tag//'_amb', ok, msg)
     CALL require(ok, 'G1: the deck without the section runs'//lab//': '//TRIM(msg))
-    CALL write_deck(tag//'_t0.dat', ei, AMP, damp_rows, TMAX, .FALSE., frame_rows='riser 0')
+    CALL write_deck(tag//'_t0.dat', ei, amp_rows, damp_rows, TMAX, .FALSE., frame_rows='riser 0')
     CALL run(tag//'_t0.dat', tag//'_t0', ok, msg)
     CALL require(ok, 'G1: the deck with Tf 0 runs'//lab//': '//TRIM(msg))
     CALL require(same_file(tag//'_amb.out', tag//'_t0.out'), 'G1: a Tf 0 row is the deck without it, bit for '// &
                  'bit'//lab)
-    CALL write_deck(tag//'_tf.dat', ei, AMP, damp_rows, TMAX, .FALSE., frame_rows='riser 10')
+    CALL write_deck(tag//'_tf.dat', ei, amp_rows, damp_rows, TMAX, .FALSE., frame_rows='riser 10')
     CALL run(tag//'_tf.dat', tag//'_tf', ok, msg)
     CALL require(ok, 'G3: the deck with Tf 10 s runs'//lab//': '//TRIM(msg))
     CALL stats(tag//'_amb', res, ok)
@@ -294,41 +308,46 @@ CONTAINS
     WRITE (*, '(A,2F8.4,A,2F8.4)') 'G3'//lab//': in the current A/D, f [Hz] with Tf 10 s ', res_tf, &
       '; without ', res
     CALL require(res(1) > 0.2_wp, 'G3: the cable locks in'//lab)
-    CALL require(ABS(res_tf(1)/res(1) - 1.0_wp) <= 0.02_wp .AND. ABS(res_tf(2) - res(2)) <= 0.005_wp, &
+    CALL require(ABS(res_tf(1)/res(1) - 1.0_wp) <= 0.005_wp .AND. ABS(res_tf(2) - res(2)) <= 0.005_wp, &
                  'G3: held in the current, Tf leaves the response as the ambient flow gives it'//lab)
   END SUBROUTINE check_fixed
 
-  SUBROUTINE check_tow(ref)
-    !! G2 on the finite-EI cable: towed with Tf 10 s and without it, against the cable held in the
-    !! current (ref, from check_fixed).
-    REAL(wp), INTENT(IN) :: ref(2)
+  SUBROUTINE check_tow(tag, amp_rows, damp_rows, ref, ref_tf, lab)
+    !! G2 on the finite-EI cable with the given tables: towed with Tf 10 s and without it, against
+    !! the cable held in the current without and with Tf 10 s (ref, ref_tf, from check_fixed);
+    !! without the tables (the lift alone) the towed cable without Tf is only reported.
+    CHARACTER(*), INTENT(IN) :: tag, amp_rows, damp_rows, lab
+    REAL(wp), INTENT(IN) :: ref(2), ref_tf(2)
     REAL(wp) :: r_tf(2), r_0(2)
     LOGICAL :: ok, ok2
     CHARACTER(1024) :: msg
-    CALL write_deck('vfd_tow_tf.dat', '1.0', AMP, 'riser 0.31 0.89', TMAX, .TRUE., frame_rows='riser 10')
-    CALL run('vfd_tow_tf.dat', 'vfd_tow_tf', ok, msg)
-    CALL require(ok, 'G2: the towed deck with Tf runs: '//TRIM(msg))
-    CALL write_deck('vfd_tow_0.dat', '1.0', AMP, 'riser 0.31 0.89', TMAX, .TRUE.)
-    CALL run('vfd_tow_0.dat', 'vfd_tow_0', ok, msg)
-    CALL require(ok, 'G2: the towed deck without Tf runs: '//TRIM(msg))
-    CALL stats('vfd_tow_tf', r_tf, ok)
-    CALL stats('vfd_tow_0', r_0, ok2)
-    CALL require(ok .AND. ok2, 'G2: the towed runs wrote their rows')
-    WRITE (*, '(A,2F8.4,A,2F8.4,A,2F8.4)') 'G2: towed A/D, f [Hz] with Tf 10 s ', r_tf, '; without ', r_0, &
-      '; held in the current ', ref
-    CALL require(ABS(r_tf(1)/ref(1) - 1.0_wp) <= 0.05_wp .AND. ABS(r_tf(2) - ref(2)) <= 0.005_wp, &
-                 'G2: towed with Tf, the cable responds as the cable held in the current')
-    CALL require(ABS(r_0(1)/ref(1) - 1.0_wp) > 0.10_wp, 'G2: towed without Tf, it responds otherwise')
+    CALL write_deck(tag//'_tf.dat', '1.0', amp_rows, damp_rows, TMAX, .TRUE., frame_rows='riser 10')
+    CALL run(tag//'_tf.dat', tag//'_tf', ok, msg)
+    CALL require(ok, 'G2: the towed deck with Tf runs'//lab//': '//TRIM(msg))
+    CALL write_deck(tag//'_0.dat', '1.0', amp_rows, damp_rows, TMAX, .TRUE.)
+    CALL run(tag//'_0.dat', tag//'_0', ok, msg)
+    CALL require(ok, 'G2: the towed deck without Tf runs'//lab//': '//TRIM(msg))
+    CALL stats(tag//'_tf', r_tf, ok)
+    CALL stats(tag//'_0', r_0, ok2)
+    CALL require(ok .AND. ok2, 'G2: the towed runs wrote their rows'//lab)
+    WRITE (*, '(A,2F8.4,A,2F8.4,A,2F8.4,A,2F8.4)') 'G2'//lab//': towed A/D, f [Hz] with Tf 10 s ', r_tf, &
+      '; without ', r_0, '; held in the current ', ref, ', with Tf ', ref_tf
+    CALL require(ABS(r_tf(1)/ref(1) - 1.0_wp) <= TOL_TOW .AND. ABS(r_tf(2) - ref(2)) <= 0.005_wp, &
+                 'G2: towed with Tf, the cable responds as the cable held in the current'//lab)
+    CALL require(ABS(r_tf(1)/ref_tf(1) - 1.0_wp) <= TOL_TOW_TF .AND. ABS(r_tf(2) - ref_tf(2)) <= 0.0015_wp, &
+                 'G2: towed with Tf, the cable responds as the cable held in the current with Tf'//lab)
+    IF (LEN_TRIM(amp_rows) > 0) CALL require(ABS(r_0(1)/ref(1) - 1.0_wp) > 0.10_wp, &
+                                             'G2: towed without Tf, it responds otherwise'//lab)
   END SUBROUTINE check_tow
 
   SUBROUTINE check_refusals()
     LOGICAL :: ok
     CHARACTER(1024) :: msg
-    CALL write_deck('vfd_bad.dat', '1.0', '', '', 1.0_wp, .FALSE., frame_rows='riser 10')
+    CALL write_deck('vfd_bad.dat', '1.0', '', '', 1.0_wp, .FALSE., frame_rows='riser 10', cl='0.0')
     CALL run('vfd_bad.dat', 'vfd_bad', ok, msg)
-    WRITE (*, '(A)') 'G4 a synchronisation type without a VIV AMPLITUDE table: '//TRIM(msg)
-    CALL require(.NOT. ok .AND. INDEX(msg, 'give the type a WAKE OSCILLATOR row or a VIV AMPLITUDE table') > 0, &
-                 'G4: a VIV FRAME row on a synchronisation type without an amplitude table is refused')
+    WRITE (*, '(A)') 'G4 a type without VIV: '//TRIM(msg)
+    CALL require(.NOT. ok .AND. INDEX(msg, 'give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row') > 0, &
+                 'G4: a VIV FRAME row on a type without VIV is refused')
   END SUBROUTINE check_refusals
 
 END PROGRAM test_viv_frame_deck

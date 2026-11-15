@@ -386,14 +386,15 @@ MODULE CableDyn_HermiteCableDynamic
     ! flow (elem_cdy, elem_cdy_lin; c Cdn with the element's unamplified Cdn); a < 0, or the array
     ! unallocated, keeps the element's Morison drag.
     REAL(wp), ALLOCATABLE :: viv_cdy(:, :)
-    ! The flow frame of the synchronisation model (Set_VIV tf; VIV FRAME section, with amplitude
-    ! tables): with a filter time viv_ftfe(e) > 0 on some element (viv_frame) viv_ms has
-    ! CD_VIV_NMS_FRAME rows, rows 7:9 the node's velocity low-pass filtered over viv_ftf(k) (first
-    ! order; the length-weighted average over the node's lifting elements). The ambient-frame
-    ! quantities then take the ambient flow relative to it: the amplitude estimate (the node's
-    ! velocity relative to it, across that flow; viv_node_ambient_yd) and so the amplitude-table
-    ! coefficients, and on an element with viv_ftfe(e) > 0 the axes and blend of the cross-flow
-    ! damping (elem_frame_v, the mean over its end nodes). The phase keeps the relative flow.
+    ! The flow frame of the synchronisation model (Set_VIV tf; VIV FRAME section): with a filter
+    ! time viv_ftfe(e) > 0 on some element (viv_frame) viv_ms has CD_VIV_NMS_FRAME rows, rows 7:9
+    ! the node's velocity low-pass filtered over viv_ftf(k) (first order; the length-weighted
+    ! average over the node's lifting elements), rows 3:6 the amplitude estimate (0 without
+    ! amplitude tables). The node's velocity relative to it drives the phases (viv_node_motion;
+    ! the relative flow, and so the shedding speed, unchanged), and the ambient-frame quantities
+    ! take the ambient flow relative to it: the amplitude estimate (viv_node_ambient_yd) and so the
+    ! amplitude-table coefficients, and on an element with viv_ftfe(e) > 0 the axes and blend of
+    ! the cross-flow damping (elem_frame_v, the mean over its end nodes).
     LOGICAL :: viv_frame = .FALSE.
     REAL(wp), ALLOCATABLE :: viv_ftf(:), viv_ftfe(:)
     REAL(wp), ALLOCATABLE :: Mgb(:, :)                           ! constant global mass (band)
@@ -1214,11 +1215,12 @@ CONTAINS
     !!
     !! tf (optional, ne; not with the wake oscillator, which takes it as wake(4, :)), per element the
     !! filter time Tf [s] of the flow frame of the synchronisation model (0: the ambient flow; > 0
-    !! only where amp_n > 0, at most 1e15): the amplitude estimate takes the node's velocity across
-    !! the ambient flow relative to the node velocity low-pass filtered over Tf (first order), both
-    !! relative to that filtered velocity, and the cross-flow damping its axes and blend from that
-    !! flow, so a cable moved through the water by a tow or its floater sees that motion as flow.
-    !! The phase rate keeps the flow relative to the node (Galilean already).
+    !! only where cl > 0, at most 1e15), vbar the node velocity low-pass filtered over Tf (first
+    !! order): the cross-flow and in-line motion of the phases takes the node's velocity relative
+    !! to vbar (along the axes of the relative flow); the amplitude estimate takes it across the
+    !! ambient flow relative to vbar; and the cross-flow damping takes its axes and blend from that
+    !! flow. A cable moved through the water by a tow or its floater then sees that motion as flow.
+    !! The shedding speed of the phase rate stays the relative normal speed.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: cl(:), cf(:), df(:), t_window
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1439,19 +1441,11 @@ CONTAINS
                  'flow) and at most 1e15'
         RETURN
       END IF
-      DO e = 1, ne
-        IF (.NOT. (tf(e) > CD_ZERO)) CYCLE
-        IF (.NOT. want_amp) THEN
-          ErrStat = CD_HCDYN_BADINPUT
-        ELSE IF (amp_n(e) <= 0) THEN
-          ErrStat = CD_HCDYN_BADINPUT
-        END IF
-        IF (ErrStat /= CD_HCDYN_OK) THEN
-          ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: the flow frame (tf > 0) acts on the amplitude estimate: an '// &
-                   'element with it needs an amplitude table (amp, amp_n)'
-          RETURN
-        END IF
-      END DO
+      IF (ANY(tf > CD_ZERO .AND. .NOT. (cl > CD_ZERO))) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'CD_HermiteCable_Dyn_Set_VIV: the flow frame (tf > 0) acts on the VIV model: tf > 0 only where cl > 0'
+        RETURN
+      END IF
       want_frame = ANY(tf > CD_ZERO)
     END IF
     ! the previous configuration and state, kept for a rollback
@@ -1913,7 +1907,11 @@ CONTAINS
   SUBROUTINE viv_node_motion(model, k, yd, ydd, un, ok, xd, xdd)
     !! Cross-flow velocity and acceleration of node k at the committed state, along its own
     !! tangent (the slope DOFs), in the flow the drag sees there (current plus a held field);
-    !! optionally (both or neither) the in-line ones.
+    !! optionally (both or neither) the in-line ones. With the flow frame (viv_ftf(k) > 0) the
+    !! velocity is the node's velocity relative to its filtered velocity vbar (the relative flow,
+    !! and so the axes and U, unchanged): a cable moved through still water then moves across the
+    !! flow only by its own VIV, as the held cable in the moving water does. The acceleration stays
+    !! the node's: vbar changes slowly, and its rate (v - vbar)/Tf would carry the VIV velocity.
     TYPE(CD_HermiteCableDynType), INTENT(IN) :: model
     INTEGER, INTENT(IN) :: k
     REAL(wp), INTENT(OUT) :: yd, ydd, un
@@ -1924,6 +1922,14 @@ CONTAINS
     i0 = 6*(k - 1)
     uu = model%current
     IF (model%has_held_field) uu = uu + model%hf_u(:, k)
+    IF (model%viv_frame) THEN
+      IF (model%viv_ftf(k) > CD_ZERO) THEN
+        ! absent xd, xdd pass on absent
+        CALL CD_VIV_Crossflow_Along(model%q(i0 + 4:i0 + 6), model%v(i0 + 1:i0 + 3) - model%viv_ms(7:9, k), &
+                                    model%a(i0 + 1:i0 + 3), uu - model%viv_ms(7:9, k), yd, ydd, un, ok, xd, xdd)
+        RETURN
+      END IF
+    END IF
     IF (PRESENT(xd)) THEN
       CALL CD_VIV_Crossflow_Along(model%q(i0 + 4:i0 + 6), model%v(i0 + 1:i0 + 3), model%a(i0 + 1:i0 + 3), uu, &
                                   yd, ydd, un, ok, xd, xdd)
