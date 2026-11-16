@@ -121,8 +121,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
   high-mode riser of Trim et al. (2005) at its 22 uniform-flow tow speeds, with four coefficient
   sets against the measured maximum r.m.s. cross-flow strain (Thorsen et al. 2016, Fig. 8), the
   dominant frequency and σ/D: the set Ulveseter et al. (2019) fitted to these tests matches strain
-  (r.m.s. log error 0.165), frequency and amplitude together; Andersen et al.'s (2024b)
-  sheared-flow average 0.186; the generic set, blind, 0.283.
+  (r.m.s. log error 0.178), frequency and amplitude together; Andersen et al.'s (2024b)
+  sheared-flow average 0.186; the generic set, blind, 0.277.
 - Theory manual, Published coefficient sets: the VIV coefficient sets of Thorsen et al. (2016,
   2017), Ulveseter et al. (2018), Andersen et al. (2024a, b) and Facchinetti et al. (2004), each
   with its source, its test data and the line-type columns it maps to, and Thorsen et al.'s

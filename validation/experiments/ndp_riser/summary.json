@@ -34,27 +34,27 @@
         2.3,
         2.4
       ],
-      "strain_fund_ratio_median": 1.251346359644622,
+      "strain_fund_ratio_median": 1.2571062159593067,
       "strain_fund_ratio_range": [
-        0.9406665607204934,
-        1.6689050500119254
+        0.9877067373166128,
+        1.5665480591009866
       ],
-      "strain_fund_rms_log_error": 0.28268380252520153,
-      "strain_fund_rms_log_error_U_ge_0p5": 0.2835571493975459,
+      "strain_fund_rms_log_error": 0.2766299415215297,
+      "strain_fund_rms_log_error_U_ge_0p5": 0.27737960253468885,
       "thorsen2016_sim_rms_log_error_same_speeds": 0.18701650558341884,
       "thorsen2016_sim_rms_log_error_U_ge_0p5": 0.1816450776805147,
-      "strain_total_ratio_median": 1.0635101713005999,
-      "strain_total_rms_log_error": 0.15537707623975405,
-      "fD_U_cf_mean_at_fig18_speeds": 0.19089,
+      "strain_total_ratio_median": 1.0584269733357312,
+      "strain_total_rms_log_error": 0.1766799559913615,
+      "fD_U_cf_mean_at_fig18_speeds": 0.19182000000000002,
       "fD_U_cf_measured_mean_at_fig18_speeds": 0.14269500000000002,
-      "fD_U_cf_mean_all_speeds": 0.1868757109841235,
-      "sigma_D_cf_mean": 0.43500944875061265,
+      "fD_U_cf_mean_all_speeds": 0.18685691678791969,
+      "sigma_D_cf_mean": 0.4290083586999797,
       "sigma_D_cf_measured_mean": 0.4364545454545455,
-      "sigma_D_il_mean": 0.03758294772305593,
+      "sigma_D_il_mean": 0.04052171870161913,
       "sigma_D_il_measured_mean": 0.14945454545454542,
       "mean_tension_N_range": [
         4017,
-        9992
+        9981
       ]
     },
     "and24b": {
@@ -84,27 +84,27 @@
         2.3,
         2.4
       ],
-      "strain_fund_ratio_median": 1.023437188544833,
+      "strain_fund_ratio_median": 1.0041362120271444,
       "strain_fund_ratio_range": [
-        0.6703300209508499,
-        1.2744629841355783
+        0.669381360004605,
+        1.273674211040034
       ],
-      "strain_fund_rms_log_error": 0.18567159154599902,
-      "strain_fund_rms_log_error_U_ge_0p5": 0.18047214165137346,
+      "strain_fund_rms_log_error": 0.18607649659184072,
+      "strain_fund_rms_log_error_U_ge_0p5": 0.1812834271827885,
       "thorsen2016_sim_rms_log_error_same_speeds": 0.18701650558341884,
       "thorsen2016_sim_rms_log_error_U_ge_0p5": 0.1816450776805147,
-      "strain_total_ratio_median": 0.9377923465089648,
-      "strain_total_rms_log_error": 0.2716011413624954,
+      "strain_total_ratio_median": 0.935238467733235,
+      "strain_total_rms_log_error": 0.27133630525808555,
       "fD_U_cf_mean_at_fig18_speeds": 0.13413,
       "fD_U_cf_measured_mean_at_fig18_speeds": 0.14269500000000002,
-      "fD_U_cf_mean_all_speeds": 0.13045238442280682,
-      "sigma_D_cf_mean": 0.690391840722386,
+      "fD_U_cf_mean_all_speeds": 0.13055895432349438,
+      "sigma_D_cf_mean": 0.6872850455513722,
       "sigma_D_cf_measured_mean": 0.4364545454545455,
-      "sigma_D_il_mean": 0.08905928729625551,
+      "sigma_D_il_mean": 0.08815225700625753,
       "sigma_D_il_measured_mean": 0.14945454545454542,
       "mean_tension_N_range": [
         4010,
-        7550
+        7535
       ]
     },
     "uls19": {
@@ -134,27 +134,27 @@
         2.3,
         2.4
       ],
-      "strain_fund_ratio_median": 0.9730424345693638,
+      "strain_fund_ratio_median": 0.890509603830604,
       "strain_fund_ratio_range": [
-        0.6742392421408682,
-        1.2911002904203726
+        0.6395097067278822,
+        1.3286994362951445
       ],
-      "strain_fund_rms_log_error": 0.16467140242923517,
-      "strain_fund_rms_log_error_U_ge_0p5": 0.14712261950280714,
+      "strain_fund_rms_log_error": 0.17784402916844322,
+      "strain_fund_rms_log_error_U_ge_0p5": 0.15625104689068844,
       "thorsen2016_sim_rms_log_error_same_speeds": 0.18701650558341884,
       "thorsen2016_sim_rms_log_error_U_ge_0p5": 0.1816450776805147,
-      "strain_total_ratio_median": 1.052587692538839,
-      "strain_total_rms_log_error": 0.19319073056815572,
-      "fD_U_cf_mean_at_fig18_speeds": 0.14265,
+      "strain_total_ratio_median": 0.9734055771641398,
+      "strain_total_rms_log_error": 0.18332706785625352,
+      "fD_U_cf_mean_at_fig18_speeds": 0.14531999999999998,
       "fD_U_cf_measured_mean_at_fig18_speeds": 0.14269500000000002,
-      "fD_U_cf_mean_all_speeds": 0.14670480003008896,
-      "sigma_D_cf_mean": 0.4604959752779875,
+      "fD_U_cf_mean_all_speeds": 0.14601728083572835,
+      "sigma_D_cf_mean": 0.4606471786934472,
       "sigma_D_cf_measured_mean": 0.4364545454545455,
-      "sigma_D_il_mean": 0.14676212207124403,
+      "sigma_D_il_mean": 0.14625252681604584,
       "sigma_D_il_measured_mean": 0.14945454545454542,
       "mean_tension_N_range": [
         4009,
-        6977
+        6948
       ]
     },
     "th16": {
@@ -184,27 +184,27 @@
         2.3,
         2.4
       ],
-      "strain_fund_ratio_median": 1.2984254255079073,
+      "strain_fund_ratio_median": 1.4002450719245019,
       "strain_fund_ratio_range": [
-        0.9059282406238846,
-        2.1461719328171136
+        0.9084299248668841,
+        1.8588629520718365
       ],
-      "strain_fund_rms_log_error": 0.3537275891447526,
-      "strain_fund_rms_log_error_U_ge_0p5": 0.36808992190730333,
+      "strain_fund_rms_log_error": 0.362608870706913,
+      "strain_fund_rms_log_error_U_ge_0p5": 0.3774587442086474,
       "thorsen2016_sim_rms_log_error_same_speeds": 0.18701650558341884,
       "thorsen2016_sim_rms_log_error_U_ge_0p5": 0.1816450776805147,
-      "strain_total_ratio_median": 1.1149006321260697,
-      "strain_total_rms_log_error": 0.22018730242704107,
-      "fD_U_cf_mean_at_fig18_speeds": 0.18267000000000003,
+      "strain_total_ratio_median": 1.1162060812212764,
+      "strain_total_rms_log_error": 0.20064970064034177,
+      "fD_U_cf_mean_at_fig18_speeds": 0.19269,
       "fD_U_cf_measured_mean_at_fig18_speeds": 0.14269500000000002,
-      "fD_U_cf_mean_all_speeds": 0.1897409432609938,
-      "sigma_D_cf_mean": 0.39158015315045314,
+      "fD_U_cf_mean_all_speeds": 0.19301011480870967,
+      "sigma_D_cf_mean": 0.3900255003761697,
       "sigma_D_cf_measured_mean": 0.4364545454545455,
-      "sigma_D_il_mean": 0.06504450905562272,
+      "sigma_D_il_mean": 0.06650981202584938,
       "sigma_D_il_measured_mean": 0.14945454545454542,
       "mean_tension_N_range": [
         4009,
-        6545
+        6532
       ]
     },
     "th16c": {
@@ -234,29 +234,29 @@
         2.3,
         2.4
       ],
-      "strain_fund_ratio_median": 0.7332262286691209,
+      "strain_fund_ratio_median": 0.7340841919585173,
       "strain_fund_ratio_range": [
-        0.4362846407739006,
-        1.058610673255422
+        0.5142482769213371,
+        1.0596904536917338
       ],
-      "strain_fund_rms_log_error": 0.41756756691458,
-      "strain_fund_rms_log_error_U_ge_0p5": 0.4318363338803733,
+      "strain_fund_rms_log_error": 0.3652774038700901,
+      "strain_fund_rms_log_error_U_ge_0p5": 0.3760778263719995,
       "thorsen2016_sim_rms_log_error_same_speeds": 0.18701650558341884,
       "thorsen2016_sim_rms_log_error_U_ge_0p5": 0.1816450776805147,
-      "strain_total_ratio_median": 0.6030582363453324,
-      "strain_total_rms_log_error": 0.5881779730631931,
-      "fD_U_cf_mean_at_fig18_speeds": 0.1575,
+      "strain_total_ratio_median": 0.6326367996919098,
+      "strain_total_rms_log_error": 0.5444253236443083,
+      "fD_U_cf_mean_at_fig18_speeds": 0.15336,
       "fD_U_cf_measured_mean_at_fig18_speeds": 0.14269500000000002,
-      "fD_U_cf_mean_all_speeds": 0.154429861341286,
-      "sigma_D_cf_mean": 0.30575305306222444,
+      "fD_U_cf_mean_all_speeds": 0.15542028494685356,
+      "sigma_D_cf_mean": 0.30719622989869017,
       "sigma_D_cf_measured_mean": 0.4364545454545455,
-      "sigma_D_il_mean": 0.025765936586731767,
+      "sigma_D_il_mean": 0.02540983564316691,
       "sigma_D_il_measured_mean": 0.14945454545454542,
       "mean_tension_N_range": [
         4008,
-        6419
+        6411
       ]
     }
   },
-  "executable_sha256": "29bf2aa7f030131db6e6ca17b53ea1e55569182e4be3abda8d03f5aaf6be7b32"
+  "executable_sha256": "6dd528518f28d78a7c9d19319939f2ce8d0590ca0103fb67c389d92ab0c20b0c"
 }
