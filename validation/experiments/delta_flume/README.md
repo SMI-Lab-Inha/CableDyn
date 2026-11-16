@@ -87,14 +87,14 @@ peak-to-peak of the measured envelope in brackets.
 | Case | U (m/s) | Mode | A_CF/D | Mean IL/D | Std κD, CF | Std κD, IL | Mean top tension (N) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | 0.16 | 2 / 2 | 0.653 / 0.757 (0.763) | 1.19 / 1.06 | 5.7e-5 / 9.3e-5 | 3.5e-5 / 5.0e-5 | 409 / 405 |
-| 2 | 0.21 | 3 / 3 | 0.601 / 0.579 (0.561) | 1.60 / 1.19 | 1.12e-4 / 0.89e-4 | 7.2e-5 / 3.4e-5 | 413 / 407 |
-| 3 | 0.31 | 4 / 4 | 0.629 / 0.779 (0.809) | 3.27 / 3.45 | 2.06e-4 / 2.70e-4 | 0.91e-4 / 1.95e-4 | 476 / 457 |
-| 4 | 0.40 | **4** / 5 | 0.692 / 0.674 (0.595) | 4.78 / 4.97 | 2.30e-4 / 3.18e-4 | 1.37e-4 / 2.69e-4 | 541 / 506 |
-| 5 | 0.54 | 6 / 6 | 0.779 / 0.843 (0.889) | 6.39 / 6.69 | 4.10e-4 / 4.81e-4 | 2.10e-4 / 2.31e-4 | 656 / 598 |
-| 6 | 0.60 | 6 / 6 | 0.606 / 0.709 (0.779) | 6.78 / 8.13 | 4.39e-4 / 4.77e-4 | 2.57e-4 / 4.57e-4 | 734 / 670 |
-| 7 | 0.70 | **6** / 7 | 0.737 / 0.777 (0.717) | 8.32 / 8.90 | 4.68e-4 / 6.47e-4 | 2.64e-4 / 3.03e-4 | 836 / 743 |
-| 8 | 0.85 | **6** / 7 | 0.781 / 0.907 (0.890) | 9.65 / 11.18 | 4.91e-4 / 6.89e-4 | 2.99e-4 / 4.48e-4 | 1046 / 923 |
-| 9 | 0.95 | **8** / 7 | 0.599 / 1.074 (0.996) | 10.16 / 13.51 | 6.88e-4 / 7.36e-4 | 3.70e-4 / 6.24e-4 | 1128 / 1002 |
+| 2 | 0.21 | 3 / 3 | 0.602 / 0.579 (0.561) | 1.60 / 1.19 | 1.11e-4 / 0.89e-4 | 7.2e-5 / 3.4e-5 | 413 / 407 |
+| 3 | 0.31 | 4 / 4 | 0.628 / 0.779 (0.809) | 3.27 / 3.45 | 2.05e-4 / 2.70e-4 | 0.92e-4 / 1.95e-4 | 476 / 457 |
+| 4 | 0.40 | **4** / 5 | 0.700 / 0.674 (0.595) | 4.78 / 4.97 | 2.30e-4 / 3.18e-4 | 1.36e-4 / 2.69e-4 | 541 / 506 |
+| 5 | 0.54 | 6 / 6 | 0.658 / 0.843 (0.889) | 6.53 / 6.69 | 4.45e-4 / 4.81e-4 | 2.00e-4 / 2.31e-4 | 660 / 598 |
+| 6 | 0.60 | 6 / 6 | 0.679 / 0.709 (0.779) | 6.94 / 8.13 | 4.55e-4 / 4.77e-4 | 2.32e-4 / 4.57e-4 | 738 / 670 |
+| 7 | 0.70 | **6** / 7 | 0.738 / 0.777 (0.717) | 8.28 / 8.90 | 4.63e-4 / 6.47e-4 | 2.69e-4 / 3.03e-4 | 835 / 743 |
+| 8 | 0.85 | **6** / 7 | 0.769 / 0.907 (0.890) | 9.66 / 11.18 | 4.94e-4 / 6.89e-4 | 2.68e-4 / 4.48e-4 | 1046 / 923 |
+| 9 | 0.95 | **8** / 7 | 0.595 / 1.074 (0.996) | 10.15 / 13.51 | 6.87e-4 / 7.36e-4 | 3.67e-4 / 6.24e-4 | 1128 / 1002 |
 
 - **Dominant cross-flow mode:** right in 5 of 9 cases and within one in the other four (one low in
   cases 4, 7 and 8, one high in case 9). Four of the eleven blind predictions found 7 or 8 of the 9
@@ -102,28 +102,33 @@ peak-to-peak of the measured envelope in brackets.
 - **Mean in-line displacement:** within ±17 % in 7 of 9 cases; +34 % in case 2, where the
   measured maximum is 1.2 D, and −25 % in case 9. The blind predictions under-predicted the drag
   amplification, and with it the mean in-line displacement, by 20–40 % (slide 26).
-- **Cross-flow amplitude:** −44 % to +4 % against the slide-18 maxima (−40 % to +16 % against
-  the envelopes), within ±12 %, the scatter between the two measured values, in cases 2, 4, 5
-  and 7. The −44 % of case 9 goes with the response in mode 8.
+- **Cross-flow amplitude:** −45 % to +4 % against the slide-18 maxima (−40 % to +18 % against
+  the envelopes), within ±12 %, the scatter between the two measured values, in cases 2, 4, 6
+  and 7. The −45 % of case 9 goes with the response in mode 8.
 - **Curvature:** the cross-flow standard deviation is −39 % to +26 %, low in every case but 2
-  (−6 % to −29 % in cases 3–9); the in-line one −53 % to +110 %. The blind predictions' r.m.s.
+  (−5 % to −28 % in cases 3–9); the in-line one −53 % to +111 %. The blind predictions' r.m.s.
   curvatures were 20 % to 180 % of the measured (slide 26).
 - **Top tension:** the static top tension in the current is the measured mean, but the drag
   amplification bows the riser further: the mean top tension of the run is 1–13 % above the
   measured mean (7–13 % in cases 4–9), so the run is stiffer than the test at the higher
   speeds.
 - **Convergence (`provenance.json`):**
-  - cases 1–4 and 6–8: half the time step leaves the mode and changes the mean in-line
+  - cases 1–4, 7 and 8: half the time step leaves the mode and changes the mean in-line
     displacement and the cross-flow curvature standard deviation by at most 0.6 %, the peak
-    amplitude by at most 4.5 % and the in-line curvature by at most 10 % (case 8); 128 elements
-    leave the mode and change them by at most 2.6 %, 4.2 % and 9 %;
-  - case 5 beats in the 40 s window: its peak amplitude changes by −17 % and −20 % and its
-    in-line curvature by −10 % and +25 %, while the other metrics move by at most 9 %;
-  - case 9 has two responses: at half the time step it settles in mode 7 (5.80 Hz, A/D 0.725,
-    mean in-line displacement 10.63 D), with the base step and with 128 elements in mode 8
-    (6.60 Hz), which an 80 s run keeps.
+    amplitude by at most 2.7 % and the in-line curvature by at most 1.2 %; 128 elements leave the
+    mode and change them by at most 2.7 %, 5.9 % and 3.1 %, except the in-line curvature of case
+    8 (+19 %);
+  - case 5: half the time step and 128 elements change its in-line curvature by +22 % and +25 %
+    and the other metrics by at most 6.4 %; an 80 s run raises its peak amplitude by 2.6 %;
+  - case 6: its peak amplitude depends on the step and the mesh, −11 % at half the time step
+    (kept over an 80 s run: 0.604 against 0.679) and −13 % with 128 elements, while the mean
+    in-line displacement and the cross-flow curvature move by at most 2 % and the in-line
+    curvature by at most 12 %;
+  - case 9 has two responses: at half the time step it settles in mode 7 (5.80 Hz, A/D 0.751,
+    mean in-line displacement 10.68 D), with the base step and with 128 elements in mode 8
+    (6.60 and 6.64 Hz), which an 80 s run keeps.
 - **Top spring 38.1 kN/m (`--spring 38.1e3`):** the mean top tension of the run is up to 14 %
-  higher and the mean in-line displacement 2–16 % lower, within ±17 % in 4 of 9 cases; the mode
+  higher and the mean in-line displacement 2–17 % lower, within ±17 % in 4 of 9 cases; the mode
   is right in 5 of 9 (case 9 in mode 7, case 5 in mode 5, case 8 in mode 5).
 
 `response_comparison.csv` holds the per-case values with their errors, and `summary.json` the

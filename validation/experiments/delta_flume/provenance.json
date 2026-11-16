@@ -12,8 +12,8 @@
   "extraction": "the slides are vector graphics: the measured points (filled circles of the measurement colour) and curves (polylines of 102 nearly equally spaced vertices along the riser, resampled to 101 equally spaced stations) are read as plotted coordinates and mapped linearly through the panel tick labels; the recovered towing speeds match slide 3 within 0.006 m/s; the envelope maxima of the mean in-line displacement match slide 17 within 0.05 D",
   "assumptions": "fresh water, Ca 1 (as L3-C); the 11.4 kN/m top spring of the two the page lists; the structural damping as bending damping of a pure bending mode at 2 Hz; the static top tension in the current (drag unamplified) set to the measured mean; the curvature panels of slides 7-15 have no scale, so each envelope curvature shape is scaled so that its r.m.s. over the stations equals the slide-19 overall standard deviation",
   "coefficients": "generic, not fitted to these measurements: Cl 0.8, cF 0.18, dF 0.08; in-line ClX 0.85, alpha 0.15 (Ulveseter et al. 2018); Cd 1.2; VIV AMPLITUDE Cv 0.8 constant with CdAmp = 1 + 2.3 s + 1.7 s^2, s = (A/D)/sqrt(2) (Chaplin et al. 2005a, Eq. 4); VIV DAMPING 0 0 1 (the amplification on the in-line drag only)",
-  "CableDyn_commit": "7d3998f (dev)",
-  "validation_date": "2026-11-15",
+  "CableDyn_commit": "041337e (dev) with the mid-point VIV phase update (fix/viv-coupled-order)",
+  "validation_date": "2026-11-16",
   "executable_name": "cabledyn.exe",
   "executable_sha256": "see summary.json",
   "compiler": "GNU Fortran 16.2.0",
@@ -28,267 +28,307 @@
         "f_cf_hz": 0.92,
         "max_cf_half_pp_D": 0.6535,
         "max_il_mean_D": 1.19,
-        "std_curv_cf_kD": 5.6604e-05,
-        "std_curv_il_kD": 3.5373e-05,
+        "std_curv_cf_kD": 5.6569e-05,
+        "std_curv_il_kD": 3.5342e-05,
         "mean_top_tension_N": 408.5
       },
       "2": {
         "mode": 3,
         "f_cf_hz": 1.36,
-        "max_cf_half_pp_D": 0.5973,
-        "max_il_mean_D": 1.603,
-        "std_curv_cf_kD": 0.00011179,
-        "std_curv_il_kD": 7.1936e-05,
+        "max_cf_half_pp_D": 0.6072,
+        "max_il_mean_D": 1.602,
+        "std_curv_cf_kD": 0.00011154,
+        "std_curv_il_kD": 7.2075e-05,
         "mean_top_tension_N": 412.8
       },
       "3": {
         "mode": 4,
         "f_cf_hz": 2.0,
-        "max_cf_half_pp_D": 0.6162,
-        "max_il_mean_D": 3.266,
-        "std_curv_cf_kD": 0.00020525,
-        "std_curv_il_kD": 9.146e-05,
+        "max_cf_half_pp_D": 0.6299,
+        "max_il_mean_D": 3.265,
+        "std_curv_cf_kD": 0.00020482,
+        "std_curv_il_kD": 9.2011e-05,
         "mean_top_tension_N": 475.5
       },
       "4": {
         "mode": 4,
         "f_cf_hz": 2.24,
-        "max_cf_half_pp_D": 0.7077,
+        "max_cf_half_pp_D": 0.6829,
         "max_il_mean_D": 4.782,
-        "std_curv_cf_kD": 0.00022964,
-        "std_curv_il_kD": 0.00013684,
+        "std_curv_cf_kD": 0.00022942,
+        "std_curv_il_kD": 0.00013668,
         "mean_top_tension_N": 541.4
       },
       "5": {
         "mode": 6,
-        "f_cf_hz": 3.72,
-        "max_cf_half_pp_D": 0.6485,
-        "max_il_mean_D": 6.542,
-        "std_curv_cf_kD": 0.00044751,
-        "std_curv_il_kD": 0.00018971,
-        "mean_top_tension_N": 660.1
+        "f_cf_hz": 3.68,
+        "max_cf_half_pp_D": 0.6622,
+        "max_il_mean_D": 6.309,
+        "std_curv_cf_kD": 0.00041604,
+        "std_curv_il_kD": 0.00024332,
+        "mean_top_tension_N": 653.9
       },
       "6": {
         "mode": 6,
         "f_cf_hz": 3.92,
-        "max_cf_half_pp_D": 0.6093,
-        "max_il_mean_D": 6.804,
-        "std_curv_cf_kD": 0.00044174,
-        "std_curv_il_kD": 0.00025254,
-        "mean_top_tension_N": 734.5
+        "max_cf_half_pp_D": 0.6018,
+        "max_il_mean_D": 6.841,
+        "std_curv_cf_kD": 0.00044566,
+        "std_curv_il_kD": 0.00024711,
+        "mean_top_tension_N": 735.6
       },
       "7": {
         "mode": 6,
         "f_cf_hz": 4.24,
-        "max_cf_half_pp_D": 0.7339,
-        "max_il_mean_D": 8.319,
-        "std_curv_cf_kD": 0.00046749,
-        "std_curv_il_kD": 0.00026398,
-        "mean_top_tension_N": 836.1
+        "max_cf_half_pp_D": 0.726,
+        "max_il_mean_D": 8.302,
+        "std_curv_cf_kD": 0.000466,
+        "std_curv_il_kD": 0.0002655,
+        "mean_top_tension_N": 835.6
       },
       "8": {
         "mode": 6,
         "f_cf_hz": 4.8,
-        "max_cf_half_pp_D": 0.7462,
-        "max_il_mean_D": 9.654,
-        "std_curv_cf_kD": 0.00049254,
-        "std_curv_il_kD": 0.0002702,
-        "mean_top_tension_N": 1045.6
+        "max_cf_half_pp_D": 0.7893,
+        "max_il_mean_D": 9.645,
+        "std_curv_cf_kD": 0.00049194,
+        "std_curv_il_kD": 0.00027017,
+        "mean_top_tension_N": 1045.2
       },
       "9": {
         "mode": 7,
         "f_cf_hz": 5.8,
-        "max_cf_half_pp_D": 0.7249,
-        "max_il_mean_D": 10.632,
-        "std_curv_cf_kD": 0.00064422,
-        "std_curv_il_kD": 0.00031337,
-        "mean_top_tension_N": 1145.9
+        "max_cf_half_pp_D": 0.7513,
+        "max_il_mean_D": 10.675,
+        "std_curv_cf_kD": 0.00064805,
+        "std_curv_il_kD": 0.00030531,
+        "mean_top_tension_N": 1147.4
       }
     },
     "segments_128": {
       "1": {
         "mode": 2,
         "f_cf_hz": 0.92,
-        "max_cf_half_pp_D": 0.6526,
-        "max_il_mean_D": 1.204,
-        "std_curv_cf_kD": 5.6747e-05,
-        "std_curv_il_kD": 3.5554e-05,
+        "max_cf_half_pp_D": 0.6533,
+        "max_il_mean_D": 1.203,
+        "std_curv_cf_kD": 5.6652e-05,
+        "std_curv_il_kD": 3.5525e-05,
         "mean_top_tension_N": 408.6
       },
       "2": {
         "mode": 3,
         "f_cf_hz": 1.36,
-        "max_cf_half_pp_D": 0.5946,
-        "max_il_mean_D": 1.637,
-        "std_curv_cf_kD": 0.00011292,
-        "std_curv_il_kD": 7.2924e-05,
+        "max_cf_half_pp_D": 0.596,
+        "max_il_mean_D": 1.636,
+        "std_curv_cf_kD": 0.00011273,
+        "std_curv_il_kD": 7.3035e-05,
         "mean_top_tension_N": 413.0
       },
       "3": {
         "mode": 4,
         "f_cf_hz": 2.0,
-        "max_cf_half_pp_D": 0.6143,
-        "max_il_mean_D": 3.319,
-        "std_curv_cf_kD": 0.00020749,
-        "std_curv_il_kD": 9.4304e-05,
-        "mean_top_tension_N": 476.1
+        "max_cf_half_pp_D": 0.626,
+        "max_il_mean_D": 3.317,
+        "std_curv_cf_kD": 0.00020668,
+        "std_curv_il_kD": 9.449e-05,
+        "mean_top_tension_N": 476.0
       },
       "4": {
         "mode": 4,
         "f_cf_hz": 2.24,
-        "max_cf_half_pp_D": 0.6642,
-        "max_il_mean_D": 4.865,
-        "std_curv_cf_kD": 0.00023121,
-        "std_curv_il_kD": 0.00014079,
-        "mean_top_tension_N": 542.6
+        "max_cf_half_pp_D": 0.6581,
+        "max_il_mean_D": 4.862,
+        "std_curv_cf_kD": 0.00023173,
+        "std_curv_il_kD": 0.00014027,
+        "mean_top_tension_N": 542.5
       },
       "5": {
         "mode": 6,
         "f_cf_hz": 3.68,
-        "max_cf_half_pp_D": 0.6224,
-        "max_il_mean_D": 6.369,
-        "std_curv_cf_kD": 0.00041739,
-        "std_curv_il_kD": 0.00026224,
-        "mean_top_tension_N": 654.6
+        "max_cf_half_pp_D": 0.6618,
+        "max_il_mean_D": 6.412,
+        "std_curv_cf_kD": 0.00042566,
+        "std_curv_il_kD": 0.00025004,
+        "mean_top_tension_N": 655.8
       },
       "6": {
         "mode": 6,
         "f_cf_hz": 3.92,
-        "max_cf_half_pp_D": 0.5816,
-        "max_il_mean_D": 6.908,
-        "std_curv_cf_kD": 0.00044891,
-        "std_curv_il_kD": 0.00026562,
-        "mean_top_tension_N": 736.4
+        "max_cf_half_pp_D": 0.588,
+        "max_il_mean_D": 6.938,
+        "std_curv_cf_kD": 0.0004522,
+        "std_curv_il_kD": 0.00025942,
+        "mean_top_tension_N": 737.3
       },
       "7": {
         "mode": 6,
         "f_cf_hz": 4.24,
-        "max_cf_half_pp_D": 0.7081,
-        "max_il_mean_D": 8.43,
-        "std_curv_cf_kD": 0.0004708,
-        "std_curv_il_kD": 0.00028325,
-        "mean_top_tension_N": 838.5
+        "max_cf_half_pp_D": 0.7051,
+        "max_il_mean_D": 8.469,
+        "std_curv_cf_kD": 0.00047584,
+        "std_curv_il_kD": 0.00027317,
+        "mean_top_tension_N": 839.8
       },
       "8": {
         "mode": 6,
-        "f_cf_hz": 4.8,
-        "max_cf_half_pp_D": 0.7484,
-        "max_il_mean_D": 9.845,
-        "std_curv_cf_kD": 0.00050403,
-        "std_curv_il_kD": 0.00027331,
-        "mean_top_tension_N": 1051.0
+        "f_cf_hz": 4.84,
+        "max_cf_half_pp_D": 0.723,
+        "max_il_mean_D": 9.789,
+        "std_curv_cf_kD": 0.00049747,
+        "std_curv_il_kD": 0.00031993,
+        "mean_top_tension_N": 1049.4
       },
       "9": {
         "mode": 8,
         "f_cf_hz": 6.64,
-        "max_cf_half_pp_D": 0.5947,
-        "max_il_mean_D": 10.354,
-        "std_curv_cf_kD": 0.00071066,
-        "std_curv_il_kD": 0.0003868,
-        "mean_top_tension_N": 1134.1
+        "max_cf_half_pp_D": 0.5999,
+        "max_il_mean_D": 10.343,
+        "std_curv_cf_kD": 0.00070879,
+        "std_curv_il_kD": 0.00038944,
+        "mean_top_tension_N": 1133.7
       }
     },
     "tmax_80_s_cases_5_9": {
       "5": {
         "mode": 6,
         "f_cf_hz": 3.692,
-        "max_cf_half_pp_D": 0.7786,
-        "max_il_mean_D": 6.427,
-        "std_curv_cf_kD": 0.00043051,
-        "std_curv_il_kD": 0.00020686,
-        "mean_top_tension_N": 657.3
+        "max_cf_half_pp_D": 0.6748,
+        "max_il_mean_D": 6.428,
+        "std_curv_cf_kD": 0.0004324,
+        "std_curv_il_kD": 0.00022074,
+        "mean_top_tension_N": 657.0
       },
       "9": {
         "mode": 8,
         "f_cf_hz": 6.615,
-        "max_cf_half_pp_D": 0.6091,
-        "max_il_mean_D": 10.155,
-        "std_curv_cf_kD": 0.00068799,
-        "std_curv_il_kD": 0.00036953,
-        "mean_top_tension_N": 1128.1
+        "max_cf_half_pp_D": 0.6148,
+        "max_il_mean_D": 10.151,
+        "std_curv_cf_kD": 0.00068681,
+        "std_curv_il_kD": 0.00036845,
+        "mean_top_tension_N": 1127.9
+      }
+    },
+    "tmax_80_s_cases_6_8": {
+      "6": {
+        "mode": 6,
+        "f_cf_hz": 3.908,
+        "max_cf_half_pp_D": 0.6792,
+        "max_il_mean_D": 6.859,
+        "std_curv_cf_kD": 0.00044732,
+        "std_curv_il_kD": 0.0002437,
+        "mean_top_tension_N": 736.0
+      },
+      "8": {
+        "mode": 6,
+        "f_cf_hz": 4.8,
+        "max_cf_half_pp_D": 0.7821,
+        "max_il_mean_D": 9.644,
+        "std_curv_cf_kD": 0.00049169,
+        "std_curv_il_kD": 0.00027079,
+        "mean_top_tension_N": 1045.2
+      }
+    },
+    "tmax_80_s_dt_half_cases_6_8": {
+      "6": {
+        "mode": 6,
+        "f_cf_hz": 3.908,
+        "max_cf_half_pp_D": 0.6042,
+        "max_il_mean_D": 6.829,
+        "std_curv_cf_kD": 0.00044457,
+        "std_curv_il_kD": 0.00024848,
+        "mean_top_tension_N": 735.2
+      },
+      "8": {
+        "mode": 6,
+        "f_cf_hz": 4.8,
+        "max_cf_half_pp_D": 0.7893,
+        "max_il_mean_D": 9.633,
+        "std_curv_cf_kD": 0.00049061,
+        "std_curv_il_kD": 0.00027237,
+        "mean_top_tension_N": 1044.8
       }
     },
     "top_spring_38p1_kN_per_m": {
       "1": {
         "mode": 2,
         "f_cf_hz": 0.92,
-        "max_cf_half_pp_D": 0.65,
-        "max_il_mean_D": 1.162,
-        "std_curv_cf_kD": 5.6486e-05,
-        "std_curv_il_kD": 3.4978e-05,
+        "max_cf_half_pp_D": 0.6492,
+        "max_il_mean_D": 1.161,
+        "std_curv_cf_kD": 5.6423e-05,
+        "std_curv_il_kD": 3.4946e-05,
         "mean_top_tension_N": 415.7
       },
       "2": {
         "mode": 3,
         "f_cf_hz": 1.4,
-        "max_cf_half_pp_D": 0.6153,
+        "max_cf_half_pp_D": 0.6099,
         "max_il_mean_D": 1.532,
-        "std_curv_cf_kD": 0.00010964,
-        "std_curv_il_kD": 7.2096e-05,
+        "std_curv_cf_kD": 0.00010957,
+        "std_curv_il_kD": 7.2268e-05,
         "mean_top_tension_N": 423.7
       },
       "3": {
         "mode": 4,
         "f_cf_hz": 2.08,
-        "max_cf_half_pp_D": 0.6316,
-        "max_il_mean_D": 2.982,
-        "std_curv_cf_kD": 0.00019748,
-        "std_curv_il_kD": 9.1888e-05,
-        "mean_top_tension_N": 504.2
+        "max_cf_half_pp_D": 0.6112,
+        "max_il_mean_D": 2.984,
+        "std_curv_cf_kD": 0.00019718,
+        "std_curv_il_kD": 9.1364e-05,
+        "mean_top_tension_N": 504.3
       },
       "4": {
         "mode": 4,
         "f_cf_hz": 2.32,
-        "max_cf_half_pp_D": 0.6453,
-        "max_il_mean_D": 4.293,
-        "std_curv_cf_kD": 0.00023093,
-        "std_curv_il_kD": 0.00012918,
-        "mean_top_tension_N": 591.5
+        "max_cf_half_pp_D": 0.6729,
+        "max_il_mean_D": 4.292,
+        "std_curv_cf_kD": 0.00023152,
+        "std_curv_il_kD": 0.00012869,
+        "mean_top_tension_N": 591.4
       },
       "5": {
         "mode": 5,
         "f_cf_hz": 3.24,
-        "max_cf_half_pp_D": 0.7159,
-        "max_il_mean_D": 5.681,
-        "std_curv_cf_kD": 0.00034362,
-        "std_curv_il_kD": 0.00014224,
-        "mean_top_tension_N": 728.3
+        "max_cf_half_pp_D": 0.7171,
+        "max_il_mean_D": 5.649,
+        "std_curv_cf_kD": 0.00033914,
+        "std_curv_il_kD": 0.0001492,
+        "mean_top_tension_N": 726.0
       },
       "6": {
         "mode": 6,
         "f_cf_hz": 4.04,
-        "max_cf_half_pp_D": 0.5454,
-        "max_il_mean_D": 5.702,
-        "std_curv_cf_kD": 0.00037648,
-        "std_curv_il_kD": 0.00030899,
-        "mean_top_tension_N": 787.9
+        "max_cf_half_pp_D": 0.5776,
+        "max_il_mean_D": 5.785,
+        "std_curv_cf_kD": 0.00039448,
+        "std_curv_il_kD": 0.00028874,
+        "mean_top_tension_N": 795.1
       },
       "7": {
         "mode": 6,
         "f_cf_hz": 4.48,
-        "max_cf_half_pp_D": 0.6894,
-        "max_il_mean_D": 7.184,
-        "std_curv_cf_kD": 0.00044718,
-        "std_curv_il_kD": 0.00025784,
-        "mean_top_tension_N": 934.3
+        "max_cf_half_pp_D": 0.6833,
+        "max_il_mean_D": 7.188,
+        "std_curv_cf_kD": 0.0004468,
+        "std_curv_il_kD": 0.00025551,
+        "mean_top_tension_N": 934.6
       },
       "8": {
         "mode": 5,
         "f_cf_hz": 4.32,
-        "max_cf_half_pp_D": 0.7633,
-        "max_il_mean_D": 8.507,
-        "std_curv_cf_kD": 0.00040298,
-        "std_curv_il_kD": 0.00021852,
-        "mean_top_tension_N": 1187.5
+        "max_cf_half_pp_D": 0.7426,
+        "max_il_mean_D": 8.509,
+        "std_curv_cf_kD": 0.00040291,
+        "std_curv_il_kD": 0.00021742,
+        "mean_top_tension_N": 1187.7
       },
       "9": {
         "mode": 7,
         "f_cf_hz": 6.16,
-        "max_cf_half_pp_D": 0.7137,
-        "max_il_mean_D": 9.123,
-        "std_curv_cf_kD": 0.00060676,
-        "std_curv_il_kD": 0.00028333,
-        "mean_top_tension_N": 1283.9
+        "max_cf_half_pp_D": 0.7124,
+        "max_il_mean_D": 9.131,
+        "std_curv_cf_kD": 0.0006037,
+        "std_curv_il_kD": 0.00026373,
+        "mean_top_tension_N": 1284.3
       }
     }
   }
