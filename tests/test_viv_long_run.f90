@@ -20,16 +20,16 @@ PROGRAM test_viv_long_run
   !!    s = sqrt(a^2 - b^2) outside the band (a > b), and psi -> asin(a/b) inside it.
   !!    P1 outside the band (om 5.5 rad/s, slip period 2 pi/s = 4.3 s), 400 motion cycles: the
   !!       largest phase error over the 11 nodes against the closed form grows linearly: error(T)/
-  !!       error(T/2) in [1.8, 2.2] (linear 2, quadratic 4; measured 1.981, 1.998, 2.022 at 25, 50,
-  !!       100 steps per cycle);
+  !!       error(T/2) in [1.8, 2.2] (linear 2, quadratic 4; measured 2.014 and 1.988 at 50 and 100
+  !!       steps per cycle);
   !!    P2 it is second order: error at 50 over error at 100 steps per cycle in [3.6, 4.4]
-  !!       (measured 3.98; 25/50: 3.99), and at 100 steps per cycle at most 0.05 rad after 400
-  !!       cycles (measured 0.0334, i.e. 8e-5 rad per cycle);
+  !!       (measured 4.01), and at 100 steps per cycle at most 0.05 rad after 400 cycles (measured
+  !!       0.0167, i.e. 4e-5 rad per cycle);
   !!    P3 inside the band (om = Om (cF + dF/2), psi* = pi/6), 50 steps per cycle: the phase lag
   !!       stays within 1e-4 rad of psi* at T/2 and T (measured 2.9e-5 at 25, 50 and 100 steps per
   !!       cycle: the averaging-ripple floor, not the step) and does not grow (error(T) <=
-  !!       1.1 error(T/2), measured 1.01), and the mean shedding rate over the second half is om
-  !!       within 1e-8 (measured 1.8e-10).
+  !!       1.1 error(T/2), measured 1.0004), and the mean shedding rate over the second half is om
+  !!       within 1e-8 (measured 5.8e-12).
   !!
   !! C  Lock-in, both line kinds: a weightless taut line (20 m, 10 elements, D 0.1 m, 8.1 kg/m,
   !!    EA 5e7 N, 3.8 kN, the finite-EI cable EI 1e3 N m^2, no added mass so that the structural
@@ -37,29 +37,26 @@ PROGRAM test_viv_long_run
   !!    0.8, cF 0.18, dF 0.08, Cd 1.2, running RMS window 0.25 s (the examples' value), rho_inf = 1
   !!    (no numerical damping, so that the load powers are the whole energy change). It locks in at
   !!    about 0.63 Hz with a mid-span A/D of 0.56-0.57. 400 cycles of the nominal shedding period
-  !!    D/(cF U) = 1.85 s (740 s) at 100 and at 200 steps per cycle. (At 50 steps per cycle and
-  !!    rho_inf = 1 the finite-EI step does not converge on this line; the EI = 0 line runs.)
+  !!    D/(cF U) = 1.85 s (740 s) at 100 and at 200 steps per cycle.
   !!    C1 energy: E(t) - E(0) = int (P_viv + P_drag + P_damp) dt (trapezoidal), the mismatch at
-  !!       most 1.5e-4 of the VIV work at 100 steps per cycle (measured 8.3e-5 finite EI, 7.9e-5
-  !!       EI = 0; on the EI = 0 line 1.1e-3, 2.9e-4, 7.9e-5, 2.0e-5 at 25 to 200 steps per cycle,
-  !!       and with a 20 s window on to 1600 steps 3.6e-6, 9.0e-7, 2.3e-7), second order (the
-  !!       ratio from 100 to 200 steps per cycle in [3, 5], measured 4.2 and 4.0), and it
-  !!       accumulates with the work and not faster: the mismatch fraction at T within 1.25 times
-  !!       that at T/2 (measured 0.96 and 0.93);
+  !!       most 3e-4 of the VIV work at 100 steps per cycle (measured 2.0e-4 finite EI, 1.8e-4
+  !!       EI = 0: the lift takes the phase predicted from the previous step's mid-point rate, half
+  !!       a step behind the step's own, a second-order lag), second order (the ratio from 100 to
+  !!       200 steps per cycle in [3, 5], measured 3.98 and 3.67), and it accumulates with the work
+  !!       and not faster: the mismatch fraction at T within 1.25 times that at T/2 (measured 1.00
+  !!       and 1.00);
   !!    C2 statistics over the last three quarters of the run, its two halves: the mid-span RMS
-  !!       A/D within 2e-3 and the mean VIV power within 1e-2 of each other (measured 4.3e-4 and
-  !!       1.0e-3 finite EI, 1.4e-4 and 1.1e-3 EI = 0), the same bounds as the change of the
-  !!       second half's values from 100 to 200 steps per cycle must meet (measured A/D 7.2e-4 and
-  !!       6.9e-4, power 3.4e-3 and 6.6e-3), so a drift between the halves stays below the
+  !!       A/D within 2e-3 and the mean VIV power within 1e-2 of each other (measured 7.3e-4 and
+  !!       1.8e-3 finite EI, 4.1e-4 and 9.0e-4 EI = 0), the same bounds as the change of the
+  !!       second half's values from 100 to 200 steps per cycle must meet (measured A/D 7.9e-5 and
+  !!       6.0e-4, power 1.1e-3 and 3.3e-4), so a drift between the halves stays below the
   !!       discretisation error of the statistic;
   !!    C3 phase: the mean shedding rate (the lock-in frequency) of the mid-span node over the two
-  !!       halves agrees within 2e-3 (measured 4.4e-4 finite EI, 4.5e-4 EI = 0), so the phase error
+  !!       halves agrees within 2e-3 (measured 7.4e-5 finite EI, 1.9e-4 EI = 0), so the phase error
   !!       against a finer step grows linearly (a frequency offset) and not quadratically, and the
   !!       second half's rate changes by at most 5e-3 from 100 to 200 steps per cycle (measured
-  !!       1.4e-3 finite EI, 2.3e-3 EI = 0). The coupled lock-in frequency converges at first order
-  !!       or slower in this range (EI = 0 line: 0.74 %, 0.41 %, 0.27 % per halving from 25 to 200
-  !!       steps per cycle), the response frequency of the oscillator the lift and the line form,
-  !!       while the phase update itself is second order (P2).
+  !!       1.6e-4 finite EI, 1.9e-4 EI = 0). The coupled lock-in frequency converges at second
+  !!       order (test viv_step_order).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_VIV, ONLY: CD_VIV_TWO_PI
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
@@ -278,7 +275,7 @@ CONTAINS
     WRITE (*, '(3A,5ES10.2)') '  ', label, ': halves A/D, power, rate; 100 to 200 steps A/D, power ', &
       rel(r1%ad(1), r1%ad(2)), rel(r1%pviv(1), r1%pviv(2)), rel(r1%rate(1), r1%rate(2)), &
       rel(r1%ad(2), r2%ad(2)), rel(r1%pviv(2), r2%pviv(2))
-    CALL require(ABS(r1%closure(2)) <= 1.5e-4_wp, 'C1 '//label//': the load powers close the energy balance')
+    CALL require(ABS(r1%closure(2)) <= 3.0e-4_wp, 'C1 '//label//': the load powers close the energy balance')
     CALL require(ABS(r1%closure(2)) >= 3.0_wp*ABS(r2%closure(2)) .AND. &
                  ABS(r1%closure(2)) <= 5.0_wp*ABS(r2%closure(2)), 'C1 '//label//': the mismatch is second order')
     CALL require(ABS(r1%closure(2)) <= 1.25_wp*ABS(r1%closure(1)), &

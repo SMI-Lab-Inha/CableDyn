@@ -155,11 +155,11 @@ All notable changes to CableDyn are recorded in this file. The format follows
 - A long-run check of the VIV synchronisation model (`viv_long_run`, 400 cycles). With every node
   of a finite-EI cable moved across the flow, the shedding phase follows the closed-form solution
   of its equation (Adler's) with an error that grows linearly in time and falls fourfold per
-  halving of the step: 0.033 rad after 400 cycles at 100 steps per cycle; inside the
+  halving of the step: 0.017 rad after 400 cycles at 100 steps per cycle; inside the
   synchronisation band the phase lag holds to 3e-5 rad. On a taut line locked in, finite-EI and
-  `EI = 0`, the load powers close the line's energy balance to 8e-5 of the VIV work at second
+  `EI = 0`, the load powers close the line's energy balance to 2e-4 of the VIV work at second
   order, and the response amplitude, VIV power and lock-in frequency of the run's two halves agree
-  within 0.12 %.
+  within 0.18 %.
 
 ### Changed
 
