@@ -1413,6 +1413,11 @@ Behaviour:
   same row (within 0.25 % without the row), with or without a VIV AMPLITUDE table and VIV DAMPING. On a
   held cable in a current `Tf` changes A/D by 0.03 % (wake oscillator) and at most 0.24 %
   (synchronisation model).
+- The two conditions hold together only for a motion much slower than the VIV. Keeping about
+  95 % of the VIV velocity (`omega Tf >= 3`) while leaving at most 10 % of the motion's velocity
+  in the relative velocity (`omega_m Tf <= 0.1`) needs a motion period at least 30 VIV periods
+  long. For a motion only a few VIV periods long (a floater heave close to the VIV frequency) no
+  `Tf` separates the two, and the response depends on `Tf`: report its sensitivity to `Tf`.
 - The filtered velocity is part of the step-recovery, snapshot and checkpoint state. A row with
   `Tf = 0` leaves the run exactly as without it. It acts on `EI = 0` lines and finite-EI cables,
   standalone and coupled. A row fails if it is not `TypeName Tf`, names an undefined or already
@@ -1450,7 +1455,8 @@ Behaviour:
   row the axes and the blend take the ambient flow relative to the cable's filtered motion.
 - **`0 0 1` amplifies the in-line drag alone.** With an amplitude table's `CdAmp` (for example
   Chaplin et al. 2005, Eq. 4), the mean in-line drag of a vibrating cable rises while its
-  cross-flow drag stays Morison's. A `CdAmp` without this row multiplies the whole normal drag,
+  cross-flow drag stays Morison's. The factor multiplies the whole in-line drag term, so the
+  in-line damping rises with it. A `CdAmp` without this row multiplies the whole normal drag,
   the cross-flow damping included.
 - **`0.31 0.89` is the published cross-flow-only model** of Thorsen et al. (2016), fitted to
   still-water decay tests for `y0/D` up to about 0.6. It removes the linear part of Morison's
