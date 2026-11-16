@@ -1576,8 +1576,10 @@ relative to the cable's filtered motion (:ref:`theory-viv-frame`).
 The row serves two uses:
 
 - With :math:`(0, 0, 1)` and the drag factor of :ref:`Chaplin et al. (2005) <ref-chaplin2005>`,
-  the amplification acts on the mean in-line drag alone, as measured, while the cross-flow drag
-  stays Morison's (validation case L3-D, the Delta Flume riser in a stepped current).
+  the amplification acts on the in-line drag alone, while the cross-flow drag stays Morison's
+  (validation case L3-D, the Delta Flume riser in a stepped current). The factor is measured on
+  the mean drag, but it multiplies the whole in-line term, so the in-line damping
+  :math:`-\tfrac12\rho D C_{dn}A_d|\mathbf w|\,\dot x` rises with it.
 - :math:`(0.31, 0.89, 0)` is Thorsen's cross-flow model. It drops the linear part
   :math:`\tfrac12\rho D C_{dn}U\dot y` of Morison's cross-flow damping, so it is consistent with
   cross-flow VIV alone. An in-line force that turns with the relative flow can then drive an
@@ -1631,7 +1633,13 @@ The velocity relative to :math:`\bar{\mathbf v}` loses the part of the VIV veloc
 at :math:`\omega` it is scaled by :math:`\omega T_f/\sqrt{1 + \omega^2 T_f^2}` and led by
 :math:`\arctan(1/\omega T_f)` (0.9985 and 3.1° at 0.29 Hz with :math:`T_f` 10 s). For a motion at
 :math:`\omega_m` the filter lags by :math:`\arctan\omega_m T_f`. :math:`T_f` is therefore taken
-several VIV periods long and short against the motion.
+several VIV periods long and short against the motion. The two conditions hold together only for
+a motion much slower than the VIV: keeping about 95 % of the VIV velocity
+(:math:`\omega T_f \ge 3`) while leaving at most 10 % of the motion's velocity in the relative
+velocity (:math:`|1 - H(\omega_m)| = \omega_m T_f/\sqrt{1 + \omega_m^2 T_f^2} \le 0.1` with the
+filter's :math:`H(\omega) = 1/(1 + i\omega T_f)`, so :math:`\omega_m T_f \le 0.1`) needs :math:`\omega/\omega_m \ge 30`, a motion period at least 30
+VIV periods long. For a motion only a few VIV periods long no :math:`T_f` separates the two, and
+the response depends on :math:`T_f`.
 
 A pipe of the displaced mass (20 m, :math:`D` 0.1 m, ``Cl`` 0.8) moved in still water with
 velocity amplitude 0.6 m/s and period 40 s, against the same pipe held in the water moving the
