@@ -480,7 +480,7 @@ The frequency measures need uniform sampling. On the in-line VIV example
 ``viv_taut_cable_inline.dat``, run with the line output flag ``p``, over 60-90 s the mid-span cross-flow amplitude is A/D 0.82 at
 0.295 Hz (``f D/U_n`` 0.20), the quarter-span in-line amplitude 0.19 at 0.57 Hz, the cross-flow
 response is mode 1 and the in-line mode 2, and the travelling-wave index of the cross-flow motion
-is 0.05, a standing wave between the pinned ends.
+is 0.04, a standing wave between the pinned ends.
 
 .. code-block:: python
 

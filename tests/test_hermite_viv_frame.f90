@@ -29,15 +29,16 @@ PROGRAM test_hermite_viv_frame
   !!   without tf bit for bit;
   !! * F2 with Tf 0.6 s the moving and the fixed pipe agree, with the tables and with the lift
   !!   alone: the RMS cross-flow response of the mid node over the second period within 1 %, its
-  !!   peak within 2 %. The RMS agrees within 0.2 % on every build and kernel; the peak of the moving
-  !!   pipe ranges 0.811-0.819 D over the Release and Debug builds, the two OpenBLAS kernels and
-  !!   Linux/Windows (fixed pipe 0.819 D), a single extreme of the response. What is left is the
+  !!   peak within 2 %. The RMS agrees within 0.6 % (measured 0.02 % with the tables and 0.6 % with the
+  !!   lift alone), the peak within 0.8 % (0.811 against 0.818 D with the tables), a single extreme
+  !!   of the response (with the step-start phase update it ranged 0.811-0.819 D over the builds,
+  !!   OpenBLAS kernels and platforms). What is left is the
   !!   filter's lag of the imposed velocity, about omega Tf = 0.094 rad;
   !! * F3 without the frame they differ: in still water the moving pipe's phase sees no cross-flow
   !!   velocity (r'.e = u.e = 0 across the relative flow), and with the tables it takes Cv and CdAmp
   !!   at A/D 0 and the Morison drag; with the tables the peak response is more than 10 % (measured
-  !!   16 %) and the RMS more than 15 % (measured 23 %) from the fixed pipe's, with the lift alone
-  !!   the RMS more than 4 % (measured 7 %);
+  !!   18 %) and the RMS more than 15 % (measured 23 %) from the fixed pipe's, with the lift alone
+  !!   the RMS more than 4 % (measured 8 %);
   !! * F4 a snapshot taken mid-run and restored replays the following steps bit for bit, the
   !!   filtered velocity included.
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
@@ -104,9 +105,9 @@ PROGRAM test_hermite_viv_frame
   CALL require(.NOT. model%has_viv .AND. .NOT. model%viv_frame, 'F1: a refused call installs nothing')
   CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, tf=tfv)
   CALL require(es == CD_HCDYN_OK .AND. model%viv_frame .AND. .NOT. model%has_viv_amp .AND. &
-               SIZE(model%viv_ms, 1) == CD_VIV_NMS_FRAME, 'F1: the frame installs on the lift alone: '//TRIM(em))
+               SIZE(model%viv_ms, 1) == CD_VIV_NMS_FRAME + 1, 'F1: the frame installs on the lift alone: '//TRIM(em))
   CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy, tf=tf0)
-  CALL require(es == CD_HCDYN_OK .AND. .NOT. model%viv_frame .AND. SIZE(model%viv_ms, 1) == 6, &
+  CALL require(es == CD_HCDYN_OK .AND. .NOT. model%viv_frame .AND. SIZE(model%viv_ms, 1) == 7, &
                'F1: an all-zero tf installs no frame: '//TRIM(em))
   CALL build(twin)
   CALL CD_HermiteCable_Dyn_Set_VIV(twin, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy)
@@ -147,7 +148,7 @@ PROGRAM test_hermite_viv_frame
     INTEGER :: s
     CALL build(model)
     CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy, tf=tfv)
-    CALL require(es == CD_HCDYN_OK .AND. model%viv_frame .AND. SIZE(model%viv_ms, 1) == CD_VIV_NMS_FRAME, &
+    CALL require(es == CD_HCDYN_OK .AND. model%viv_frame .AND. SIZE(model%viv_ms, 1) == CD_VIV_NMS_FRAME + 1, &
                  'F4: the frame installs: '//TRIM(em))
     DO s = 1, 1500
       CALL advance(model, s, .TRUE.)
@@ -155,7 +156,7 @@ PROGRAM test_hermite_viv_frame
     CALL require(MAXVAL(ABS(model%viv_ms(8, :))) > 0.1_wp*U0, 'F4: the filtered velocity follows the motion')
     CALL CD_HermiteCable_Dyn_Snapshot(model, es, em)
     CALL require(es == CD_HCDYN_OK, 'F4: snapshot: '//TRIM(em))
-    ALLOCATE (q_ref(SIZE(model%q), 200), ms_ref(CD_VIV_NMS_FRAME, NN, 200))
+    ALLOCATE (q_ref(SIZE(model%q), 200), ms_ref(CD_VIV_NMS_FRAME + 1, NN, 200))
     DO s = 1, 200
       CALL advance(model, 1500 + s, .TRUE.)
       q_ref(:, s) = model%q

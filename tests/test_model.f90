@@ -1856,7 +1856,7 @@ CONTAINS
       WRITE (*, '(A,I0,A,L1)') '  sub-stepped steps with tables: ', auto_m%sub_stats%events - ev0, &
         ', converged ', all_conv
       CALL require(all_conv .AND. auto_m%sub_stats%events > ev0, 'substep-viv:tables-after-stepping-sub-steps')
-      CALL require(SIZE(auto_m%sub_slot(1)%viv_ms, 1) == 6 .AND. SIZE(auto_m%sub_slot(2)%viv_ms, 1) == 6, &
+      CALL require(SIZE(auto_m%sub_slot(1)%viv_ms, 1) == 7 .AND. SIZE(auto_m%sub_slot(2)%viv_ms, 1) == 7, &
                    'substep-viv:slots-follow-the-statistics-rows')
     END IF
     CALL CD_End_Model(auto_m, es, em)

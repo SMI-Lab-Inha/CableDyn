@@ -914,7 +914,7 @@ viscoelastic and Syrope laws is not in them. Where those do no net work, the ene
 only oscillates in a steady response, so the means balance:
 :math:`\overline{P}_\text{VIV} + \overline{P}_\text{drag} + \overline{P}_\text{damp} \approx 0`.
 On the locked-in taut line of ``viv_taut_cable_inline.dat`` (pinned ends, steady current) the VIV
-loads put in 8.52 W over 60-90 s, the drag takes out 8.56 W and the axial damping 0.002 W: the
+loads put in 8.45 W over 60-90 s, the drag takes out 8.48 W and the axial damping 0.002 W: the
 three balance within 0.5 % of the VIV power, the line's loss of energy over the window as its
 response settles, and as an ``EI = 0`` line the same. Integrating a channel over the output times gives the work of its
 load, :math:`W = \int P\,dt`; a static run reports 0.

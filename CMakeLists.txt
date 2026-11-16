@@ -1324,6 +1324,14 @@ target_link_libraries(test_viv_kernels PRIVATE cabledyn_core)
 add_test(NAME viv_kernels COMMAND test_viv_kernels)
 set_tests_properties(viv_kernels PROPERTIES LABELS "fortran;unit;dynamic;viv")
 
+# Time-step convergence of a locked-in VIV response (the line and the synchronisation model or the
+# wake oscillator coupled): second order in the step at rho_inf 1 and 0.4 on an EI = 0 line, and
+# on a finite-EI cable; the lock-in does not move with the numerical damping.
+add_executable(test_viv_step_order tests/test_viv_step_order.f90)
+target_link_libraries(test_viv_step_order PRIVATE cabledyn_core)
+add_test(NAME viv_step_order COMMAND test_viv_step_order)
+set_tests_properties(viv_step_order PROPERTIES LABELS "fortran;integration;dynamic;viv" TIMEOUT 1200)
+
 # Wake-oscillator kernel (Facchinetti et al. 2004): the free limit cycle, the forced lift
 # magnification of their Eq. 17, and the sub-stepped Runge-Kutta advance.
 add_executable(test_viv_wake_kernel tests/test_viv_wake_kernel.f90)

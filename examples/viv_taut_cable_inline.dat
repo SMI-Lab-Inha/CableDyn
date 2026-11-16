@@ -11,7 +11,7 @@ CableDyn driver deck -- cross-flow and in-line VIV of a taut cable in a uniform 
 -- cross-flow lift alone (drop the VIV section) they are 0.03 and 0.66. The Outputs flag V writes
 -- the VIV force, lift and in-line, at every node to <root>.Line1.V.out. VIVPow1, DragPow1 and
 -- DampPow1 are the power the VIV loads, the drag and the axial damping deliver to the line: over
--- 60-90 s the VIV loads put in 8.52 W and the drag and damping take out 8.56 W.
+-- 60-90 s the VIV loads put in 8.45 W and the drag and damping take out 8.48 W.
 --------------------- LINE TYPES ---------------------------------------
 TypeName   Diam    MassDenInAir   EA        BA/-zeta   EI       Cd_n  Cd_t  Ca_n  Ca_t  Cl    dF     cF
 (-)        (m)     (kg/m)         (N)       (N-s/-)    (N-m^2)  (-)   (-)   (-)   (-)   (-)   (-)    (-)

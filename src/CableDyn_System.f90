@@ -959,8 +959,10 @@ CONTAINS
 
   PURE INTEGER FUNCTION CD_System_Line_VIV_MirrorSize(system, line_index) RESULT(n)
     !! Reals of one contained line's VIV checkpoint block (CD_Get_System_Line_VIV_State):
-    !! 3 per node plus the averaging time, 3 per node more with in-line VIV, 4 per node more with
-    !! amplitude tables, or 0 for a line without VIV.
+    !! 3 per node plus the averaging time, 3 per node more with in-line VIV, and per node the rows
+    !! of the motion statistics after the two mean squares (CD_Model_VIV_NMS - CD_VIV_NMS: the
+    !! amplitude estimate, the flow frame and the step predictor where the line has them), or 0
+    !! for a line without VIV.
     TYPE(CD_SystemType), INTENT(IN) :: system
     INTEGER, INTENT(IN) :: line_index
     INTEGER :: nn
@@ -977,8 +979,9 @@ CONTAINS
     !! One contained line's committed VIV state as a flat checkpoint block: the shedding
     !! phases (n_nodes), the cross-flow velocity and acceleration mean squares interleaved
     !! per node (2 n_nodes), then the averaging time; with in-line VIV then the in-line phases
-    !! and mean squares the same way (3 n_nodes); with amplitude tables then the four values of
-    !! the amplitude estimate interleaved per node (4 n_nodes).
+    !! and mean squares the same way (3 n_nodes); then the further rows of the motion statistics
+    !! interleaved per node (the amplitude estimate, the flow frame and the step predictor where
+    !! the line has them; (CD_Model_VIV_NMS - CD_VIV_NMS) n_nodes).
     TYPE(CD_SystemType), INTENT(IN) :: system
     INTEGER, INTENT(IN) :: line_index
     REAL(wp), INTENT(OUT) :: buf(:)
@@ -3493,8 +3496,8 @@ CONTAINS
 
   PURE SUBROUTINE pack_viv(line, buf)
     !! A line's committed VIV state (viv_pack_size reals): the phases, then the motion
-    !! statistics per node (the two mean squares, and the amplitude estimate with amplitude
-    !! tables).
+    !! statistics per node (the two mean squares, the amplitude estimate with amplitude tables,
+    !! the flow frame and the step predictor).
     TYPE(CD_ModelType), INTENT(IN) :: line
     REAL(wp), INTENT(OUT) :: buf(:)
     INTEGER :: nn, nms

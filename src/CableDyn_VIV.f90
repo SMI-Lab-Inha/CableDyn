@@ -57,6 +57,8 @@ MODULE CableDyn_VIV
   PUBLIC :: CD_VIV_Crossflow_Along
   PUBLIC :: CD_VIV_Phase_Rate
   PUBLIC :: CD_VIV_Mean_Square
+  PUBLIC :: CD_VIV_Mean_Square_Weight
+  PUBLIC :: CD_VIV_Filter_Linear
   PUBLIC :: CD_VIV_Wrap_Phase
   PUBLIC :: CD_VIV_Node_Inline
   PUBLIC :: CD_VIV_Inline_Per_Length
@@ -88,7 +90,11 @@ MODULE CableDyn_VIV
   !> velocity and acceleration (CD_VIV_NMS), and with an amplitude table (VIV AMPLITUDE section)
   !> the four values of the amplitude estimate after them (CD_VIV_NMS_AMP; CD_VIV_Amplitude_Update).
   !> With a flow frame as well (VIV FRAME section, filter time Tf > 0) the node's velocity low-pass
-  !> filtered over Tf follows them in rows 7:9 (CD_VIV_NMS_FRAME).
+  !> filtered over Tf follows them in rows 7:9 (CD_VIV_NMS_FRAME). The model layers append the step
+  !> predictor of the synchronisation model after these rows: the cross-flow phase rate at the
+  !> mid-point of the last step (and the in-line one after it with in-line VIV), from which the next
+  !> step predicts the phase its lift takes. On a wake-oscillator line row 2 holds the predictor
+  !> instead, the cross-flow acceleration at the mid-point of the last step.
   INTEGER, PARAMETER, PUBLIC :: CD_VIV_NMS = 2
   INTEGER, PARAMETER, PUBLIC :: CD_VIV_NMS_AMP = 6
   INTEGER, PARAMETER, PUBLIC :: CD_VIV_NMS_FRAME = 9
@@ -324,10 +330,35 @@ CONTAINS
 
   ELEMENTAL REAL(wp) FUNCTION CD_VIV_Mean_Square(ms_old, sample, weight) RESULT(ms)
     !! One step of the running mean square, ms_old + weight (sample^2 - ms_old); weight =
-    !! 1/n_m is MoorDyn's ((n_m - 1) old^2 + new^2)/n_m.
+    !! 1/n_m is MoorDyn's ((n_m - 1) old^2 + new^2)/n_m, and 1 - exp(-h) over a time h T_w
+    !! (CD_VIV_Mean_Square_Weight) the exact average over that time of a sample held there.
     REAL(wp), INTENT(IN) :: ms_old, sample, weight
     ms = ms_old + weight*(sample*sample - ms_old)
   END FUNCTION CD_VIV_Mean_Square
+
+  ELEMENTAL REAL(wp) FUNCTION CD_VIV_Mean_Square_Weight(h) RESULT(w)
+    !! The weight 1 - exp(-h) of CD_VIV_Mean_Square over a time h T_w: the running mean square is
+    !! the first-order filter d ms/dt = (s^2 - ms)/T_w of the squared sample s^2, and with the
+    !! sample at the interval's mid-point it advances by the mid-point rule (second order).
+    REAL(wp), INTENT(IN) :: h
+    w = CD_ONE - EXP(-h)
+  END FUNCTION CD_VIV_Mean_Square_Weight
+
+  ELEMENTAL REAL(wp) FUNCTION CD_VIV_Filter_Linear(xbar, x0, x1, h) RESULT(xn)
+    !! The first-order low-pass filter d xbar/dt = (x - xbar)/T_f over a time h T_f, exact for the
+    !! input linear from x0 to x1 over it (the converged velocities of a step): exp(-h) xbar +
+    !! (1 - exp(-h)) x0 + c (x1 - x0), c = 1 - (1 - exp(-h))/h (h/2 - h^2/6 below h = 1e-4, where the
+    !! difference loses its digits). The limits: x1 as h grows, xbar as h vanishes.
+    REAL(wp), INTENT(IN) :: xbar, x0, x1, h
+    REAL(wp) :: e, c
+    e = EXP(-h)
+    IF (h < 1.0e-4_wp) THEN
+      c = h*(0.5_wp - h/6.0_wp)
+    ELSE
+      c = CD_ONE - (CD_ONE - e)/h
+    END IF
+    xn = e*xbar + (CD_ONE - e)*x0 + c*(x1 - x0)
+  END FUNCTION CD_VIV_Filter_Linear
 
   PURE REAL(wp) FUNCTION CD_VIV_Phase_Rate(yd, ydd, ms_yd, ms_ydd, phi, un, diameter, cf, df, phi_rest) RESULT(rate)
     !! Rate of the vortex-shedding phase, d phi/dt = 2 pi (cF + dF sin(phi_y - phi)) U/D, with

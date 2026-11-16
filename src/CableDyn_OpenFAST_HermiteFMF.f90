@@ -2277,11 +2277,13 @@ CONTAINS
 
   INTEGER FUNCTION CD_HFMF_VIVMirrorSize(self) RESULT(n)
     !! Mirror slots of the VIV state, before the torsion block: the cross-flow shedding phase
-    !! per node, the running mean squares of the cross-flow velocity and acceleration per node and,
-    !! with amplitude tables, the four values of the amplitude estimate after them (2 or 6 values a
-    !! node, interleaved), and the averaging time (3 nn + 1 values, 7 nn + 1 with amplitude tables);
-    !! with in-line VIV then the in-line phase and mean squares (3 nn more); with the wake
-    !! oscillator its state (q, dq/dt) per node (2 nn more); zero without VIV.
+    !! per node, the motion statistics per node (interleaved: the running mean squares of the
+    !! cross-flow velocity and acceleration, the four values of the amplitude estimate with
+    !! amplitude tables, the filtered velocity with the flow frame, and on a synchronisation cable
+    !! the step predictor, one rate or two with in-line VIV; on a wake cable row 2 holds the
+    !! predictor), and the averaging time ((1 + rows) nn + 1 values); with in-line VIV then the
+    !! in-line phase and mean squares (3 nn more); with the wake oscillator its state (q, dq/dt)
+    !! per node (2 nn more); zero without VIV.
     TYPE(CD_HFMF_ModuleType), INTENT(IN) :: self
     n = 0
     IF (.NOT. self%initialized) RETURN
@@ -2464,14 +2466,19 @@ CONTAINS
     ! and the VIV block's mean squares, amplitudes and averaging time, which cannot be negative
     ! (per node the rows of the motion statistics: the mean squares, rows 1:2, and the amplitudes
     ! y0, y0s of the amplitude estimate, rows 4:5; its travel and last cross-flow velocity, rows
-    ! 3 and 6, are signed)
+    ! 3 and 6, and the step predictor's rates after the statistics are signed, as is a wake
+    ! cable's predictor, the mid-point cross-flow acceleration, in row 2)
     IF (self%line%has_viv) THEN
       nv = SIZE(self%line%viv_ms, 1)
       kb = SIZE(buf) - CD_HFMF_TorsionMirrorSize(self) - CD_HFMF_VIVMirrorSize(self) + self%line%nn
       bad_viv = buf(kb + nv*self%line%nn + 1) < CD_ZERO
       DO i = 1, self%line%nn
-        IF (ANY(buf(kb + (i - 1)*nv + 1:kb + (i - 1)*nv + 2) < CD_ZERO)) bad_viv = .TRUE.
-        IF (nv >= 5) THEN
+        IF (self%line%viv_wake) THEN
+          IF (buf(kb + (i - 1)*nv + 1) < CD_ZERO) bad_viv = .TRUE.
+        ELSE
+          IF (ANY(buf(kb + (i - 1)*nv + 1:kb + (i - 1)*nv + 2) < CD_ZERO)) bad_viv = .TRUE.
+        END IF
+        IF (self%line%has_viv_amp .OR. self%line%viv_frame) THEN
           IF (ANY(buf(kb + (i - 1)*nv + 4:kb + (i - 1)*nv + 5) < CD_ZERO)) bad_viv = .TRUE.
         END IF
       END DO
