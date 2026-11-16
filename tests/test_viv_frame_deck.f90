@@ -14,15 +14,15 @@ PROGRAM test_viv_frame_deck
   !!      EI = 0 line, with and without the tables;
   !!   G2 the finite-EI cable towed through still water (both ends at 0.15 m/s against y after a
   !!      10 s half-cosine ramp) with Tf 10 s responds as the cable held in a 0.15 m/s current: the
-  !!      A/D over 50-80 s within 1 % of the held cable's (measured 0.24 % with the tables, 0.16 %
+  !!      A/D over 50-80 s within 1 % of the held cable's (measured 0.25 % with the tables, 0.15 %
   !!      with the lift alone) and within 0.2 % of the held cable's with Tf 10 s (measured 0.01 %;
   !!      the frame moves at a constant velocity, so the two are the same problem), the frequency
   !!      within 0.005 and 0.0015 Hz (the 30 s window resolves 0.033 Hz; the scan peak moves by
   !!      0.002 Hz). With the tables the towed cable without the frame takes Cv and CdAmp at A/D 0
   !!      and the Morison drag (no ambient flow) and responds otherwise (A/D more than 10 % off;
-  !!      measured 16 %); with the lift alone it is reported (1.9 % off);
+  !!      measured 16 %); with the lift alone it is reported (2.0 % off);
   !!   G3 held in the current, Tf 10 s leaves the response as the ambient flow gives it (A/D within
-  !!      0.5 %, measured at most 0.23 %, frequency within 0.005 Hz), on both cores, with and without
+  !!      0.5 %, measured at most 0.24 %, frequency within 0.005 Hz), on both cores, with and without
   !!      the tables (an EI = 0 line cannot run between two moving points, so the towed case is
   !!      finite-EI only);
   !!   G4 refusals by name: a VIV FRAME row on a type without VIV (no Cl, no WAKE OSCILLATOR row).

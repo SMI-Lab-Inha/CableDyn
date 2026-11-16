@@ -1409,9 +1409,9 @@ Behaviour:
   lags a motion at `omega_m` by `atan(omega_m Tf)`. A taut cable towed at 0.15 m/s through still
   water (VIV at 0.28 Hz) with `Tf` 10 s locks in as the same cable held in a 0.15 m/s current:
   with the wake oscillator A/D within 0.6 % and frequency within 0.001 Hz, where the ambient flow
-  gave it no lock-in; with the synchronisation model A/D within 0.01 % of the held cable with the
+  gave it no lock-in; with the synchronisation model A/D within 0.02 % of the held cable with the
   same row (within 0.25 % without the row), with or without a VIV AMPLITUDE table and VIV DAMPING. On a
-  held cable in a current `Tf` changes A/D by 0.03 % (wake oscillator) and at most 0.23 %
+  held cable in a current `Tf` changes A/D by 0.03 % (wake oscillator) and at most 0.24 %
   (synchronisation model).
 - The filtered velocity is part of the step-recovery, snapshot and checkpoint state. A row with
   `Tf = 0` leaves the run exactly as without it. It acts on `EI = 0` lines and finite-EI cables,

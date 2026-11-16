@@ -58,7 +58,7 @@ All notable changes to CableDyn are recorded in this file. The format follows
   published forced-wake lift magnification within 2 %; on the taut example cable the wake locks
   the cable in at its first mode (A/D 0.58 against 0.10 uncoupled) and the drag and damping take
   out the wake lift's power within 0.3 %; the same line with `EI = 0` locks in within 0.1 % of
-  the cable's A/D at the same frequency. Its state is in the step-recovery, snapshot and
+  the cable's A/D, at a frequency 0.001 Hz from it. Its state is in the step-recovery, snapshot and
   checkpoint state (on an `EI = 0` line, in the slots of the VIV phase and first motion
   statistic); the Python deck reader and builder take the section.
 - Amplitude-dependent VIV coefficients: an optional `VIV AMPLITUDE` section, rows
@@ -66,9 +66,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   coefficient `Cv` that replaces its `Cl` and a factor `CdAmp` of its normal drag coefficient, read
   at the amplitude estimate of Thorsen et al. (2016, Eq. 8 and 9) of each node, on `EI = 0` lines
   and finite-EI cables, standalone and coupled. `VIVAmp<L>N<J>` writes the estimate. On the taut
-  example line it follows the steady response amplitude within 0.03 %, a falling `Cv` limits the
-  response inside its falling range, and a table with `Cv = Cl` and `CdAmp = 1` is the line
-  without it, bit for bit. The estimate is in the step-recovery, snapshot and checkpoint state;
+  example line it follows the steady response amplitude within 0.04 % (0.1 % on an `EI = 0`
+  line), a falling `Cv` limits the response inside its falling range, and a table with
+  `Cv = Cl` and `CdAmp = 1` is the line without it, bit for bit. The estimate is in the step-recovery, snapshot and checkpoint state;
   the Python deck reader and builder take the section.
 - Cross-flow damping: an optional `VIV DAMPING` section row `TypeName a b [c]` splits the drag
   of a finite-EI line type about the ambient normal flow: Morison's drag in line, and across it
@@ -138,10 +138,10 @@ All notable changes to CableDyn are recorded in this file. The format follows
   estimate (and so `Cv` and `CdAmp`) and of the axes and blend of the `VIV DAMPING` split. A cable
   moved through still water had a phase input of zero cross-flow velocity, `y0 = 0`, `Cv(0)`,
   `CdAmp(0)` and Morison's drag. A pipe moved at 0.6 m/s amplitude and 40 s period in still water
-  now gives peak A/D 0.819 against 0.819 for the same pipe held in the moving water with the
-  amplitude table and damping (0.711 against 0.850 without the row), and 0.713 against 0.714 with
-  the lift alone (0.711 against 0.736); a cable towed at 0.15 m/s gives the A/D of the cable held
-  in the current with the same row within 0.01 %. On `EI = 0` lines and finite-EI cables, the
+  now gives peak A/D 0.811 against 0.818 for the same pipe held in the moving water with the
+  amplitude table and damping (0.700 against 0.851 without the row), and 0.713 against 0.712 with
+  the lift alone (0.700 against 0.733); a cable towed at 0.15 m/s gives the A/D of the cable held
+  in the current with the same row within 0.02 %. On `EI = 0` lines and finite-EI cables, the
   filtered velocity in rows 7-9 of the VIV motion statistics, so in the step-recovery, snapshot
   and checkpoint state; `Tf` 0 or no row leaves runs unchanged to the bit. A VIV FRAME row now
   needs LINE TYPES `Cl > 0` or a WAKE OSCILLATOR row; the Python deck reader and builder follow.
@@ -190,8 +190,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   quarter now holds that tangent at its committed value, and a step that ends with a tangent
   turned by 90 degrees or more fails, so the step recovery re-solves it. The line now runs at
   `rho_inf` 0.5 to 1 and 25 and 50 steps per cycle, with the response of the same line seeded
-  at its stretch (largest A/D within 0.75 %). Every other step starts as before: every example
-  and test deck gives bit-identical outputs.
+  at its stretch (largest A/D within 0.1 %, except at `rho_inf` 1 and 25 steps per cycle, where
+  the VIV response is resolution-sensitive; see the time-step entry below). Every other step
+  starts as before: every example and test deck gives bit-identical outputs.
 - A locked-in VIV response converged at first order in the time step, and at `rhoInf` 1 to a
   wrong frequency: the phase of the synchronisation model (and the forcing of the wake
   oscillator) sampled the generalised-alpha acceleration, which is the line's acceleration at

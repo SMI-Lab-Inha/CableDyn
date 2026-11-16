@@ -1473,9 +1473,9 @@ one-harmonic balance leaves out. On the taut cable of ``viv_taut_cable_inline.da
 ``Cl`` 0 and ``CL0`` 0.3 the cable locks in at 0.282 Hz, below the wake's own 0.30 Hz, at a
 steady mid-span A/D of 0.58; with :math:`A` = 0 the uncoupled wake drives it at 0.298 Hz at A/D
 0.10, and over the lock-in the drag and damping take out the wake lift's power within 0.3 %. The
-same line with ``EI = 0`` locks in at the same 0.282 Hz and A/D 0.586 (0.1 % from the finite-EI
-cable), and 0.099 uncoupled (0.3 %). The wake oscillator acts on finite-EI cables and ``EI = 0``
-lines, cross-flow only.
+same line with ``EI = 0`` locks in at 0.283 Hz (one 0.001 Hz step from the cable) and A/D 0.586
+(0.1 % from the finite-EI cable), and 0.099 uncoupled (0.3 %). The wake oscillator acts on
+finite-EI cables and ``EI = 0`` lines, cross-flow only.
 
 .. _theory-viv-amplitude:
 
@@ -1517,8 +1517,8 @@ once, and it is part of the step-recovery, snapshot and checkpoint state.
 
 On the taut line of the wake-oscillator gate (Cl 0.8, ``EI = 0`` and finite-EI alike) the
 smoothed mid-span estimate follows the half peak-to-peak cross-flow displacement of the steady
-response within 0.03 % at A/D 0.68; a table whose :math:`C_v` falls from 0.8 at A/D 0.1 to zero
-at 0.3 holds the response at A/D 0.28; :math:`C_v = 0` with a drag factor 2 settles at the static
+response within 0.04 % at A/D 0.68 (0.1 % on the ``EI = 0`` line); a table whose :math:`C_v`
+falls from 0.8 at A/D 0.1 to zero at 0.3 holds the response at A/D 0.28; :math:`C_v = 0` with a drag factor 2 settles at the static
 offset of ``Cd`` 2.4 to six digits; and a table with :math:`C_v` = ``Cl`` and factor 1 is the
 line without it, bit for bit.
 
@@ -1585,7 +1585,7 @@ The row serves two uses:
 
 On the taut gate line, :math:`(0, 0, 1)` with factor 1 is the line without the row to round-off;
 with :math:`C_v = 0` and factor 2 the line settles at the static in-line offset of ``Cd`` 2.4 to the
-printed digits; Thorsen's form raises the steady cross-flow amplitude from :math:`A/D` 0.68 to 1.02;
+printed digits; Thorsen's form raises the steady cross-flow amplitude from :math:`A/D` 0.68 to 1.01;
 and the drag, damping and VIV powers balance within 0.2 %.
 
 .. _theory-viv-frame:
@@ -1647,28 +1647,28 @@ differ by :math:`(m - \rho A)\dot V`), with :math:`T_f` 0.6 s:
      - RMS A/D moving / held
    * - Amplitude table and Thorsen's damping
      - ``Tf`` 0.6 s
-     - 0.819 / 0.819
-     - 0.446 / 0.447
+     - 0.811 / 0.818
+     - 0.446 / 0.446
    * -
      - none
-     - 0.711 / 0.850
-     - 0.349 / 0.450
+     - 0.700 / 0.851
+     - 0.345 / 0.450
    * - ``Cl`` alone
      - ``Tf`` 0.6 s
-     - 0.713 / 0.714
-     - 0.372 / 0.371
+     - 0.713 / 0.712
+     - 0.372 / 0.370
    * -
      - none
-     - 0.711 / 0.736
-     - 0.349 / 0.375
+     - 0.700 / 0.733
+     - 0.345 / 0.374
 
-With the row the RMS of the two frames agrees within 0.2 % and the peak within 1 % (the moving
-pipe's peak, a single extreme, ranges 0.811-0.819 over builds, OpenBLAS kernels and platforms),
-the rest being the filter's lag
+With the row the RMS of the two frames agrees within 0.6 % (0.02 % with the table) and the peak,
+a single extreme, within 1 % (with the step-start phase update the moving pipe's peak ranged
+0.811-0.819 over builds, OpenBLAS kernels and platforms), the rest being the filter's lag
 (:math:`\omega_m T_f` = 0.094). A taut cable towed at 0.15 m/s with :math:`T_f` 10 s gives A/D
-0.7905 against 0.7906 held in the current with the same row (0.792 without it; 0.665 towed without
-the row) with the table and damping, and 0.6764 against 0.6764 with ``Cl`` alone. On the held
-cable :math:`T_f` changes A/D by at most 0.23 % on both line kinds. :math:`\bar{\mathbf v}` takes
+0.7902 against 0.7903 held in the current with the same row (0.792 without it; 0.663 towed without
+the row) with the table and damping, and 0.6758 against 0.6758 with ``Cl`` alone. On the held
+cable :math:`T_f` changes A/D by at most 0.24 % on both line kinds. :math:`\bar{\mathbf v}` takes
 rows 7-9 of the node's motion statistics on both line kinds (nine rows; rows 3-6, the amplitude
 estimate, stay 0 without a table), so it is part of the step-recovery, snapshot and checkpoint
 state; an ``EI = 0`` line filters its smoothed node velocity. :math:`T_f` 0 or no row leaves the

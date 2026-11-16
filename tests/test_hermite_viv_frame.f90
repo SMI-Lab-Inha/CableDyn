@@ -29,15 +29,16 @@ PROGRAM test_hermite_viv_frame
   !!   without tf bit for bit;
   !! * F2 with Tf 0.6 s the moving and the fixed pipe agree, with the tables and with the lift
   !!   alone: the RMS cross-flow response of the mid node over the second period within 1 %, its
-  !!   peak within 2 %. The RMS agrees within 0.2 % on every build and kernel; the peak of the moving
-  !!   pipe ranges 0.811-0.819 D over the Release and Debug builds, the two OpenBLAS kernels and
-  !!   Linux/Windows (fixed pipe 0.819 D), a single extreme of the response. What is left is the
+  !!   peak within 2 %. The RMS agrees within 0.6 % (measured 0.02 % with the tables and 0.6 % with the
+  !!   lift alone), the peak within 0.8 % (0.811 against 0.818 D with the tables), a single extreme
+  !!   of the response (with the step-start phase update it ranged 0.811-0.819 D over the builds,
+  !!   OpenBLAS kernels and platforms). What is left is the
   !!   filter's lag of the imposed velocity, about omega Tf = 0.094 rad;
   !! * F3 without the frame they differ: in still water the moving pipe's phase sees no cross-flow
   !!   velocity (r'.e = u.e = 0 across the relative flow), and with the tables it takes Cv and CdAmp
   !!   at A/D 0 and the Morison drag; with the tables the peak response is more than 10 % (measured
-  !!   16 %) and the RMS more than 15 % (measured 23 %) from the fixed pipe's, with the lift alone
-  !!   the RMS more than 4 % (measured 7 %);
+  !!   18 %) and the RMS more than 15 % (measured 23 %) from the fixed pipe's, with the lift alone
+  !!   the RMS more than 4 % (measured 8 %);
   !! * F4 a snapshot taken mid-run and restored replays the following steps bit for bit, the
   !!   filtered velocity included.
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
