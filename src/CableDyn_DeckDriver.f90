@@ -79,7 +79,7 @@ MODULE CableDyn_DeckDriver
   USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Curvature, &
                                    CD_HermiteCable_Peak_Curvature, CD_HermiteCable_Axial_Resultant, &
                                    CD_HermiteCable_Axial_Resultant_Range, CD_HermiteCable_Element, CD_HCABLE_OK, &
-                                   CD_HCABLE_BADINPUT, CD_HermiteCable_Gauss_Rule
+                                   CD_HCABLE_BADINPUT, CD_HermiteCable_Gauss_Rule, CD_HermiteCable_Rayleigh_Pair
   USE CableDyn_HermiteCableStatic, ONLY: CD_HermiteCable_Static_Solve_AutoMesh, CD_HermiteCable_Static_Solve, &
                                          CD_HermiteCable_Prolong_Arc, CD_HermiteCable_Kink_Advice, &
                                          CD_HermiteCable_Element_Ratio, CD_HC_OSCILLATION_REL_TOL, &
@@ -127,6 +127,7 @@ MODULE CableDyn_DeckDriver
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_Init, CD_HFMF_Set_Drag, &
                                           CD_HFMF_Set_Section_Reference, CD_HFMF_Section_Curvature, &
                                           CD_HFMF_Set_Axial_Damping, CD_HFMF_Set_Bending_Damping, &
+                                          CD_HFMF_Set_Mass_Damping, &
                                           CD_HFMF_Set_AddedMass, CD_HFMF_Set_ModifiedNewton, &
                                           CD_HFMF_Set_Tensile_Monitor, CD_HFMF_Get_Tensile_Diagnostics, &
                                           CD_HFMF_Get_Recovery_Diagnostics, &
@@ -420,6 +421,10 @@ MODULE CableDyn_DeckDriver
     ! curvature rate (CD_HermiteCable_Bending_Damping), resolved from EI|-zeta|f (zeta at the
     ! frequency f [Hz] of a bending mode, Bb = zeta EI/(pi f)) when the row gives a ratio
     REAL(wp) :: bb = CD_ZERO
+    ! mass-proportional (Rayleigh alpha) transverse damping [1/s] of a finite-EI cable, the force
+    ! ralpha m on the velocity normal to the tangent (CD_HermiteCable_Mass_Damping); with bb, resolved
+    ! from EI|-zeta|f1|f2 (zeta at f1 and f2 [Hz], CD_HermiteCable_Rayleigh_Pair)
+    REAL(wp) :: ralpha = CD_ZERO
     REAL(wp) :: i_rt = CD_ZERO, i_rn = CD_ZERO
     REAL(wp) :: cdn = CD_ZERO, cdt = CD_ZERO, can = CD_ZERO, cat = CD_ZERO
     ! Viscoelastic stiffness (MoorDyn ElasticMod): the EA column's bar-separated
@@ -1923,7 +1928,7 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :), viv_dva(:), cdy_a(:), cdy_b(:), cdy_c(:)
     INTEGER, ALLOCATABLE :: viv_ampn(:)
     REAL(wp), ALLOCATABLE :: wo_cl0(:), wo_st(:), wo_eps(:), wo_a(:), wo_tf(:)
-    REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:), bb_el(:)
+    REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:), bb_el(:), ra_el(:)
     REAL(wp) :: mode1_omega
     REAL(wp), ALLOCATABLE :: contact_kn(:), contact_cn(:)
     REAL(wp) :: anchor(3), fairlead(3), res, tvec(3), tnrm, contact_z, seed_z, seed_floor_a, seed_floor_b
@@ -2265,8 +2270,8 @@ CONTAINS
     IF (LEN_TRIM(fine_note) > 0 .AND. standalone_mode) WRITE (error_unit, '(A)') '   Note: '//TRIM(fine_note)//'.'
     ALLOCATE (ba_raw(SIZE(l0)))
     CALL finite_raw_ba_array(ln, sections, types, ba_raw)
-    ALLOCATE (bb_el(SIZE(l0)))
-    CALL finite_bb_array(ln, sections, types, bb_el)
+    ALLOCATE (bb_el(SIZE(l0)), ra_el(SIZE(l0)))
+    CALL finite_bb_array(ln, sections, types, bb_el, ra_el)
     nnode = SIZE(l0) + 1
     ndof = 6*nnode
     ALLOCATE (w(SIZE(l0)), nodes_ref(3, nnode), q0(ndof))
@@ -3354,6 +3359,7 @@ CONTAINS
       CALL remap_elem_by_reference_arc(cat, l0, l0_am)
       CALL remap_elem_by_reference_arc(ba_raw, l0, l0_am)
       CALL remap_elem_by_reference_arc(bb_el, l0, l0_am)
+      CALL remap_elem_by_reference_arc(ra_el, l0, l0_am)
       IF (ALLOCATED(ei_cable)) CALL remap_elem_by_reference_arc(ei_cable, l0, l0_am)
     END IF
     ! The node output channels read deck nodes: map each onto the final mesh (set on the cable
@@ -3577,6 +3583,12 @@ CONTAINS
       CALL CD_HFMF_Set_Bending_Damping(cable, bb_el, es, em)
       IF (es /= CD_HFMF_OK) THEN
         CALL fail(ErrStat, ErrMsg, 'finite-EI cable bending-damping wiring failed: '//TRIM(em)); RETURN
+      END IF
+    END IF
+    IF (ANY(ra_el > CD_ZERO)) THEN
+      CALL CD_HFMF_Set_Mass_Damping(cable, ra_el, es, em)
+      IF (es /= CD_HFMF_OK) THEN
+        CALL fail(ErrStat, ErrMsg, 'finite-EI cable mass-damping wiring failed: '//TRIM(em)); RETURN
       END IF
     END IF
     IF (ANY(endconn_mode /= CD_ENDCONN_PINNED)) THEN
@@ -11654,12 +11666,13 @@ CONTAINS
     ba_raw = ba_raw(SIZE(ba_raw):1:-1)
   END SUBROUTINE finite_raw_ba_array
 
-  SUBROUTINE finite_bb_array(ln, sections, types, bb)
-    !! The line types' bending damping Bb [N m^2 s] on the deck elements (internal order).
+  SUBROUTINE finite_bb_array(ln, sections, types, bb, ralpha)
+    !! The line types' bending damping Bb [N m^2 s] and mass-proportional damping alpha [1/s] on
+    !! the deck elements (internal order).
     TYPE(DeckLine), INTENT(IN) :: ln
     TYPE(DeckSection), INTENT(IN) :: sections(:)
     TYPE(DeckLineType), INTENT(IN) :: types(:)
-    REAL(wp), INTENT(OUT) :: bb(:)
+    REAL(wp), INTENT(OUT) :: bb(:), ralpha(:)
     INTEGER :: i, j, e
     e = 0
     DO i = 1, SIZE(sections)
@@ -11667,9 +11680,11 @@ CONTAINS
       DO j = 1, sections(i)%nsegs
         e = e + 1
         bb(e) = types(sections(i)%ltype)%bb
+        ralpha(e) = types(sections(i)%ltype)%ralpha
       END DO
     END DO
     bb = bb(SIZE(bb):1:-1)
+    ralpha = ralpha(SIZE(ralpha):1:-1)
   END SUBROUTINE finite_bb_array
 
   SUBROUTINE finite_line_type_ei(ln, sections, types, ei)
@@ -16097,54 +16112,69 @@ CONTAINS
 
   SUBROUTINE parse_ei_column(ei_str, t, ErrStat, ErrMsg)
     !! The LINE TYPES EI column: EI, EI|Bb with Bb >= 0 the bending damping [N m^2 s] (the moment
-    !! Bb times the curvature rate), or EI|-zeta|f with 0 < zeta < 1 the damping ratio of a bending
-    !! mode of frequency f [Hz] whose energy is all bending, Bb = zeta EI/(pi f). Bending damping
-    !! needs a finite-EI cable (EI > 0).
+    !! Bb times the curvature rate), EI|-zeta|f with 0 < zeta < 1 the damping ratio of a bending
+    !! mode of frequency f [Hz] whose energy is all bending, Bb = zeta EI/(pi f), or EI|-zeta|f1|f2,
+    !! the Rayleigh pair of the bending damping Bb and the mass-proportional damping alpha [1/s]
+    !! that holds zeta at f1 and f2 (CD_HermiteCable_Rayleigh_Pair). Damping needs a finite-EI
+    !! cable (EI > 0).
     CHARACTER(*), INTENT(IN) :: ei_str
     TYPE(DeckLineType), INTENT(INOUT) :: t
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
-    INTEGER :: bar, bar2, ios
-    REAL(wp) :: second, freq
+    INTEGER :: bars(3), nbar, k, ios
+    REAL(wp) :: second, freq, freq2
     REAL(wp), PARAMETER :: PI_L = 3.14159265358979323846_wp
+    CHARACTER(*), PARAMETER :: FORMS = 'EI, EI|Bb, EI|-zeta|f or EI|-zeta|f1|f2'
     ErrStat = 0; ErrMsg = ''
     t%bb = CD_ZERO
+    t%ralpha = CD_ZERO
     second = CD_ZERO
     freq = CD_ZERO
-    bar = INDEX(ei_str, '|')
-    bar2 = 0
-    IF (bar == 0) THEN
+    freq2 = CD_ZERO
+    ! the bar positions; a fourth bar is refused
+    nbar = 0
+    bars = 0
+    DO k = 1, LEN_TRIM(ei_str)
+      IF (ei_str(k:k) /= '|') CYCLE
+      IF (nbar == 3) THEN
+        CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'" takes '//FORMS); RETURN
+      END IF
+      nbar = nbar + 1
+      bars(nbar) = k
+    END DO
+    SELECT CASE (nbar)
+    CASE (0)
       READ (ei_str, *, IOSTAT=ios) t%ei
-    ELSE
-      bar2 = INDEX(ei_str(bar + 1:), '|')
-      IF (bar2 > 0) THEN
-        bar2 = bar + bar2
-        IF (INDEX(ei_str(bar2 + 1:), '|') > 0) THEN
-          CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'" takes EI, EI|Bb or EI|-zeta|f'); RETURN
-        END IF
-      END IF
-      READ (ei_str(1:bar - 1), *, IOSTAT=ios) t%ei
-      IF (bar2 > 0) THEN
-        IF (ios == 0) READ (ei_str(bar + 1:bar2 - 1), *, IOSTAT=ios) second
-        IF (ios == 0) READ (ei_str(bar2 + 1:), *, IOSTAT=ios) freq
-      ELSE
-        IF (ios == 0) READ (ei_str(bar + 1:), *, IOSTAT=ios) second
-      END IF
-    END IF
+    CASE (1)
+      READ (ei_str(1:bars(1) - 1), *, IOSTAT=ios) t%ei
+      IF (ios == 0) READ (ei_str(bars(1) + 1:), *, IOSTAT=ios) second
+    CASE (2)
+      READ (ei_str(1:bars(1) - 1), *, IOSTAT=ios) t%ei
+      IF (ios == 0) READ (ei_str(bars(1) + 1:bars(2) - 1), *, IOSTAT=ios) second
+      IF (ios == 0) READ (ei_str(bars(2) + 1:), *, IOSTAT=ios) freq
+    CASE DEFAULT
+      READ (ei_str(1:bars(1) - 1), *, IOSTAT=ios) t%ei
+      IF (ios == 0) READ (ei_str(bars(1) + 1:bars(2) - 1), *, IOSTAT=ios) second
+      IF (ios == 0) READ (ei_str(bars(2) + 1:bars(3) - 1), *, IOSTAT=ios) freq
+      IF (ios == 0) READ (ei_str(bars(3) + 1:), *, IOSTAT=ios) freq2
+    END SELECT
     IF (ios /= 0) THEN
-      CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'" is not EI, EI|Bb or EI|-zeta|f'); RETURN
+      CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'" is not '//FORMS); RETURN
     END IF
-    IF (.NOT. (IEEE_IS_FINITE(t%ei) .AND. IEEE_IS_FINITE(second) .AND. IEEE_IS_FINITE(freq))) THEN
+    IF (.NOT. (IEEE_IS_FINITE(t%ei) .AND. IEEE_IS_FINITE(second) .AND. IEEE_IS_FINITE(freq) .AND. &
+               IEEE_IS_FINITE(freq2))) THEN
       CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'" must be finite'); RETURN
     END IF
-    IF (bar == 0) RETURN
-    IF (bar2 == 0) THEN
+    SELECT CASE (nbar)
+    CASE (0)
+      RETURN
+    CASE (1)
       IF (second < CD_ZERO) THEN
         CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'": a negative bending damping is '// &
                   '-zeta and needs the frequency it holds at, EI|-zeta|f'); RETURN
       END IF
       t%bb = second
-    ELSE
+    CASE (2)
       IF (.NOT. (second < CD_ZERO .AND. second > -CD_ONE)) THEN
         CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'": EI|-zeta|f takes a damping '// &
                   'ratio 0 < zeta < 1, written negative'); RETURN
@@ -16154,10 +16184,20 @@ CONTAINS
                   'EI|-zeta|f must be positive [Hz]'); RETURN
       END IF
       t%bb = -second*t%ei/(PI_L*freq)
-    END IF
+    CASE DEFAULT
+      IF (.NOT. (second < CD_ZERO .AND. second > -CD_ONE)) THEN
+        CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'": EI|-zeta|f1|f2 takes a '// &
+                  'damping ratio 0 < zeta < 1, written negative'); RETURN
+      END IF
+      IF (.NOT. (freq > CD_ZERO .AND. freq2 > CD_ZERO)) THEN
+        CALL fail(ErrStat, ErrMsg, 'LINE TYPES EI column "'//TRIM(ei_str)//'": the frequencies f1 and f2 of '// &
+                  'EI|-zeta|f1|f2 must be positive [Hz]'); RETURN
+      END IF
+      CALL CD_HermiteCable_Rayleigh_Pair(-second, freq, freq2, t%ei, t%bb, t%ralpha)
+    END SELECT
     ! a damping asked for (a ratio form, or Bb > 0) needs a finite EI: on EI = 0 the ratio form would
     ! resolve to Bb = 0 and the request would pass unnoticed
-    IF ((bar2 > 0 .OR. t%bb > CD_ZERO) .AND. .NOT. (t%ei > CD_ZERO)) THEN
+    IF ((nbar >= 2 .OR. t%bb > CD_ZERO) .AND. .NOT. (t%ei > CD_ZERO)) THEN
       CALL fail(ErrStat, ErrMsg, 'LINE TYPES '//TRIM(t%name)//': bending damping (EI|Bb) needs a '// &
                 'finite-EI cable (EI > 0)'); RETURN
     END IF

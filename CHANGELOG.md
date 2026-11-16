@@ -10,6 +10,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- Rayleigh damping of finite-EI cables: the LINE TYPES EI column takes `EI|-zeta|f1|f2`, the
+  damping ratio `zeta` at the two frequencies `f1` and `f2` [Hz]. Beside the bending damping
+  `Bb = zeta EI/(pi (f1 + f2))` it adds a mass-proportional transverse damping
+  `alpha = 4 pi zeta f1 f2/(f1 + f2)` [1/s], the force `alpha m` on the velocity normal to the
+  tangent, so a mode has `zeta(omega) = alpha/(2 omega) + omega Bb/(2 EI)` times its bending share
+  for `Bb`: `zeta` at `f1` and `f2` and less between them. Free decays of modes 1 to 3 of a pinned
+  cable match this to 0.06 %. The velocity is absolute, so rigid transverse and pendulum motion is
+  damped as well (more below `f1`). No new state; exact Jacobians; the work is in `DampPow`; the
+  Python deck reader and builder take the form. Existing decks give bit-identical outputs.
 - A finite-EI line may end on a `Free` point: the line's free End B, its position free in the
   static equilibrium and the dynamics, with the point's Mass/Vol/CdA/Ca acting on the end node as
   an attachment (a free-hanging cable or riser with a clump). The static solve holds the end on

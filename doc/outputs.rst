@@ -890,7 +890,8 @@ committed state, positive when the load puts energy into the line:
      - W
    * - ``DampPow<L>``
      - power of the structural damping: the axial dashpot ``BA`` and, on a finite-EI line, the
-       bending dashpot (``EI|Bb``); never positive
+       bending dashpot (``EI|Bb``) and the mass-proportional damping (``EI|-zeta|f1|f2``); never
+       positive
      - W
    * - ``VIVPow<L>N<J>``, ``DragPow<L>N<J>``, ``DampPow<L>N<J>``
      - the same per unit unstretched length about node ``J``

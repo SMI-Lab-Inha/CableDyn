@@ -958,7 +958,7 @@ _BARE_ROW = "bare      0.160  36.70         4.69e8   0.0  1.99e4   1.2  0.1  1.0
 
 @pytest.mark.parametrize(
     "ei",
-    ["1.99e4|250.0", "1.99e4|0", "1.99e4|-0.02|1.5"],
+    ["1.99e4|250.0", "1.99e4|0", "1.99e4|-0.02|1.5", "1.99e4|-0.02|0.5|2.0"],
 )
 def test_bending_damping_forms_are_accepted(ei):
     DeckFile.from_text(
@@ -969,7 +969,10 @@ def test_bending_damping_forms_are_accepted(ei):
 @pytest.mark.parametrize(
     ("ei", "message"),
     [
-        ("1.99e4|1|2|3", "takes EI, EI|Bb or EI|-zeta|f"),
+        ("1.99e4|-0.02|1|2|3", "takes EI, EI|Bb, EI|-zeta|f or EI|-zeta|f1|f2"),
+        ("1.99e4|0.02|0.5|2.0", "EI|-zeta|f1|f2 takes a damping ratio 0 < zeta < 1"),
+        ("1.99e4|-0.02|0.5|0", "frequencies f1 and f2 of EI|-zeta|f1|f2 must be positive"),
+        ("0.0|-0.02|0.5|2.0", "bending damping (EI|Bb) needs a finite-EI cable"),
         ("1.99e4|-250.0", "a negative bending damping is -zeta and needs the frequency"),
         ("1.99e4|0.02|1.5", "takes a damping ratio 0 < zeta < 1, written negative"),
         ("1.99e4|-1.5|1.5", "takes a damping ratio 0 < zeta < 1, written negative"),

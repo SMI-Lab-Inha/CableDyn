@@ -15,6 +15,8 @@ PROGRAM test_hermite_load_power
   !!   L4 a cable starting straight in a 0.5 m/s current with the cross-flow, in-line and
   !!      higher-harmonic (Chh 1) VIV loads,
   !!      the drag and the bending dashpot;
+  !!   L6 the bending decay with the Rayleigh pair, the mass-proportional transverse damping alpha
+  !!      beside the bending dashpot (its work is in the damping power);
   !! each within 0.5 % of the largest work; the damping power is never positive at any node, and
   !! the VIV and drag powers are zero without those loads. L5 power arrays of the wrong size are
   !! refused.
@@ -23,19 +25,21 @@ PROGRAM test_hermite_load_power
                                           CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Set_Bending_Damping, &
                                           CD_HermiteCable_Dyn_Set_Axial_Damping, CD_HermiteCable_Dyn_Set_Drag, &
                                           CD_HermiteCable_Dyn_Set_VIV, CD_HermiteCable_Dyn_Energy, &
-                                          CD_HermiteCable_Dyn_Load_Power, CD_HCDYN_OK
+                                          CD_HermiteCable_Dyn_Load_Power, CD_HermiteCable_Dyn_Set_Mass_Damping, &
+                                          CD_HCDYN_OK
   IMPLICIT NONE
   REAL(wp), PARAMETER :: PI = 3.14159265358979323846_wp
   REAL(wp), PARAMETER :: LL = 20.0_wp, EA = 1.0e8_wp, EI = 1.0e5_wp, RHOA = 10.0_wp, TENS = 1.0e4_wp
   REAL(wp), PARAMETER :: DIAM = 0.1_wp, RHOW = 1025.0_wp
   INTEGER, PARAMETER :: NE = 40, NN = NE + 1, NDOF = 6*NN
-  INTEGER, PARAMETER :: BENDING = 1, AXIAL = 2, DRAG = 3, VIV = 4
+  INTEGER, PARAMETER :: BENDING = 1, AXIAL = 2, DRAG = 3, VIV = 4, RAYLEIGH = 5
   INTEGER :: nfail = 0
 
   CALL balance_case('L1 bending dashpot decay', BENDING)
   CALL balance_case('L2 axial dashpot decay', AXIAL)
   CALL balance_case('L3 still-water drag decay', DRAG)
   CALL balance_case('L4 VIV in a current', VIV)
+  CALL balance_case('L6 Rayleigh decay', RAYLEIGH)
   CALL check_refusals()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -100,7 +104,11 @@ CONTAINS
       CALL CD_HermiteCable_Dyn_Set_Axial_Damping(model, [(2.0e4_wp, k=1, NE)], es, em)
       CALL require(es == CD_HCDYN_OK, label//': axial damping: '//TRIM(em))
     END IF
-    IF (what == BENDING .OR. what == VIV) THEN
+    IF (what == RAYLEIGH) THEN
+      CALL CD_HermiteCable_Dyn_Set_Mass_Damping(model, [(0.3_wp, k=1, NE)], es, em)
+      CALL require(es == CD_HCDYN_OK, label//': mass damping: '//TRIM(em))
+    END IF
+    IF (what == BENDING .OR. what == VIV .OR. what == RAYLEIGH) THEN
       CALL CD_HermiteCable_Dyn_Set_Bending_Damping(model, [(2.0e2_wp, k=1, NE)], es, em)
       CALL require(es == CD_HCDYN_OK, label//': bending damping: '//TRIM(em))
     END IF
@@ -142,7 +150,8 @@ CONTAINS
     CALL require(pm_max <= 0.0_wp, label//': the damping power is never positive at a node')
     CALL require(zero_viv .EQV. what /= VIV, label//': VIV power only with VIV')
     CALL require(zero_drag .EQV. (what /= DRAG .AND. what /= VIV), label//': drag power only with drag')
-    IF (what == BENDING .OR. what == AXIAL) CALL require(work(3) < 0.0_wp, label//': the dashpot dissipates')
+    IF (what == BENDING .OR. what == AXIAL .OR. what == RAYLEIGH) &
+      CALL require(work(3) < 0.0_wp, label//': the dashpot dissipates')
     IF (what == DRAG) CALL require(work(2) < 0.0_wp, label//': still-water drag dissipates')
     IF (what == VIV) CALL require(work(1) > 0.0_wp, label//': the VIV loads put energy in')
   END SUBROUTINE balance_case

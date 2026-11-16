@@ -2,13 +2,17 @@
 ! SPDX-License-Identifier: Apache-2.0
 ! Copyright (c) 2026 Jae Hoon Seo, SMI Lab, Inha University
 PROGRAM test_bending_damping_deck
-  !! Bending damping on a deck (LINE TYPES EI|Bb and EI|-zeta|f): an 80 m power cable hanging from
+  !! Bending damping on a deck (LINE TYPES EI|Bb, EI|-zeta|f and EI|-zeta|f1|f2): an 80 m power cable hanging from
   !! a clamped hang-off to a seabed anchor, in a regular sea.
   !!   E1 EI|-zeta|f and the EI|Bb it resolves to (Bb = zeta EI/(pi f)) give the same run, to the
   !!      printed digits;
   !!   E2 the damping lowers the hang-off curvature range against the undamped deck, and EI|0 is
   !!      the undamped deck exactly;
   !!   E3 bending damping on an EI = 0 type (as Bb or as a ratio) and malformed EI columns are
+  !!      refused by name;
+  !!   E4 EI|-zeta|f1|f2 runs; its mass-proportional half acts (the run differs from the EI|Bb deck
+  !!      of the same Bb = zeta EI/(pi (f1 + f2))) and lowers the hang-off curvature range further;
+  !!   E5 the two-frequency form with a positive ratio, a zero frequency or on an EI = 0 type is
   !!      refused by name.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
@@ -17,6 +21,7 @@ PROGRAM test_bending_damping_deck
   INTEGER :: nfail = 0
 
   CALL check_runs()
+  CALL check_pair()
   CALL check_refusals()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -175,10 +180,59 @@ CONTAINS
     CALL run('bdd_neg.dat', 'bdd_neg', ok, msg)
     WRITE (*, '(A)') 'E3 negative without f: '//TRIM(msg)
     CALL require(.NOT. ok .AND. INDEX(msg, 'needs the frequency it holds at') > 0, 'E3: negative Bb without f')
-    CALL write_deck('bdd_four.dat', '2.0e4|1|2|3', 0.0_wp)
-    CALL run('bdd_four.dat', 'bdd_four', ok, msg)
-    WRITE (*, '(A)') 'E3 four parts: '//TRIM(msg)
-    CALL require(.NOT. ok .AND. INDEX(msg, 'takes EI, EI|Bb or EI|-zeta|f') > 0, 'E3: four-part EI column')
+    CALL write_deck('bdd_five.dat', '2.0e4|-0.05|1|2|3', 0.0_wp)
+    CALL run('bdd_five.dat', 'bdd_five', ok, msg)
+    WRITE (*, '(A)') 'E3 five parts: '//TRIM(msg)
+    CALL require(.NOT. ok .AND. INDEX(msg, 'takes EI, EI|Bb, EI|-zeta|f or EI|-zeta|f1|f2') > 0, &
+                 'E3: five-part EI column')
+    CALL write_deck('bdd_pair_pos.dat', '2.0e4|0.05|0.5|2.0', 0.0_wp)
+    CALL run('bdd_pair_pos.dat', 'bdd_pair_pos', ok, msg)
+    WRITE (*, '(A)') 'E5 positive ratio: '//TRIM(msg)
+    CALL require(.NOT. ok .AND. INDEX(msg, 'EI|-zeta|f1|f2 takes a damping ratio 0 < zeta < 1') > 0, &
+                 'E5: a positive ratio in the two-frequency form')
+    CALL write_deck('bdd_pair_f0.dat', '2.0e4|-0.05|0.5|0', 0.0_wp)
+    CALL run('bdd_pair_f0.dat', 'bdd_pair_f0', ok, msg)
+    WRITE (*, '(A)') 'E5 zero frequency: '//TRIM(msg)
+    CALL require(.NOT. ok .AND. INDEX(msg, 'frequencies f1 and f2 of EI|-zeta|f1|f2 must be positive') > 0, &
+                 'E5: a zero frequency in the two-frequency form')
+    CALL write_deck('bdd_rope_pair.dat', '0.0|-0.05|0.5|2.0', 0.0_wp, rope=.TRUE.)
+    CALL run('bdd_rope_pair.dat', 'bdd_rope_pair', ok, msg)
+    WRITE (*, '(A)') 'E5 EI = 0, two-frequency form: '//TRIM(msg)
+    CALL require(.NOT. ok .AND. INDEX(msg, 'bending damping (EI|Bb) needs a finite-EI cable') > 0, &
+                 'E5: the two-frequency form on an EI = 0 type')
   END SUBROUTINE check_refusals
+
+  SUBROUTINE check_pair()
+    REAL(wp), PARAMETER :: F1 = 0.5_wp, F2 = 2.0_wp
+    REAL(wp), ALLOCATABLE :: tr(:, :), tb(:, :), tp(:, :)
+    INTEGER :: nr, nb, np
+    REAL(wp) :: bb, rr, rb, rp
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    CHARACTER(64) :: col
+    bb = ZETA*EI/(PI*(F1 + F2))
+    WRITE (col, '(ES22.15)') bb
+    CALL write_deck('bdd_pair.dat', '2.0e4|-0.05|0.5|2.0', 20.0_wp)
+    CALL run('bdd_pair.dat', 'bdd_pair', ok, msg)
+    CALL require(ok, 'E4: the EI|-zeta|f1|f2 deck runs: '//TRIM(msg))
+    CALL write_deck('bdd_pair_bb.dat', '2.0e4|'//TRIM(ADJUSTL(col)), 20.0_wp)
+    CALL run('bdd_pair_bb.dat', 'bdd_pair_bb', ok, msg)
+    CALL require(ok, 'E4: the EI|Bb deck of its Bb runs: '//TRIM(msg))
+    CALL read_out('bdd_pair.out', tr, nr)
+    CALL read_out('bdd_pair_bb.out', tb, nb)
+    CALL read_out('bdd_plain.out', tp, np)
+    CALL require(nr > 10 .AND. nr == nb .AND. nr == np, 'E4: the runs wrote matching rows')
+    IF (.NOT. (nr > 10 .AND. nr == nb .AND. nr == np)) RETURN
+    rr = MAXVAL(tr(4, nr/2:nr)) - MINVAL(tr(4, nr/2:nr))
+    rb = MAXVAL(tb(4, nb/2:nb)) - MINVAL(tb(4, nb/2:nb))
+    rp = MAXVAL(tp(4, np/2:np)) - MINVAL(tp(4, np/2:np))
+    WRITE (*, '(A,ES11.4,A)') 'E4: max |EI|-zeta|f1|f2 - EI|Bb| over the channels ', &
+      MAXVAL(ABS(tr(:, :nr) - tb(:, :nb))), ' (the alpha share)'
+    WRITE (*, '(A,3ES11.4,A)') 'E4: hang-off curvature range, Rayleigh pair, its Bb alone, undamped ', rr, rb, rp, &
+      ' 1/m'
+    CALL require(MAXVAL(ABS(tr(:, :nr) - tb(:, :nb))) > 1.0e-6_wp*MAXVAL(ABS(tb(:, :nb))), &
+                 'E4: the mass-proportional half acts')
+    CALL require(rr < rb .AND. rb < rp, 'E4: the mass-proportional half lowers the curvature range further')
+  END SUBROUTINE check_pair
 
 END PROGRAM test_bending_damping_deck

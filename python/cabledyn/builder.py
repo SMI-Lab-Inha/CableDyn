@@ -195,7 +195,9 @@ class LineType:
         Bending stiffness, in N m^2; ``(EI, Bb)`` adds the bending damping
         ``Bb`` in N m^2 s (written ``EI|Bb``), and ``(EI, -zeta, f)`` gives it
         as the damping ratio ``zeta`` of a bending mode of frequency ``f`` in Hz
-        (written ``EI|-zeta|f``; ``Bb = zeta EI / (pi f)``).
+        (written ``EI|-zeta|f``; ``Bb = zeta EI / (pi f)``); ``(EI, -zeta, f1, f2)``
+        adds the mass-proportional damping ``alpha`` beside ``Bb``, the Rayleigh
+        pair that holds ``zeta`` at ``f1`` and ``f2`` (written ``EI|-zeta|f1|f2``).
     cdn, cdt, can, cat : float
         Normal and tangential drag and added-mass coefficients.
     gas, gj, irt, irn : float | None
@@ -2768,8 +2770,10 @@ class DeckModel:
                 row.append(f'"{_render(ea)}"')
             else:
                 row.append(_multi(item.ea, what))
-            if isinstance(item.ei, tuple) and len(item.ei) not in (2, 3):
-                raise ValueError(f"{what}: ei is EI, (EI, Bb) or (EI, -zeta, f)")
+            if isinstance(item.ei, tuple) and len(item.ei) not in (2, 3, 4):
+                raise ValueError(
+                    f"{what}: ei is EI, (EI, Bb), (EI, -zeta, f) or (EI, -zeta, f1, f2)"
+                )
             row += [_multi(item.ba, what), _multi(item.ei, what)]
             extra = (item.gas, item.gj, item.irt, item.irn)
             if all(value is not None for value in extra):

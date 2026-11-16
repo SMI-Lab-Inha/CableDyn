@@ -26,6 +26,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
                                           CD_HermiteCable_Dyn_Set_Drag, CD_HermiteCable_Dyn_Set_AddedMass, &
                                           CD_HermiteCable_Dyn_Set_Axial_Damping, &
                                           CD_HermiteCable_Dyn_Set_Bending_Damping, &
+                                          CD_HermiteCable_Dyn_Set_Mass_Damping, &
                                           CD_HermiteCable_Dyn_Set_Waves, CD_HermiteCable_Dyn_Set_Held_Fluid, &
                                           CD_HermiteCable_Dyn_Set_Contact, CD_HermiteCable_Dyn_Set_Attachments, &
                                           CD_HermiteCable_Dyn_Set_EndConnection, &
@@ -61,6 +62,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
   PUBLIC :: CD_HFMF_Set_Drag
   PUBLIC :: CD_HFMF_Set_Axial_Damping
   PUBLIC :: CD_HFMF_Set_Bending_Damping
+  PUBLIC :: CD_HFMF_Set_Mass_Damping
   PUBLIC :: CD_HFMF_Set_ModifiedNewton
   PUBLIC :: CD_HFMF_Set_Tensile_Safety
   PUBLIC :: CD_HFMF_Set_Tensile_Monitor
@@ -397,6 +399,29 @@ CONTAINS
       ErrMsg = 'CD_HFMF_Set_Bending_Damping: '//TRIM(em)
     END IF
   END SUBROUTINE CD_HFMF_Set_Bending_Damping
+
+  SUBROUTINE CD_HFMF_Set_Mass_Damping(self, alpha, ErrStat, ErrMsg)
+    !! Install the per-element mass-proportional (Rayleigh alpha) coefficients alpha [1/s] on the
+    !! cable (CD_HermiteCable_Dyn_Set_Mass_Damping).
+    TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: self
+    REAL(wp), INTENT(IN) :: alpha(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es
+    CHARACTER(1024) :: em
+    ErrStat = CD_HFMF_OK
+    ErrMsg = ''
+    IF (.NOT. self%initialized) THEN
+      ErrStat = CD_HFMF_BADINPUT
+      ErrMsg = 'CD_HFMF_Set_Mass_Damping: module not initialised'
+      RETURN
+    END IF
+    CALL CD_HermiteCable_Dyn_Set_Mass_Damping(self%line, alpha, es, em)
+    IF (es /= CD_HCDYN_OK) THEN
+      ErrStat = CD_HFMF_BADINPUT
+      ErrMsg = 'CD_HFMF_Set_Mass_Damping: '//TRIM(em)
+    END IF
+  END SUBROUTINE CD_HFMF_Set_Mass_Damping
 
   SUBROUTINE CD_HFMF_Set_EndConnection(self, k_rot, d0_global, ErrStat, ErrMsg, &
                                        coupled_d0_parent, parent_orientation, connection_mode, &

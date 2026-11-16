@@ -916,6 +916,78 @@ pinned cable reproduces this ratio to 0.05 % in the bending- and tension-dominat
 (``test_hermite_bending_damping_dynamic``). The force joins the axial damping as the structural
 damping load (it is in the reported end forces, not in the elastic ``BendMom`` output).
 
+.. _theory-mass-damping:
+
+Mass-proportional (Rayleigh) damping
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The bending damping alone gives :math:`\zeta \propto \omega`: a ratio set at one frequency is too
+low below it and too high above it, so a broad VIV band cannot hold one :math:`\zeta`. The form
+``EI|-zeta|f1|f2`` (LINE TYPES) adds a mass-proportional term, which makes the pair a Rayleigh
+damping :math:`\alpha\,\mathbf M + \beta\,\mathbf K_b` with :math:`\beta = B_b/EI`. With
+:math:`\mathbf v = \dot{\mathbf r}` the velocity interpolated by the shape functions of the
+consistent mass and :math:`m` the line's mass per unstretched length (``MassDenInAir``, with a
+stiffener sleeve's where ``STIFFENERS`` adds one), the
+element's dissipation function is
+
+.. math::
+
+   \psi_\alpha = \int_0^{L_0} \tfrac{1}{2}\,\alpha\,m\,
+   \lvert(\mathbf{I} - \mathbf{t}\mathbf{t}^\mathsf{T})\,\mathbf v\rvert^2\,\mathrm{d}s ,
+
+and the damping force is :math:`\mathbf f_\alpha = \partial\psi_\alpha/\partial\dot{\mathbf q} =
+\int_0^{L_0} \alpha\,m\,\mathbf N^\mathsf{T}(\mathbf I - \mathbf t\mathbf t^\mathsf{T})\,\mathbf v\,\mathrm ds`
+(:math:`\mathbf N` the cubic-Hermite position shape functions, four-point Gauss rule as the mass).
+Its velocity Jacobian :math:`\int \alpha m\,\mathbf N^\mathsf{T}(\mathbf I - \mathbf t\mathbf t^\mathsf{T})
+\mathbf N\,\mathrm ds` is symmetric; its position Jacobian follows from
+:math:`\partial\mathbf t/\partial\mathbf r' = (\mathbf I - \mathbf t\mathbf t^\mathsf{T})/\lvert\mathbf r'\rvert`,
+
+.. math::
+
+   \frac{\partial \mathbf f_\alpha}{\partial \mathbf q} = -\int_0^{L_0} \frac{\alpha\,m}{\lvert\mathbf r'\rvert}\,
+   \mathbf N^\mathsf{T}\Big[(\mathbf I - \mathbf t\mathbf t^\mathsf{T})(\mathbf t\cdot\mathbf v)
+   + \mathbf t\,\big((\mathbf I - \mathbf t\mathbf t^\mathsf{T})\mathbf v\big)^\mathsf{T}\Big]\,
+   \mathbf N_{,s}\,\mathrm ds ,
+
+so the Newton tangent stays exact. On a straight span the force is :math:`\alpha\,\mathbf M\,\mathbf v`
+in the two transverse directions and zero along the axis: axial motion is left to ``BA``. A
+transverse mode whose modal mass is the line's own is damped at :math:`\alpha/(2\omega)`, and with
+the bending damping the ratio is
+
+.. math::
+
+   \zeta(\omega) = \frac{\alpha}{2\,\omega} + \frac{\omega\,B_b}{2\,EI}\;\frac{EI\,k^2}{EI\,k^2 + T} .
+
+``EI|-zeta|f1|f2`` sets
+
+.. math::
+
+   B_b = \frac{\zeta\,EI}{\pi\,(f_1 + f_2)}, \qquad \alpha = \frac{4\pi\,\zeta\,f_1 f_2}{f_1 + f_2} ,
+
+so a mode whose stiffness is all bending has the ratio :math:`\zeta` at :math:`f_1` and
+:math:`f_2`, less between them (at least :math:`2\zeta\sqrt{f_1 f_2}/(f_1 + f_2)`, at
+:math:`\sqrt{f_1 f_2}`) and more outside. Free decays of modes 1, 2 and 3 of a pinned cable
+reproduce :math:`\zeta(\omega)` for :math:`\alpha` alone, :math:`B_b` alone and both to 0.06 %, and
+the target at :math:`f_1` and :math:`f_2` to 0.03 % (``test_hermite_mass_damping_dynamic``).
+The
+ratio is lower in two cases: :math:`B_b` damps a mode with tension in its bending share only, and
+:math:`\alpha` damps a mode in water in the share :math:`m/(m + m_a)` of its modal mass, since the
+added mass :math:`m_a` (and an attachment's mass) is not in :math:`\alpha\,\mathbf M`.
+
+The velocity is absolute (the earth frame), as in the usual Rayleigh model. The term therefore
+damps a rigid transverse translation and the pendulum swing of a span, and it opposes the
+transverse motion a moving fairlead imposes, as a linear drag :math:`\alpha m\,\mathbf v_n` would in
+still water. Its ratio :math:`\alpha/(2\omega)` grows as the frequency falls, so motions well below
+:math:`f_1` (slow drift, a moored line's pendulum and the low-frequency response of a coupled
+floater) are damped more than the target; set :math:`f_1` at the lowest frequency the analysis
+must resolve and compare the low-frequency response against the run without the pair. A velocity
+relative to the cable's filtered motion (the frame :ref:`theory-viv-frame` uses) would exempt
+slow motions, but it adds a filter state, lags the damping and replaces :math:`\alpha/(2\omega)`
+by a factor that depends on the filter, so the pair would no longer hold :math:`\zeta` at
+:math:`f_1`; CableDyn keeps the absolute velocity and no state. The force joins the structural
+damping load beside ``BA`` and :math:`B_b` (the end forces and ``DampPow`` carry it). ``EI = 0``
+lines have no counterpart: the form needs a finite-EI cable, as the bending damping does.
+
 Viscoelastic rope (MoorDyn ``ElasticMod`` 2 and 3)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
