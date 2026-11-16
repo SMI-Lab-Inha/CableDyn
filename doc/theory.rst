@@ -1293,7 +1293,10 @@ CableDyn's did before, is first order: the frequency low by about :math:`0.06/n`
 per step, a time of ten steps; it lags only a changing amplitude, and with an amplitude table the
 locked-in response of the same line is second order as well (the frequency low by about
 :math:`2.4/n^2`). The default ``VIVrmsWindow``, 500 steps as in MoorDyn, ties the averaging time
-to ``dtM``: a time-step study gives it in seconds.
+to ``dtM``: a time-step study gives it in seconds. At :math:`\rho_\infty = 1` from an unbalanced
+seed (tangent lengths not at the static stretch) the VIV response is resolution-sensitive below
+about 50 steps per cycle (on the taut line 4.7 % high in amplitude at 25): keep ``rhoInf`` at or
+below 0.95 (:doc:`options`) or seed the tangents at the stretch.
 
 On a finite-EI (cubic-Hermite) cable the lift is a distributed load per unit deformed length,
 

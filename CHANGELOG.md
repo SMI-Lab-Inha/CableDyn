@@ -209,7 +209,9 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `viv_step_order`). The two VIV example decks change at their default `dtM` and move toward
   their fine-step results (the cross-flow example's mid-span RMS from 0.31 % to 0.02 % off, its
   frequency from 0.15 % to 0.018 %); every other example and test deck gives bit-identical
-  outputs.
+  outputs. At `rhoInf` 1 from an unbalanced seed (tangent lengths not at the static stretch) the
+  response is resolution-sensitive below about 50 steps per cycle; keep `rhoInf` at or below 0.95
+  or seed at the stretch.
 
 ## [0.4.2] - 2026-11-09
 
