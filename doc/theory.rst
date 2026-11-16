@@ -2901,7 +2901,8 @@ whereas the zero guess damps it. A failed constant-acceleration attempt is re-so
 Newmark predictor. The test uses only the committed state, so a restart is exact.
 On a Hermite step either guess holds a free nodal tangent at its committed value where it
 would change the tangent's length, the stretch, by more than a quarter (a strain change of 0.25
-in one step). The stretch is the line's stiffest motion (:math:`EA` against the tangents' small
+in one step). A tangent with some components fixed (a planar model fixes the out-of-plane one)
+is held on its free components, by their change of the length. The stretch is the line's stiffest motion (:math:`EA` against the tangents' small
 consistent mass), and with little numerical damping (:math:`\rho_\infty` near 1) an offset of it
 rings on with a committed velocity and acceleration far larger than the motion they make: a
 taut line seeded with unit tangents, :math:`7.6\times10^{-5}` off its elements' stretch, had

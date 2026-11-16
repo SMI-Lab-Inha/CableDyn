@@ -5253,17 +5253,23 @@ CONTAINS
     ! per cycle and rho_inf 0.9 and 1, 132 steps took more than 12 iterations against 31. The
     ! test is on the length alone because a guess that turns a tangent fast is often right: a
     ! seabed cable whose span was lengthened 1.3 times turns two tangents 19 degrees in its
-    ! first 0.01 s step, and does not converge from the held tangents. Every other start is
-    ! unchanged.
+    ! first 0.01 s step, and does not converge from the held tangents. A node with some tangent
+    ! components fixed (a planar model fixes the out-of-plane one) is guarded on its free
+    ! components: the length change is that of the free components' increment, and only they are
+    ! held. Every other start is unchanged.
     DO i = 1, model%nn
       iv = 6*(i - 1)
-      IF (.NOT. ALL(model%freemask(iv + 4:iv + 6))) CYCLE
+      IF (.NOT. ANY(model%freemask(iv + 4:iv + 6))) CYCLE
       t_len = NORM2(model%ws_qn(iv + 4:iv + 6))
       IF (.NOT. (t_len > CD_ZERO)) CYCLE
-      t_inc = DOT_PRODUCT(model%ws_qk(iv + 4:iv + 6) - model%ws_qn(iv + 4:iv + 6), model%ws_qn(iv + 4:iv + 6))/t_len
+      t_inc = 0.0_wp
+      DO ip = iv + 4, iv + 6
+        IF (model%freemask(ip)) t_inc = t_inc + (model%ws_qk(ip) - model%ws_qn(ip))*model%ws_qn(ip)
+      END DO
+      t_inc = t_inc/t_len
       IF (ABS(t_inc) <= PRED_STRETCH_MAX*t_len) CYCLE
       DO ip = iv + 4, iv + 6
-        model%ws_qk(ip) = model%ws_qn(ip)
+        IF (model%freemask(ip)) model%ws_qk(ip) = model%ws_qn(ip)
       END DO
     END DO
     ! Hold the prescribed DOFs at their target position for the whole solve (Newton never touches

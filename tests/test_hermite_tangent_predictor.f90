@@ -38,7 +38,11 @@ PROGRAM test_hermite_tangent_predictor
   !! * G5 the same line without the lift at 50 steps per cycle and rho_inf 1 (before: failed at step
   !!   38 after steps on the reversed root): every step converges, the largest strain energy is
   !!   within 1.5 times the reference's (measured 1.09) and the mid-span in-line deflection at the end
-  !!   within 1 % (measured to 4 digits).
+  !!   within 1 % (measured to 4 digits);
+  !! * G6 the same no-lift line kept in its plane (r_z and m_z fixed at every node, the planar
+  !!   constraint pattern): the guard applies to the free tangent components of a partly
+  !!   constrained node, so it runs as G5 (before: the guard skipped every node with a fixed
+  !!   tangent component, and the reversed-root check stopped the run).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
                                           CD_HermiteCable_Dyn_Set_Drag, CD_HermiteCable_Dyn_Set_VIV, &
@@ -68,8 +72,8 @@ PROGRAM test_hermite_tangent_predictor
   DO ip = 1, SIZE(NPERS)
     DO ir = 1, SIZE(RHOS)
       WRITE (lab, '(A,F4.2,A,I0,A)') 'rho_inf ', RHOS(ir), ', ', NPERS(ip), ' steps per cycle'
-      CALL run(NPERS(ip), RHOS(ir), .TRUE., 1.0_wp, unit)
-      CALL run(NPERS(ip), RHOS(ir), .TRUE., 1.0_wp + TENS/EA, ref)
+      CALL run(NPERS(ip), RHOS(ir), .TRUE., .FALSE., 1.0_wp, unit)
+      CALL run(NPERS(ip), RHOS(ir), .TRUE., .FALSE., 1.0_wp + TENS/EA, ref)
       CALL report(lab, unit, ref)
       CALL require(ref%ok, 'reference '//TRIM(lab)//': every step converges')
       CALL require(unit%ok, 'G1 '//TRIM(lab)//': every step of the unit-tangent seed converges')
@@ -81,15 +85,14 @@ PROGRAM test_hermite_tangent_predictor
                    'G4 '//TRIM(lab)//': Newton converges in a few iterations')
     END DO
   END DO
-  CALL run(50, 1.0_wp, .FALSE., 1.0_wp, unit)
-  CALL run(50, 1.0_wp, .FALSE., 1.0_wp + TENS/EA, ref)
+  CALL run(50, 1.0_wp, .FALSE., .FALSE., 1.0_wp, unit)
+  CALL run(50, 1.0_wp, .FALSE., .FALSE., 1.0_wp + TENS/EA, ref)
   CALL report('no lift, rho_inf 1.00, 50 steps per cycle', unit, ref)
-  CALL require(ref%ok .AND. unit%ok, 'G5 no lift: every step converges')
-  IF (ref%ok .AND. unit%ok) THEN
-    CALL require(unit%es_max <= 1.5_wp*ref%es_max, 'G5 no lift: the strain energy stays bounded')
-    CALL require(ABS(unit%y_end - ref%y_end) <= 0.01_wp*ABS(ref%y_end), &
-                 'G5 no lift: the in-line deflection is the balanced seed''s')
-  END IF
+  CALL no_lift_gates('G5 no lift', unit, ref)
+  CALL run(50, 1.0_wp, .FALSE., .TRUE., 1.0_wp, unit)
+  CALL run(50, 1.0_wp, .FALSE., .TRUE., 1.0_wp + TENS/EA, ref)
+  CALL report('planar, no lift, rho_inf 1.00, 50 steps per cycle', unit, ref)
+  CALL no_lift_gates('G6 planar no lift', unit, ref)
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -106,6 +109,16 @@ CONTAINS
     WRITE (*, '(A)') 'FAIL: '//TRIM(label)
   END SUBROUTINE require
 
+  SUBROUTINE no_lift_gates(label, a, b)
+    CHARACTER(*), INTENT(IN) :: label
+    TYPE(run_result), INTENT(IN) :: a, b
+    CALL require(b%ok .AND. a%ok, label//': every step converges')
+    IF (.NOT. (b%ok .AND. a%ok)) RETURN
+    CALL require(a%es_max <= 1.5_wp*b%es_max, label//': the strain energy stays bounded')
+    CALL require(ABS(a%y_end - b%y_end) <= 0.01_wp*ABS(b%y_end), &
+                 label//': the in-line deflection is the balanced seed''s')
+  END SUBROUTINE no_lift_gates
+
   SUBROUTINE report(label, a, b)
     CHARACTER(*), INTENT(IN) :: label
     TYPE(run_result), INTENT(IN) :: a, b
@@ -115,11 +128,12 @@ CONTAINS
       '; balanced ', b%es_max, b%z_max/D, b%y_end, b%iters, b%max_iters
   END SUBROUTINE report
 
-  SUBROUTINE run(nper, rho_inf, with_lift, m0, res)
-    !! The taut line from its straight seed with tangents of length m0, over NCYC nominal cycles.
+  SUBROUTINE run(nper, rho_inf, with_lift, planar, m0, res)
+    !! The taut line from its straight seed with tangents of length m0, over NCYC nominal cycles;
+    !! planar fixes r_z and m_z at every node (the line moves in the plane of the current).
     INTEGER, INTENT(IN) :: nper
     REAL(wp), INTENT(IN) :: rho_inf, m0
-    LOGICAL, INTENT(IN) :: with_lift
+    LOGICAL, INTENT(IN) :: with_lift, planar
     TYPE(run_result), INTENT(OUT) :: res
     INTEGER, PARAMETER :: NE = 10, NN = NE + 1, MIDN = NE/2 + 1
     REAL(wp), PARAMETER :: SPAN = 20.0_wp, Z0 = -50.0_wp, MLIN = 8.1_wp
@@ -127,6 +141,7 @@ CONTAINS
     REAL(wp) :: seed(6*NN), l0(NE), eav(NE), eiv(NE), rhoa(NE), wv(NE), hd(NE), hn(NE), ht(NE)
     REAL(wp) :: cl(NE), cfv(NE), dfv(NE), dt, ek, es_
     INTEGER :: i, n, es, its, nit
+    INTEGER, ALLOCATABLE :: fixed(:)
     CHARACTER(1024) :: em
     dt = D/(CF*U)/REAL(nper, wp)
     l0 = SPAN/REAL(NE, wp)/(1.0_wp + TENS/EA)
@@ -137,8 +152,15 @@ CONTAINS
       seed(6*(i - 1) + 3) = Z0
       seed(6*(i - 1) + 4) = m0
     END DO
-    CALL CD_HermiteCable_Dyn_Init(hm, l0, eav, eiv, rhoa, wv, seed, [1, 2, 3, 6*NE + 1, 6*NE + 2, 6*NE + 3], &
-                                  -1.0e4_wp, 0.0_wp, rho_inf, es, em)
+    fixed = [1, 2, 3, 6*NE + 1, 6*NE + 2, 6*NE + 3]
+    IF (planar) THEN
+      fixed = [1, 2, 3, 6]
+      DO i = 2, NN - 1
+        fixed = [fixed, 6*(i - 1) + 3, 6*(i - 1) + 6]
+      END DO
+      fixed = [fixed, 6*NE + 1, 6*NE + 2, 6*NE + 3, 6*NE + 6]
+    END IF
+    CALL CD_HermiteCable_Dyn_Init(hm, l0, eav, eiv, rhoa, wv, seed, fixed, -1.0e4_wp, 0.0_wp, rho_inf, es, em)
     IF (es == CD_HCDYN_OK) THEN
       hd = D; hn = 1.2_wp; ht = 0.0_wp
       CALL CD_HermiteCable_Dyn_Set_Drag(hm, RHOW, hd, hn, ht, 0.0_wp, [0.0_wp, U, 0.0_wp], es, em)
