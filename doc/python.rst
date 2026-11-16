@@ -714,6 +714,71 @@ cases may run as separate native processes with ``jobs > 1``. Results are always
 written in the original manifest order, not completion order. This is process-level concurrency;
 it does not change CableDyn's numerical settings or make one solver instance multithreaded.
 
+With ``jobs > 1`` and no ``OMP_NUM_THREADS`` in the environment, every case runs with
+``OMP_NUM_THREADS=1``, and ``study.json`` records the value the cases ran with
+(``omp_num_threads``; ``null`` when the environment was passed on without one). A set
+``OMP_NUM_THREADS`` is passed on unchanged. The OpenMP regions of a GNU build (the tangent kernels
+of a finite-EI cable of 32 elements or more, up to four threads, and the lines of a multi-line
+system) pay off in a single run only, and many processes that each start a team oversubscribe the
+cores. Measured on a 24-core, 48-thread workstation (gfortran Release build; the static Windows
+release has no OpenMP):
+
+.. list-table:: Batch wall time, 96 finite-EI VIV cases (100 elements, 2000 steps, 1.8 s each)
+   :header-rows: 1
+
+   * - ``jobs``
+     - wall, ``OMP_NUM_THREADS=1``
+     - speed-up
+     - mean case time
+     - wall, OpenMP default
+   * - 1
+     - 177.4 s
+     - 1.0
+     - 1.84 s
+     - 181.2 s
+   * - 2
+     - 91.2 s
+     - 1.9
+     - 1.89 s
+     - 91.5 s
+   * - 4
+     - 48.2 s
+     - 3.7
+     - 1.97 s
+     - 49.4 s
+   * - 8
+     - 27.1 s
+     - 6.5
+     - 2.18 s
+     - 28.7 s
+   * - 16
+     - 16.7 s
+     - 10.6
+     - 2.62 s
+     - 16.9 s
+   * - 24
+     - 13.4 s
+     - 13.3
+     - 3.15 s
+     - 14.1 s
+   * - 48
+     - 11.8 s
+     - 15.1
+     - 5.45 s
+     - 11.9 s
+
+A case slows down as more run beside it (1.84 s alone, 3.15 s beside 23 others: shared memory
+bandwidth and a lower all-core clock), so the batch gains less than ``jobs``; the second hardware
+thread of each core adds 13 %. The VIV cases spend almost no time in OpenMP regions (a single run
+takes 1.79 s with one thread and 1.76 s with the default), so the default costs them at most 5 %.
+On a deck that uses them, the 1024-element lazy-wave cable of
+``examples/lazy_wave_vessel_rao.dat``, a single run takes 11.4 s with one thread, 10.6 s with four
+and 12.5 s with the default, and a batch of 24 such runs with ``jobs=24`` takes 16.7 s with one
+thread per process, 17.9 s with four and 19.1 s with the default. Set ``jobs`` to the number of
+physical cores (24 here), or to the number of hardware threads for the last 10-15 %, and leave
+``OMP_NUM_THREADS`` unset for a batch; for a single long run of a large finite-EI cable,
+``OMP_NUM_THREADS=4`` is the fastest setting.
+
 One failed case does not cancel the remaining cases. The final status distinguishes:
 
 * ``completed`` — native exit zero, which the driver reserves for a converged analysis;

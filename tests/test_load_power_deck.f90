@@ -16,7 +16,11 @@ PROGRAM test_load_power_deck
   !!      the cable's VIV power within 2 %;
   !!   P4 the EI = 0 line split at a free point into two lines (the multi-line system) balances
   !!      within 1 % over both lines;
-  !!   P5 malformed channels, an unknown line, node 0 and a node past the end are refused.
+  !!   P5 malformed channels, an unknown line, node 0 and a node past the end are refused;
+  !!   P6 a row evaluates a line's node powers once for all its load power channels: a channel
+  !!      read alone (DampPow1 of the cable, DragPow1 of the EI = 0 line, DampPow2 of the system)
+  !!      takes the same values, to the printed digits, as among the line's other power channels
+  !!      (P1, P3, P4), and they change from row to row.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   IMPLICIT NONE
@@ -29,6 +33,9 @@ PROGRAM test_load_power_deck
   CALL check_ei0()
   CALL check_system()
   CALL check_refusals()
+  CALL check_shared('P6 finite-EI cable', 'lpd_cab', '1.0', 'DampPow1', .FALSE., 4, 4)
+  CALL check_shared('P6 EI = 0 line', 'lpd_ei0', '0.0', 'DragPow1', .FALSE., 3, 3)
+  CALL check_shared('P6 system', 'lpd_sys', '0.0', 'DampPow2', .TRUE., 6, 7)
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -271,6 +278,29 @@ CONTAINS
     IF (n <= 1000) RETURN
     CALL balance('P4 two EI = 0 lines and a free point', tab, n, 2, pv)
   END SUBROUTINE check_system
+
+  SUBROUTINE check_shared(label, root, ei, channel, split, ncol, col)
+    !! Channel `channel` read alone against column `col` of the earlier run `root` (ncol channels),
+    !! which evaluated it among the line's other load power channels, over the rows from 50 s.
+    CHARACTER(*), INTENT(IN) :: label, root, ei, channel
+    LOGICAL, INTENT(IN) :: split
+    INTEGER, INTENT(IN) :: ncol, col
+    REAL(wp), ALLOCATABLE :: tab(:, :), one(:, :)
+    INTEGER :: n, n1
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    CALL write_deck('lpd_one.dat', ei, channel, split, 52.0_wp)
+    CALL run('lpd_one.dat', 'lpd_one', ok, msg)
+    CALL require(ok, label//': the one-channel deck runs: '//TRIM(msg))
+    IF (.NOT. ok) RETURN
+    CALL read_out('lpd_one.out', 1, one, n1)
+    CALL read_out(root//'.out', ncol, tab, n)
+    CALL require(n1 > 100 .AND. n >= n1, label//': the runs wrote their rows')
+    IF (.NOT. (n1 > 100 .AND. n >= n1)) RETURN
+    CALL require(ALL(one(1, 1:n1) == tab(1, 1:n1)) .AND. ALL(one(2, 1:n1) == tab(col, 1:n1)), &
+                 label//': the channel alone equals the channel among the line''s power channels')
+    CALL require(ANY(one(2, 2:n1) /= one(2, 1)), label//': the channel changes from row to row')
+  END SUBROUTINE check_shared
 
   SUBROUTINE check_refusals()
     CALL refused('VIVPow0', 'bad load power channel', 'line 0')

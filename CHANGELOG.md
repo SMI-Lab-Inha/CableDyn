@@ -152,6 +152,33 @@ All notable changes to CableDyn are recorded in this file. The format follows
   and checkpoint state; `Tf` 0 or no row leaves runs unchanged to the bit. A VIV FRAME row now
   needs LINE TYPES `Cl > 0` or a WAKE OSCILLATOR row; the Python deck reader and builder follow.
 
+- A long-run check of the VIV synchronisation model (`viv_long_run`, 400 cycles). With every node
+  of a finite-EI cable moved across the flow, the shedding phase follows the closed-form solution
+  of its equation (Adler's) with an error that grows linearly in time and falls fourfold per
+  halving of the step: 0.017 rad after 400 cycles at 100 steps per cycle; inside the
+  synchronisation band the phase lag holds to 3e-5 rad. On a taut line locked in, finite-EI and
+  `EI = 0`, the load powers close the line's energy balance to 2e-4 of the VIV work at second
+  order, and the response amplitude, VIV power and lock-in frequency of the run's two halves agree
+  within 0.18 %.
+
+### Changed
+
+- `run_study` (and `cabledyn-study`) with `jobs > 1` runs every case with `OMP_NUM_THREADS=1`
+  unless the environment sets it, and `study.json` records the value (`omp_num_threads`). Many
+  processes that each start an OpenMP team oversubscribed the cores: 24 lazy-wave runs at 24 jobs
+  took 19.1 s with the OpenMP default and 16.7 s with one thread each. The Python manual gives the
+  measured batch scaling (13.3 times faster at 24 jobs on a 24-core workstation, 15.1 at 48).
+- The load power channels (`VIVPow`, `DragPow`, `DampPow` and their per-length forms) of a line
+  evaluate its node powers once per output row instead of once per channel, on finite-EI cables,
+  `EI = 0` lines and line systems. Outputs are unchanged to the bit; with the three line totals
+  the VIV examples run about 11 % faster (`viv_taut_cable_inline.dat` 2.39 s to 2.14 s; the same
+  line with 200 elements at 100 steps per cycle 18.1 s to 16.1 s).
+- The bending damping of a finite-EI cable (`EI|Bb`, `EI|-zeta|f`) evaluates the second
+  derivatives of the curvature only where the position Jacobian needs them, not in every residual
+  evaluation. Results are unchanged to the bit; the Delta Flume case 9 deck of
+  `validation/experiments/delta_flume` (64 elements, 80 000 steps) runs in 58.6 s instead of
+  73.2 s.
+
 ### Fixed
 
 - The statics of a finite-EI line through the free surface could fail at isolated currents:

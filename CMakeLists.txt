@@ -1430,6 +1430,15 @@ target_link_libraries(test_hermite_load_power PRIVATE cabledyn_core)
 add_test(NAME hermite_load_power COMMAND test_hermite_load_power)
 set_tests_properties(hermite_load_power PROPERTIES LABELS "fortran;dynamic;viv")
 
+# Long VIV runs (400 cycles at 100 and 200 steps per cycle): the shedding phase under prescribed
+# motion against Adler's closed form (linear error growth, second order), and a locked-in taut
+# line of both kinds (energy closure of the load powers, stationary statistics and frequency).
+# About 26 s in Release and 160 s in Debug locally.
+add_executable(test_viv_long_run tests/test_viv_long_run.f90)
+target_link_libraries(test_viv_long_run PRIVATE cabledyn_core)
+add_test(NAME viv_long_run COMMAND test_viv_long_run)
+set_tests_properties(viv_long_run PROPERTIES LABELS "fortran;dynamic;viv;slow" TIMEOUT 1200)
+
 add_executable(test_load_power_deck tests/test_load_power_deck.f90)
 target_link_libraries(test_load_power_deck PRIVATE cabledyn_core)
 add_test(NAME load_power_deck COMMAND test_load_power_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

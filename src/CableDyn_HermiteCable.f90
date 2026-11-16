@@ -494,49 +494,53 @@ CONTAINS
       DO jj = 1, 6
         J(:, jj) = Dcr(:, jj)*g + cr*Dg(jj)
       END DO
-      ! second derivatives of kappa = cr g: T(i,j,k) = d2 kappa_i / dx_j dx_k, x = (a, b)
-      DO k = 1, 6
-        DO jj = 1, 6
-          DO i = 1, 3
-            acc = Dcr(i, jj)*Dg(k) + Dcr(i, k)*Dg(jj)
-            IF (jj <= 3 .AND. k >= 4) acc = acc + levi(i, jj, k - 3)*g
-            IF (jj >= 4 .AND. k <= 3) acc = acc + levi(i, k, jj - 3)*g
-            IF (jj <= 3 .AND. k <= 3) THEN
-              acc = acc + cr(i)*gaa2*a6(jj)*a6(k)
-              IF (jj == k) acc = acc + cr(i)*ga
-            END IF
-            T(i, jj, k) = acc
-          END DO
-        END DO
-      END DO
-      ! projector P = I - t t^T and dP(i,m,k) = d P_im / d a_k (zero for b)
+      ! projector P = I - t t^T
       DO m = 1, 3
         DO i = 1, 3
           Pm(i, m) = -tv(i)*tv(m)
         END DO
         Pm(m, m) = Pm(m, m) + CD_ONE
       END DO
-      DO k = 1, 3
-        DO m = 1, 3
-          DO i = 1, 3
-            dik = CD_ZERO; IF (i == k) dik = CD_ONE
-            dmk = CD_ZERO; IF (m == k) dmk = CD_ONE
-            dP(i, m, k) = -(((dik - tv(i)*tv(k))/sp)*tv(m) + tv(i)*((dmk - tv(m)*tv(k))/sp))
-          END DO
-        END DO
-      END DO
       Km = MATMUL(Pm, J)
       kr = MATMUL(Km, xd)
-      ! dK(i,j,k) = d K_ij / d x_k = sum_m dP(i,m,k) J(m,j) + sum_m P(i,m) T(m,j,k)
-      DO k = 1, 6
-        DO jj = 1, 6
-          DO i = 1, 3
-            acc = SUM(Pm(i, :)*T(:, jj, k))
-            IF (k <= 3) acc = acc + SUM(dP(i, :, k)*J(:, jj))
-            dK(i, jj, k) = acc
+      IF (PRESENT(Kq)) THEN
+        ! the second derivatives the position Jacobian alone takes (the force does not)
+        ! second derivatives of kappa = cr g: T(i,j,k) = d2 kappa_i / dx_j dx_k, x = (a, b)
+        DO k = 1, 6
+          DO jj = 1, 6
+            DO i = 1, 3
+              acc = Dcr(i, jj)*Dg(k) + Dcr(i, k)*Dg(jj)
+              IF (jj <= 3 .AND. k >= 4) acc = acc + levi(i, jj, k - 3)*g
+              IF (jj >= 4 .AND. k <= 3) acc = acc + levi(i, k, jj - 3)*g
+              IF (jj <= 3 .AND. k <= 3) THEN
+                acc = acc + cr(i)*gaa2*a6(jj)*a6(k)
+                IF (jj == k) acc = acc + cr(i)*ga
+              END IF
+              T(i, jj, k) = acc
+            END DO
           END DO
         END DO
-      END DO
+        ! dP(i,m,k) = d P_im / d a_k (zero for b)
+        DO k = 1, 3
+          DO m = 1, 3
+            DO i = 1, 3
+              dik = CD_ZERO; IF (i == k) dik = CD_ONE
+              dmk = CD_ZERO; IF (m == k) dmk = CD_ONE
+              dP(i, m, k) = -(((dik - tv(i)*tv(k))/sp)*tv(m) + tv(i)*((dmk - tv(m)*tv(k))/sp))
+            END DO
+          END DO
+        END DO
+        ! dK(i,j,k) = d K_ij / d x_k = sum_m dP(i,m,k) J(m,j) + sum_m P(i,m) T(m,j,k)
+        DO k = 1, 6
+          DO jj = 1, 6
+            DO i = 1, 3
+              acc = SUM(Pm(i, :)*T(:, jj, k))
+              IF (k <= 3) acc = acc + SUM(dP(i, :, k)*J(:, jj))
+              dK(i, jj, k) = acc
+            END DO
+          END DO
+        END DO
+      END IF
       g6 = Bb*MATMUL(TRANSPOSE(Km), kr)
       IF (PRESENT(Kv) .OR. (PRESENT(Kq) .AND. has_rate)) V6 = Bb*MATMUL(TRANSPOSE(Km), Km)
       IF (PRESENT(Kq)) THEN
