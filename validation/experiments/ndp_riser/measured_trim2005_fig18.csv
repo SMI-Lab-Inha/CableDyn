@@ -1,0 +1,8 @@
+# Trim et al. (2005) Fig. 18, bare riser, uniform flow: peak frequency of the dominant displacement mode [Hz]
+# read by eye on the 4x guided crop of digitise_trim2005.py at five speeds (the markers of the other speeds overlap); +-0.3 Hz, +-0.5 Hz for CF at 2.0 m/s (overlapping markers)
+U,CF,IL
+0.3,1.6,3.8
+1.0,5.6,11.1
+1.5,8.0,16.1
+2.0,9.9,20.4
+2.4,12.5,25.5
