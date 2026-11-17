@@ -509,6 +509,11 @@ def run_case(
     if not (
         same and out.is_file() and ran.is_file() and ran.read_text().strip() == sha
     ):
+        # A run that fails or is interrupted must not leave the previous model's result next
+        # to the new inputs, where the next attempt would reuse it.
+        result.unlink(missing_ok=True)
+        ran.unlink(missing_ok=True)
+        out.unlink(missing_ok=True)
         for n, v in files.items():
             (folder / n).write_text(v, encoding="utf-8", newline="\n")
         proc = subprocess.run(
@@ -542,6 +547,11 @@ def read_csv(name: str) -> list[dict]:
 
 def rms_log(ratios: list[float]) -> float | None:
     return float(np.sqrt(np.mean(np.log(ratios) ** 2))) if ratios else None
+
+
+def fmt(value: float | None, spec: str = ".3f") -> str:
+    """A score for the console; n/a when no test of the selection enters it (Ur < UR_MIN)."""
+    return "n/a" if value is None else format(value, spec)
 
 
 def peak_and_release(points: list[tuple[float, float]]) -> dict:
@@ -647,9 +657,9 @@ def compare_tow(results: list[dict], sets: list[str]) -> tuple[list[dict], dict]
         }
         p, q = per_set[s]["cf_1_2L_peak"], per_set[s]["cf_1_2L_peak_measured"]
         print(
-            f"{s}: CF r.m.s. log error {per_set[s]['cf_rms_log_error_all_stations']:.3f} "
-            f"(1/2L {per_set[s]['cf_rms_log_error']['1_2L']:.3f}), IL "
-            f"{per_set[s]['il_rms_log_error_all_stations']:.3f}; 1/2L peak {p['peak_AD']:.3f} at Ur "
+            f"{s}: CF r.m.s. log error {fmt(per_set[s]['cf_rms_log_error_all_stations'])} "
+            f"(1/2L {fmt(per_set[s]['cf_rms_log_error']['1_2L'])}), IL "
+            f"{fmt(per_set[s]['il_rms_log_error_all_stations'])}; 1/2L peak {p['peak_AD']:.3f} at Ur "
             f"{p['peak_Ur']:.2f} ({p['f_hz_at_peak']:.2f} Hz), release Ur {p['release_Ur']}"
             + (
                 f" | measured {q['peak_AD']:.3f} at {q['peak_Ur']:.2f}, release {q['release_Ur']}"
