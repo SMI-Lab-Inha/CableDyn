@@ -40,7 +40,14 @@ run through the standalone driver and checked against its committed expectation:
   parent profile at the same unstretched arc length;
 * at-rest twins (the parent deck marched in time with nothing moving) must report the
   line-end forces of the static solution at every output step: FairTen/AnchTen are the
-  end forces of the committed state, identical for the static and the dynamic run.
+  end forces of the committed state, identical for the static and the dynamic run;
+* a deck with a ``side`` must leave its vertical plane to that side (``+y`` or ``-y``, its
+  recorded equilibrium): past the pitchfork of an in-plane current the symmetry-breaking pass
+  adds a cross-flow to the left of the horizontal chord from the anchor (End B) to the
+  fairlead (End A), so the deck rotated by 180 degrees about z leaves to the opposite global
+  side, and a small cross current of the deck's own picks the side;
+* mirror twins (``mirror_of``: the parent deck reflected in y) must reach the mirror image of
+  the parent's equilibrium: end forces within 1e-6, nodes within 1e-6 of the line length.
 
 usage: test_cable_statics_matrix.py --exe <cabledyn> --cases <cases.json> --output <dir>
 """
@@ -285,6 +292,38 @@ def check_case(case: dict, res: dict) -> list:
     return errs
 
 
+def side_errors(res: dict, side: str) -> list:
+    """The side a line turned to out of its vertical plane: the node farthest from y = 0 lies at
+    +y or -y (``side``) by more than 1e-3 of the line length."""
+    errs = []
+    for lid, rows in res["static"].items():
+        length = rows[-1][0] - rows[0][0]
+        y = max((r[2] for r in rows), key=abs)
+        if abs(y) <= 1e-3 * length or (y > 0.0) != (side == "+y"):
+            errs.append("line %s turned to y = %.4g m, expected the %s side" % (lid, y, side))
+    return errs
+
+
+def mirror_errors(res: dict, pr: dict, parent: str) -> list:
+    """The mirror image in y of the parent's equilibrium: end forces within 1e-6, every node's x
+    and z equal and y opposite within 1e-6 of the line length."""
+    errs = []
+    for name, v in res["forces"].items():
+        vp = pr["forces"].get(name)
+        if vp is None or abs(v - vp) > 1e-6 * max(abs(vp), 1.0):
+            errs.append("%s %.9g differs from its mirror %s (%s)" % (name, v, parent, vp))
+    for lid, rows in res["static"].items():
+        prow = pr["static"].get(lid)
+        if not prow or len(prow) != len(rows):
+            errs.append("line %s has no matching profile in %s" % (lid, parent))
+            continue
+        length = rows[-1][0] - rows[0][0]
+        dev = max(max(abs(r[1] - p[1]), abs(r[2] + p[2]), abs(r[3] - p[3])) for r, p in zip(rows, prow))
+        if dev > 1e-6 * length:
+            errs.append("line %s departs %.3g m from the mirror of %s" % (lid, dev, parent))
+    return errs
+
+
 def mesh_twin_errors(res: dict, pr: dict, parent: str) -> list:
     """The same equilibrium on a refined mesh: FairTen within 0.5 %, every node within 1e-3 of
     the line length of the parent profile interpolated at its unstretched arc length."""
@@ -376,6 +415,15 @@ def main() -> int:
                 errs.append("mesh parent %s did not converge" % mesh)
             else:
                 errs += mesh_twin_errors(res, pr, mesh)
+        if case.get("side") and not errs:
+            errs += side_errors(res, case["side"])
+        mirror = case.get("mirror_of")
+        if mirror and not errs:
+            pr = byid.get(mirror)
+            if pr is None or pr["rc"] != 0 or "forces" not in pr:
+                errs.append("mirror parent %s did not converge" % mirror)
+            else:
+                errs += mirror_errors(res, pr, mirror)
         status = "FAIL" if errs else "ok"
         print("%-4s %-18s %-14s rc=%-7s %6.2fs wall %6.2fs cpu %s" % (
             status, case["id"], case["expect"], res["rc"], res["time"], res["cpu"], "; ".join(errs)[:400]))

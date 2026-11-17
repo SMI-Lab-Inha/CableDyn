@@ -1486,7 +1486,49 @@
     "lambda_over_length": 0.0
    }
   },
-  "note": "past its anchor, where it folds back"
+  "note": "past its anchor, where it folds back",
+  "side": "+y"
+ },
+ {
+  "id": "CUR_1013__rot180",
+  "expect": "admissible",
+  "why": "The parent rotated by 180 degrees about z. Past the pitchfork of the in-plane current the symmetry-breaking pass adds a cross-flow to the left of the horizontal chord from the anchor (End B) to the fairlead (End A), so the rotated deck reaches the rotated equilibrium and leaves its plane to -y. Before, a chord without a y component always took the cross-flow at +y, so the parent (its chord from the anchor along -x) and this deck left to the same global side.",
+  "deck": "--------------------- CableDyn Input File ---------------------------\nCUR_1013__rot180\n--------------------- LINE TYPES ------------------------------------\nTypeName Diam MassDenInAir EA BA EI Cd_n Cd_t Ca_n Ca_t\n(-) (m) (kg/m) (N) (-) (N-m2) (-) (-) (-) (-)\nbare 0.1784650716 82.63060908 255233842 0 25945.91551 1.2 0.1 1 0\nbuoy 0.4710966462 88.94142595 255233842 0 40205.41756 1.2 0.1 1 0\n--------------------- POINTS ----------------------------------------\nID Type X Y Z\n(-) (-) (m) (m) (m)\n1 Coupled 0 0 -13.08348484\n2 Fixed -41.77649681 0 -42.543\n--------------------- LINES -----------------------------------------\nID NodeA NodeB Outputs\n(-) (-) (-) (-)\n1 1 2 -\n--------------------- SECTIONS --------------------------------------\nLineID LineType Length NumSegs\n(-) (-) (m) (-)\n1 bare 20.5504 2\n1 buoy 7.3589 1\n1 bare 35.1167 4\n--------------------- OPTIONS ---------------------------------------\n9.80665 g\n1025.0 rhoW\n42.543 WtrDpth\n3e+06 kBot\n1.0e4 cBot\n0.05 dtM\n0.0 TMax\nFalse adaptive_mesh\nTrue tensile_safety\nuniform -1.906 0.0 0.0 current\n--------------------- OUTPUTS ---------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line --------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [],
+    "lambda_over_length": 0.0
+   }
+  },
+  "side": "-y",
+  "twin_of": "CUR_1013"
+ },
+ {
+  "id": "CUR_1013__xp",
+  "expect": "admissible",
+  "why": "A cross current toward +y of 2 % of the in-plane current picks the side: the grounded run, folded back past its anchor, lies at -y.",
+  "deck": "--------------------- CableDyn Input File ---------------------------\nCUR_1013__xp\n--------------------- LINE TYPES ------------------------------------\nTypeName Diam MassDenInAir EA BA EI Cd_n Cd_t Ca_n Ca_t\n(-) (m) (kg/m) (N) (-) (N-m2) (-) (-) (-) (-)\nbare 0.1784650716 82.63060908 255233842 0 25945.91551 1.2 0.1 1 0\nbuoy 0.4710966462 88.94142595 255233842 0 40205.41756 1.2 0.1 1 0\n--------------------- POINTS ----------------------------------------\nID Type X Y Z\n(-) (-) (m) (m) (m)\n1 Coupled 0 0 -13.08348484\n2 Fixed 41.77649681 0 -42.543\n--------------------- LINES -----------------------------------------\nID NodeA NodeB Outputs\n(-) (-) (-) (-)\n1 1 2 -\n--------------------- SECTIONS --------------------------------------\nLineID LineType Length NumSegs\n(-) (-) (m) (-)\n1 bare 20.5504 2\n1 buoy 7.3589 1\n1 bare 35.1167 4\n--------------------- OPTIONS ---------------------------------------\n9.80665 g\n1025.0 rhoW\n42.543 WtrDpth\n3e+06 kBot\n1.0e4 cBot\n0.05 dtM\n0.0 TMax\nFalse adaptive_mesh\nTrue tensile_safety\nuniform 1.906 0.03812 0.0 current\n--------------------- OUTPUTS ---------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line --------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [],
+    "lambda_over_length": 0.0
+   }
+  },
+  "side": "-y"
+ },
+ {
+  "id": "CUR_1013__xm",
+  "expect": "admissible",
+  "why": "CUR_1013__xp with the cross current toward -y: the mirror image of its equilibrium.",
+  "deck": "--------------------- CableDyn Input File ---------------------------\nCUR_1013__xm\n--------------------- LINE TYPES ------------------------------------\nTypeName Diam MassDenInAir EA BA EI Cd_n Cd_t Ca_n Ca_t\n(-) (m) (kg/m) (N) (-) (N-m2) (-) (-) (-) (-)\nbare 0.1784650716 82.63060908 255233842 0 25945.91551 1.2 0.1 1 0\nbuoy 0.4710966462 88.94142595 255233842 0 40205.41756 1.2 0.1 1 0\n--------------------- POINTS ----------------------------------------\nID Type X Y Z\n(-) (-) (m) (m) (m)\n1 Coupled 0 0 -13.08348484\n2 Fixed 41.77649681 0 -42.543\n--------------------- LINES -----------------------------------------\nID NodeA NodeB Outputs\n(-) (-) (-) (-)\n1 1 2 -\n--------------------- SECTIONS --------------------------------------\nLineID LineType Length NumSegs\n(-) (-) (m) (-)\n1 bare 20.5504 2\n1 buoy 7.3589 1\n1 bare 35.1167 4\n--------------------- OPTIONS ---------------------------------------\n9.80665 g\n1025.0 rhoW\n42.543 WtrDpth\n3e+06 kBot\n1.0e4 cBot\n0.05 dtM\n0.0 TMax\nFalse adaptive_mesh\nTrue tensile_safety\nuniform 1.906 -0.03812 0.0 current\n--------------------- OUTPUTS ---------------------------------------\n\"FairTen1\"\n\"AnchTen1\"\n--------------------- need this line --------------------------------\n",
+  "lines": {
+   "1": {
+    "oracle_tfair": [],
+    "lambda_over_length": 0.0
+   }
+  },
+  "side": "+y",
+  "mirror_of": "CUR_1013__xp"
  },
  {
   "id": "LWM_1002",

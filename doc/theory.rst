@@ -2609,7 +2609,12 @@ pitchfork: the equilibrium beyond it turns the grounded run sideways on the seab
 anchor and back (a lazy wave in a 0.7 to 1.2 m/s current along its plane, for example).
 Newton cannot leave the plane of a symmetric problem, so the line is then solved in 3D under
 the current with a cross-flow of 1 % of its horizontal speed, and that state is polished at
-the exact current and audited like any other. A planar equilibrium in such a current is also
+the exact current and audited like any other. The cross-flow points to the left of the
+horizontal chord from the anchor (End B) to the fairlead (End A), along :math:`+y` for a
+vertical chord, so the side the line leaves its plane to turns with the line: the same deck
+rotated about the vertical reaches the rotated equilibrium. Both sides are equilibria of the
+symmetric problem; a deck that needs one gives its current a small cross component of its own,
+and the static solve then follows that side. A planar equilibrium in such a current is also
 checked with the line free to leave its plane; one that is a saddle there (the grounded run
 held in the plane only by the symmetry) is replaced by this 3D solve; when the 3D solve finds
 no equilibrium, the planar one is kept and a note says that it is held in the plane of the line

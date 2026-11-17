@@ -4696,7 +4696,16 @@ CONTAINS
       ALLOCATE (fixed_dofs(6))
       fixed_dofs = [1, 2, 3, ndof - 5, ndof - 4, ndof - 3]
       sym_broken = .TRUE.
-      nrm = [-frame_cs(2), frame_cs(1)]
+      ! The cross-flow points to the left of the horizontal chord from the anchor (End B) to the
+      ! fairlead (End A), +y for a vertical chord, so the side the line leaves its plane to
+      ! follows the line, not its heading: frame_cs is the identity for any chord without a y
+      ! component, which put the cross-flow at +y for a chord along -x (to its right) and at -y
+      ! for one a round-off away from it (to its left).
+      IF (hspan > 1.0e-9_wp*MAX(1.0_wp, ABS(dxh) + ABS(dyh))) THEN
+        nrm = [-dyh, dxh]/hspan
+      ELSE
+        nrm = [CD_ZERO, CD_ONE]
+      END IF
       uh = NORM2(cur_obj%velocity(1:2))
       cur_obj%velocity(1:2) = cur_obj%velocity(1:2) + SYM_BREAK*uh*nrm
       IF (ALLOCATED(cur_obj%profile_velocity)) THEN
