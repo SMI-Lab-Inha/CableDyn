@@ -12557,7 +12557,7 @@ CONTAINS
           END DO
           ! the immersed fraction moves with the height of the point (in the surface band only):
           ! d wf/d qe(b) = dwf H(sp) for the vertical DOFs, dwf = d wf/d z
-          IF (dwf /= CD_ZERO) THEN
+          IF (.NOT. (ABS(dwf) <= CD_ZERO)) THEN
             DO sp = 1, 4
               b = 3*sp
               djq(a, b) = djq(a, b) + gw(g)*speed*H(s)*fpl(c)*dwf*H(sp)
@@ -12668,7 +12668,7 @@ CONTAINS
               djq(a, b) = djq(a, b) + gww*H(s)*dH(sp)*(speed*jtan(c, cp) + fpl(c)*tangent(cp))
             END DO
           END DO
-          IF (dwf /= CD_ZERO) THEN  ! the immersed fraction moves with the height of the point
+          IF (.NOT. (ABS(dwf) <= CD_ZERO)) THEN  ! the immersed fraction moves with the height of the point
             DO sp = 1, 4
               b = 3*sp
               djq(a, b) = djq(a, b) + gw(g)*speed*H(s)*fpl(c)*dwf*H(sp)
@@ -12984,7 +12984,7 @@ CONTAINS
               fjq(a, b) = fjq(a, b) + (gw(g)*wf)*H(s)*dH(sp)*jq3(c, cp)
             END DO
           END DO
-          IF (dwf /= CD_ZERO) THEN  ! the immersed fraction moves with the height of the point
+          IF (.NOT. (ABS(dwf) <= CD_ZERO)) THEN  ! the immersed fraction moves with the height of the point
             DO sp = 1, 4
               b = 3*sp
               fjq(a, b) = fjq(a, b) + gw(g)*speed*H(s)*fpl(c)*dwf*H(sp)
