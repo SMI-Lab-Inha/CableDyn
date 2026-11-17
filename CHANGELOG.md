@@ -143,6 +143,14 @@ All notable changes to CableDyn are recorded in this file. The format follows
   branch, reported as a sensitivity. The case's script is now `wang_scr_viv.py` for both parts
   (it replaces `wang_scr_uniform_current.py`; the L3-W numbers are unchanged), and its data,
   including Thorsen et al.'s simulated lines, are read by `extract_thorsen2017.py`.
+- Validation case L3-O (`validation/experiments/fu_oscillatory`): cross-flow VIV of the SJTU
+  flexible cylinder of Fu et al. (2014) moved harmonically through still water (KC 178, U_R,max 4,
+  6.5 and 7.9), A/D at mid-span on the acceleration and deceleration paths against the measured
+  paths of their Figs. 15-17 (read from the figures by `extract_fu2014.py`), with three published
+  coefficient sets and a `VIV FRAME` row. Every run converges through the flow reversals. At
+  U_R,max 4 the wake oscillator gives the measured largest A/D (0.280 against 0.286); at 6.5 and
+  7.9 every set holds the lock-in while the flow slows, the gap between the paths 2-5 times the
+  measured one and the largest A/D 1.3-2.3 times the measured.
 - Theory manual, Published coefficient sets: the VIV coefficient sets of Thorsen et al. (2016,
   2017), Ulveseter et al. (2018), Andersen et al. (2024a, b) and Facchinetti et al. (2004), each
   with its source, its test data and the line-type columns it maps to, and Thorsen et al.'s

@@ -171,9 +171,9 @@ layout is described in the architecture notes in the repository.
 ## Validation
 
 CableDyn is verified against analytical solutions and compared with MoorDyn,
-OrcaFlex, seven published physical experiments (Holcombe lazy-wave, Bergdahl dynamic
+OrcaFlex, eight published physical experiments (Holcombe lazy-wave, Bergdahl dynamic
 chain, Chaplin riser natural frequencies and stepped-current VIV, Wang catenary-riser VIV in
-current and heave, NDP high-mode riser VIV, FLOTANT power-cable VIV), the IEA 15 MW VolturnUS-S reference systems, and coupled OpenFAST runs. Results,
+current and heave, NDP high-mode riser VIV, FLOTANT power-cable VIV, oscillatory-flow cylinder VIV), the IEA 15 MW VolturnUS-S reference systems, and coupled OpenFAST runs. Results,
 acceptance criteria, and reproduction commands are in
 the [validation record](https://cabledyn.readthedocs.io/en/latest/validation.html); data and scripts are in
 [`validation/`](https://cabledyn.readthedocs.io/en/latest/validation.html).
