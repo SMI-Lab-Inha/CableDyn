@@ -1705,10 +1705,12 @@ and model form. The table gives each set with its source and the line-type colum
        damping :math:`C_{d,y} = 0.31 + 0.89\,y_0/D` (their Eq. 1)
      - a ``VIV AMPLITUDE`` table (below); ``VIV DAMPING`` ``0.31 0.89 0``
    * - :ref:`Thorsen et al. (2017) <ref-thorsen2017>`: the truncated catenary riser of
-       :ref:`Wang et al. (2014) <ref-wang2014>` in uniform current (Re about 3 000)
-     - :math:`C_v` 0.7, :math:`\hat f_0` 0.18, :math:`\Delta\hat f` 0.08, :math:`C_D` 1.2,
-       :math:`C_M` 2
-     - ``Cl dF cF`` = ``0.7 0.08 0.18``, ``Cd_n`` 1.2, ``Ca_n`` 1.0 (validation case L3-W)
+       :ref:`Wang et al. (2014) <ref-wang2014>` in uniform current (Re about 3 000) and under
+       heave motion of its upper end (Re about 4 000)
+     - :math:`C_v` 0.7 in the current, 0.8 in heave; :math:`\hat f_0` 0.18,
+       :math:`\Delta\hat f` 0.08, :math:`C_D` 1.2, :math:`C_M` 2
+     - ``Cl dF cF`` = ``0.7 0.08 0.18`` (current) or ``0.8 0.08 0.18`` (heave), ``Cd_n`` 1.2,
+       ``Ca_n`` 1.0 (validation cases L3-W and L3-Wh)
    * - :ref:`Ulveseter et al. (2018) <ref-ulveseter2018>`: in-line force at twice the
        cross-flow frequency
      - :math:`C_x` 0.85, :math:`\alpha` 0.15, with a cross-flow :math:`C_L` of 0.65

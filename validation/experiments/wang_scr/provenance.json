@@ -1,10 +1,18 @@
 {
-  "source": "Wang, Fu, Baarholm, Wu & Larsen (2014), Marine Structures 39, 131-156 (the model riser, Table 2); Thorsen, Saevik & Larsen (2017), Marine Structures 51, 134-151 (Table 1, Sec. 5.1, Figs. 17-18)",
+  "source": "Wang, Fu, Baarholm, Wu & Larsen (2014), Fatigue damage of a steel catenary riser from vortex-induced vibration caused by vessel motions, Marine Structures 39, 131-156 (Table 2, the model riser; Sec. 3.1, the band-pass of the measured strain); Thorsen, Saevik & Larsen (2017), Non-linear time domain analysis of cross-flow vortex-induced vibrations, Marine Structures 51, 134-151 (Table 1; Secs. 5.1 and 5.2; Figs. 17, 18, 19, 22 and 23)",
   "doi": ["10.1016/j.marstruc.2014.07.002", "10.1016/j.marstruc.2016.10.007"],
-  "data_used": "the model riser properties; the 25 measured r.m.s. dynamic cross-flow strains of Fig. 17 (read from the vector figure, axes calibrated on its tick marks; the simulated maximum of the same figure reads 99.6 % of the measured one, as the text states); the measured dominant frequency 1.00 Hz 8.25 m from the lower end",
-  "coefficients": "Thorsen et al. (2017) for this case, not tuned: Cv 0.7, f0 0.18, df 0.08 (cross-flow only), CD 1.2, CM 2",
-  "CableDyn_commit": "4b94321 (dev) with the mid-point VIV phase update",
-  "validation_date": "2026-11-16",
+  "bibliographic_data": "authors, titles, journal, volume, year, pages and DOI from the first page of each article's PDF (Wang et al. 2014, PDF page 1, printed page 131; Thorsen et al. 2017, PDF page 1, printed page 134)",
+  "pdf_sha256": {
+    "thorsen2017": "b0c565301a775ed157bbbb5dc89853bbc02d534e2c162555b102b12fe3471b57",
+    "wang2014": "87883edf10c87b004fa6af7774665683cd252d391925ab4658dd408034fe7644"
+  },
+  "data_used": "riser properties (Thorsen et al. 2017, Table 1; Wang et al. 2014, Table 2, which gives EA 6.67e5 N against Thorsen et al.'s 6.66e5 N); seabed stiffness and friction, time step and coefficient sets (Thorsen et al. 2017, Secs. 5.1 and 5.2); the 25 measured r.m.s. dynamic cross-flow strains and Thorsen et al.'s simulated line in uniform current (Fig. 17, PDF page 14) and in heave (Fig. 22, PDF page 16); the measured dominant frequency 8.25 m from the lower end, 1.00 Hz in current (Fig. 18) and close to 1 Hz in heave (Fig. 23 and text); the measured top motion in heave (Fig. 19 top panel, PDF page 15) and its period 5.96 s (text); the band-pass from 4 times the motion frequency to 50 Hz (Wang et al. 2014, Sec. 3.1)",
+  "extraction": "extract_thorsen2017.py: Figs. 17 and 22 are vector graphics; the axes are calibrated on the tick marks (the tick labels are glyph outlines), the measured points are the 4 x 4 pt stroked squares (legend square removed), Thorsen et al.'s line the vertices of its two polylines; as a check the line peaks at 99.6 % (Fig. 17) and 105.6 % (Fig. 22) of the measured largest value, where the text gives 99.6 % and 6 % too high. Fig. 19 is a raster image: the top panel's frame from its dark pixels, the time axis 30-50 s across it, the displacement axis on the dotted grid lines at -0.1, 0 and 0.1 m; the red (x) and blue (z) traces as one median row per pixel column (742 and 738 columns); sinusoids of period 5.96 s fitted by least squares: x 0.0485 m, z 0.1305 m, x lagging z by 83.3 deg, residual r.m.s. 3.3 and 7.1 mm",
+  "assumptions": "the top joint 0.5 m below the surface in 9.5 m of water (not given); the heave top motion as the two fitted sinusoids about the static position (the fitted means, 4.8 and 1.6 mm, dropped), ramped in over two periods with a half-cosine; the static shape from CableDyn's static solve between the two joints (Thorsen et al. reach it by a prescribed top displacement)",
+  "coefficients": "Thorsen et al. (2017), not tuned: uniform current Cv 0.7 (Re about 3000), heave Cv 0.8 (Re about 4000); f0 0.18, df 0.08, cross-flow only; CD 1.2, CM 2 (Ca 1)",
+  "processing": "cross-flow curvature CurvY at every node (the script checks that CurvX carries the static catenary curvature); strain = kappa D/2; current: r.m.s. of the strain less its mean over t > 30 s of 150 s; heave: the strain band-passed (FFT) from 4/5.96 Hz to 50 Hz over t > 40 s of 200 s; station values by linear interpolation along the arc length from the lower end; dominant frequency from the Hann-windowed spectrum at the node nearest 8.25 m; lower half stations 1-13 (s < 11.855 m)",
+  "CableDyn_commit": "dca9e29 (dev)",
+  "validation_date": "2026-11-17",
   "executable_name": "cabledyn.exe",
   "executable_sha256": "see summary.json",
   "compiler": "GNU Fortran 16.2.0",
@@ -12,8 +20,5 @@
   "platform": "Windows 11 x86-64",
   "segments": 200,
   "dt_s": 0.005,
-  "sensitivity": {
-    "segments_400": {"max_ratio": 1.0759, "mean_ratio_at_stations": 1.0365, "dominant_frequency_hz": 0.9917},
-    "dt_0p0025": {"max_ratio": 1.0747, "mean_ratio_at_stations": 1.0365, "dominant_frequency_hz": 0.9917}
-  }
+  "reproduction": "the default command, run into a new work directory with the executable of summary.json, reproduces response_comparison.csv and summary.json byte for byte; the convergence runs (*_dt2, *_n400) and the VIV FRAME sensitivity runs (heave_tf*) are part of the default and of summary.json"
 }
