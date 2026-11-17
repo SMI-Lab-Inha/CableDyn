@@ -132,6 +132,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   (cross-flow r.m.s. log error 0.731); the generic set is 38 % low at the peak and releases at
   the measured speed (0.594); the wake oscillator of Facchinetti et al. (2004) is 62 % low
   (1.208).
+- Validation case L3-Wh (`validation/experiments/wang_scr`): heave-induced cross-flow VIV of
+  the L3-W riser in still water, its upper end moved along the measured top trajectory of
+  Thorsen et al. (2017, period 5.96 s), with their coefficient set, the strain band-passed as
+  Wang et al. (2014) process it. Without a `VIV FRAME` row the dominant frequency is 1.019 Hz
+  (measured close to 1 Hz), the largest r.m.s. strain 20.8 % above the measured largest and the
+  lower half of the span 1.71 times the measured on average (Thorsen et al.'s model 5.6 % and
+  1.44). The heave period is about 6 VIV periods, below the `VIV FRAME` scale separation, and the
+  result depends on `Tf` (0.35–1 s): the response falls on a 1.01–1.02 Hz or a 0.88–0.89 Hz
+  branch, reported as a sensitivity. The case's script is now `wang_scr_viv.py` for both parts
+  (it replaces `wang_scr_uniform_current.py`; the L3-W numbers are unchanged), and its data,
+  including Thorsen et al.'s simulated lines, are read by `extract_thorsen2017.py`.
 - Theory manual, Published coefficient sets: the VIV coefficient sets of Thorsen et al. (2016,
   2017), Ulveseter et al. (2018), Andersen et al. (2024a, b) and Facchinetti et al. (2004), each
   with its source, its test data and the line-type columns it maps to, and Thorsen et al.'s

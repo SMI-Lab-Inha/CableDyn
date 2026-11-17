@@ -84,7 +84,8 @@ article's methods, are compared in
 | **L3-B** | Bergdahl chain experiment, 30 orbit conditions | measured upper-end force | RMSE 1.58 N; MAPE 3.11%; Pearson 0.993; Lin concordance 0.989 | full published matrix | Pass |
 | **L3-C** | Chaplin Delta Flume riser, still-water natural frequencies | measured modes 1–7 at five tensions | mean error +1.87%, mean absolute 2.28%, largest 4.88% (34 of 35; one outlier reported) | full published table, no fitted parameter | Pass |
 | **L3-D** | Chaplin Delta Flume riser in a stepped current, blind-trial cases 1–9, cross-flow and in-line VIV | measured dominant mode, peak cross-flow amplitude, mean in-line displacement, curvature standard deviations | mode right in 5/9, within one in 9/9; mean in-line within ±17% in 7/9 (−25% to +34%); cross-flow amplitude −45% to +4%; cross-flow curvature −39% to +26% | generic coefficient set, no fitted parameter | Pass measured |
-| **L3-W** | SJTU steel catenary riser in 0.2 m/s current, cross-flow VIV | measured r.m.s. strain (25 stations) and dominant frequency | frequency 0.992 vs 1.00 Hz; max r.m.s. strain +7.3%, station mean +3.6% | published coefficient set, no fitted parameter | Pass |
+| **L3-W** | SJTU steel catenary riser in 0.2 m/s current, cross-flow VIV | measured r.m.s. strain (25 stations) and dominant frequency | frequency 0.992 vs 1.00 Hz; max r.m.s. strain +7.3%, station mean +3.6% (Thorsen et al. 2017: 1.02 Hz, −0.4%, −3.0%) | published coefficient set, no fitted parameter | Pass |
+| **L3-Wh** | SJTU steel catenary riser, heave-induced cross-flow VIV in still water (measured top motion, 5.96 s) | measured r.m.s. strain (25 stations, band-passed 0.67–50 Hz) and dominant frequency | no `VIV FRAME`: frequency 1.019 Hz vs close to 1 Hz; max r.m.s. strain +20.8%, station mean +33%, lower/upper half 1.71/0.93 (Thorsen et al. 2017: +5.6%, +8.7%, 1.44/0.71); `VIV FRAME` `Tf` 0.35–1 s: two branches, 1.01–1.02 Hz (max +7 to +13%) or 0.88–0.89 Hz (max −2.8 to −4.2%), `Tf` 0.5 s changes branch at dt/2 | published coefficient set, no fitted parameter; heave period about 6 VIV periods, below the `VIV FRAME` scale separation | Pass measured |
 | **L3-N** | NDP 38 m high-mode riser in uniform flow, 0.3–2.4 m/s (22 tests), cross-flow VIV | measured maximum r.m.s. cross-flow strain, dominant frequency, spatial-mean σ/D | strain r.m.s. log error: Ulveseter et al. (2019) set 0.178, Andersen et al. (2024b) 0.186, generic set 0.277, Thorsen et al. (2016) 0.363 (their own simulation 0.187); f D/U 0.145 / 0.134 / 0.192 / 0.193 vs 0.143 measured | generic set blind; the other sets fitted by their authors to NDP tests (implementation check) | Pass measured |
 | **L3-F** | FLOTANT OD 48 mm power-cable specimen with a 200 kg clump, tow tests at 0.025–1.0 m/s (40 tests), cross-flow and in-line VIV | measured A/D_rms (σ/OD) at 1/2L, 3/4L and L (de Wilde et al. 2021, App. 3) | CF r.m.s. log error (Ur ≥ 3): Ulveseter et al. (2019) set 0.731, generic set 0.594, wake oscillator 1.208; first peak at 1/2L 0.755 / 0.483 / 0.296 vs 0.776 measured; release Ur 7.06 / 5.89 / 5.30 vs 5.88 | published VIV sets, none fitted to these tests; structure identified from the specimen's in-air and in-water RAOs | Pass measured |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
@@ -373,9 +374,29 @@ the tow tests it predicts). Inputs, reduction scripts, results, and source prove
   frequency 8.25 m from the lower end is 0.992 Hz against the measured 1.00 Hz (their model 1.02 Hz;
   [Davies et al., 2026](https://cabledyn.readthedocs.io/en/latest/references.html#ref-davies2026),
   1.04 Hz). The largest r.m.s. strain is 7.3% above the measured largest (theirs 0.4% below) and the
-  mean over the 25 stations 3.6% above. The response has one r.m.s. peak more along the span than
-  the test, as theirs, so the station-by-station ratio scatters. 400 elements and half the time step
-  change the largest r.m.s. strain by 0.2% and 0.1%.
+  mean over the 25 stations 3.6% above (theirs 3.0% below). The response has one r.m.s. peak more
+  along the span than the test, as theirs, so the station-by-station ratio scatters (r.m.s. log
+  error 0.338, theirs 0.360). 400 elements and half the time step change the largest r.m.s.
+  strain by 0.2% and 0.1%.
+
+- **L3-Wh SJTU steel catenary riser, heave-induced cross-flow VIV**
+  ([Wang et al., 2014](https://cabledyn.readthedocs.io/en/latest/references.html#ref-wang2014);
+  [Thorsen et al., 2017](https://cabledyn.readthedocs.io/en/latest/references.html#ref-thorsen2017)):
+  the L3-W riser in still water, its upper end moved along the measured top trajectory (two
+  sinusoids of 5.96 s fitted to their Fig. 19: x 0.049 m, z 0.130 m), with Thorsen et al.'s set
+  for this case (C_v 0.8), the strain band-passed from 4 times the motion frequency to 50 Hz as
+  Wang et al. process the measurement. Without a `VIV FRAME` row, the published model's phase
+  input, the dominant frequency 8.25 m from the lower end is 1.019 Hz (measured close to 1 Hz),
+  the largest r.m.s. strain 20.8% above the measured largest (theirs 5.6% above) and the
+  station mean 33% above (theirs 8.7%). The lower half of the span reads 1.71 times the measured
+  on average and the upper half 0.93 times; their model has the same pattern, 1.44 and 0.71.
+  Half the time step and 400 elements change the largest strain by −1.0% and −0.7% and the
+  station mean by −2.9% and −2.3%, at the same frequency. The heave period is about 6 VIV
+  periods, below the scale separation a `VIV FRAME` filter needs (about 30), and the result
+  depends on `Tf`: at 0.35–0.5 s the response stays at 1.01–1.02 Hz with the largest strain
+  7–13% high, at 0.75–1 s it moves to 0.88 Hz with the largest strain 3–4% low and the upper half
+  0.60–0.63 times the measured, and at 0.5 s half the time step moves it from the first branch
+  to the second. The default run reproduces the committed record byte for byte.
 
 - **L3-N NDP high-mode riser, cross-flow VIV in uniform flow**
   ([Trim et al., 2005](https://cabledyn.readthedocs.io/en/latest/references.html#ref-trim2005);
