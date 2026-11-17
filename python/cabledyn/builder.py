@@ -240,6 +240,14 @@ class LineType:
         the phases, the amplitude estimate (and so the ``viv_amplitude``
         coefficients) and the ``viv_damping`` split, so it needs ``cl > 0`` or
         ``wake_cl0``. ``None`` writes no row.
+    viv_stochastic : tuple[float, ...] | None
+        Optional stochastic band centre of a type's synchronisation model, a
+        ``VIV STOCHASTIC`` section row ``Name sigma c [Nf [seed]]`` as
+        ``(sigma, c)``, ``(sigma, c, Nf)`` or ``(sigma, c, Nf, seed)``
+        (Ulveseter et al. 2017): the standard deviation of the centre, the top
+        of its flat spectrum as a fraction of ``cF``, the number of components
+        (default 100) and the seed of their start phases (default 0). It needs
+        ``cl > 0`` and no ``wake_cl0``. ``None`` writes no row.
     viv_amplitude : list of tuples | None
         Optional amplitude-dependent VIV coefficients of a type (Thorsen et al.
         2016), the rows of a ``VIV AMPLITUDE`` section table ``Name AD Cv
@@ -288,6 +296,7 @@ class LineType:
     viv_diameter: float | None = None
     viv_frame_tf: float | None = None
     viv_damping: tuple[float, ...] | None = None
+    viv_stochastic: tuple[float, ...] | None = None
 
 
 @dataclass(eq=False)
@@ -1715,6 +1724,7 @@ class DeckModel:
         viv_diameter: float | None = None,
         viv_frame_tf: float | None = None,
         viv_damping: tuple[float, ...] | None = None,
+        viv_stochastic: tuple[float, ...] | None = None,
     ) -> LineType:
         """Add a ``LINE TYPES`` row; see :class:`LineType` for the fields.
 
@@ -1759,6 +1769,7 @@ class DeckModel:
             viv_diameter,
             viv_frame_tf,
             None if viv_damping is None else tuple(viv_damping),
+            None if viv_stochastic is None else tuple(viv_stochastic),
         )
         self._line_types.append(item)
         return item
@@ -2654,6 +2665,7 @@ class DeckModel:
         _emit(out, "VIV AMPLITUDE", *self._viv_amp_table())
         _emit(out, "VIV DIAMETER", *self._viv_diam_table())
         _emit(out, "VIV FRAME", *self._viv_frame_table())
+        _emit(out, "VIV STOCHASTIC", *self._viv_sto_table())
         _emit(out, "VIV DAMPING", *self._viv_damp_table())
         _emit(out, "FAILURE", *self._failure_table())
         _emit(out, "CONTROL", *self._control_table())
@@ -3116,6 +3128,25 @@ class DeckModel:
             rows.append([_text(item.name, what), _num(item.viv_frame_tf, what)])
         return "Name Tf", "(-) (s)", rows
 
+    def _viv_sto_table(self) -> tuple[str, str, list[list[str]]]:
+        rows: list[list[str]] = []
+        for item in self._line_types:
+            if item.viv_stochastic is None:
+                continue
+            what = f"line type {item.name!r}"
+            if item.wake_cl0 is not None or not (item.cl is not None and item.cl > 0.0):
+                raise ValueError(
+                    f"{what}: viv_stochastic varies the band centre of its synchronisation "
+                    "model, set cl > 0 and no wake_cl0"
+                )
+            if not 2 <= len(item.viv_stochastic) <= 4:
+                raise ValueError(f"{what}: viv_stochastic is (sigma, c[, Nf[, seed]])")
+            rows.append([_text(item.name, what)] + [_num(v, what) for v in item.viv_stochastic])
+        width = max((len(r) for r in rows), default=3)
+        names = ["Name", "sigma", "c", "Nf", "seed"][:width]
+        units = ["(-)", "(-)", "(-)", "(-)", "(-)"][:width]
+        return " ".join(names), " ".join(units), rows
+
     def _syrope_table(self) -> tuple[str, str, list[list[str]]]:
         rows = [
             [_line_list(row.lines), _num(row.tmax0, "SYROPE IC"), _num(row.tmean0, "SYROPE IC")]
@@ -3342,6 +3373,9 @@ class _Loader:
         for row in self.rows("VIV FRAME"):
             t = row.tokens
             model.line_types[t[0]].viv_frame_tf = _f(t[1])
+        for row in self.rows("VIV STOCHASTIC"):
+            t = row.tokens
+            model.line_types[t[0]].viv_stochastic = tuple(_f(v) for v in t[1:])
         for row in self.rows("ATTACHMENTS"):
             t = row.tokens
             arc: float | tuple[float, float, float]

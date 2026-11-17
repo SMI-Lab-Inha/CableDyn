@@ -141,7 +141,8 @@ MODULE CableDyn_DeckDriver
                                           CD_HFMF_Set_Moving_End_B, CD_HFMF_GetEndBKinematics, &
                                           CD_HFMF_End, CD_HFMF_OK
   USE CableDyn_VIV, ONLY: CD_VIV_DEFAULT_DF, CD_VIV_DEFAULT_CF, CD_VIV_NM, CD_VIV_DEFAULT_IL_ALPHA, &
-                          CD_VIV_WAKE_DEFAULT_ST, CD_VIV_WAKE_DEFAULT_EPS, CD_VIV_WAKE_DEFAULT_A, CD_VIV_AMP_MAXP
+                          CD_VIV_WAKE_DEFAULT_ST, CD_VIV_WAKE_DEFAULT_EPS, CD_VIV_WAKE_DEFAULT_A, CD_VIV_AMP_MAXP, &
+                          CD_VIV_STO_DEFAULT_NF, CD_VIV_STO_MAXF
   USE CableDyn_Hydro, ONLY: CD_Airy_Wave_Kinematics_Precomputed, CD_Component_Wave_Kinematics, &
                             CD_Current_Profile_Velocity, CD_CurrentGridType, CD_Current_Grid_Resample, &
                             CD_Current_Grid_Velocity, &
@@ -472,6 +473,14 @@ MODULE CableDyn_DeckDriver
     ! (0: the ambient flow); has_vivf_row marks a type the section names.
     REAL(wp) :: viv_tf = CD_ZERO
     LOGICAL :: has_vivf_row = .FALSE.
+    ! The stochastic band centre of a line type (the optional VIV STOCHASTIC section, a row per type:
+    ! TypeName sigma c [Nf [seed]]; Ulveseter et al. 2017): the standard deviation sigma of the
+    ! synchronisation band centre (0: constant), the top c of its flat spectrum as a fraction of
+    ! the centre, the number of components Nf and the seed of their start phases; has_vivs_row
+    ! marks a type the section names.
+    REAL(wp) :: sto_sigma = CD_ZERO, sto_c = CD_ZERO
+    INTEGER :: sto_nf = CD_VIV_STO_DEFAULT_NF, sto_seed = 0
+    LOGICAL :: has_vivs_row = .FALSE.
     LOGICAL :: has_wake_row = .FALSE.
     ! Amplitude-dependent VIV coefficients (the optional VIV AMPLITUDE section, rows TypeName AD Cv
     ! [CdAmp]): amp_n rows of (A/D, C_v, drag factor) in amp_tab, A/D increasing; amp_cols the
@@ -1941,6 +1950,8 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: viv_tix(:), viv_amp3(:, :, :), viv_dva(:), cdy_a(:), cdy_b(:), cdy_c(:)
     INTEGER, ALLOCATABLE :: viv_ampn(:)
     REAL(wp), ALLOCATABLE :: wo_cl0(:), wo_st(:), wo_eps(:), wo_a(:), wo_tf(:)
+    ! the VIV STOCHASTIC (sigma, c, Nf, seed) per element (finite_viv_sto)
+    REAL(wp), ALLOCATABLE :: viv_sto(:, :)
     REAL(wp), ALLOCATABLE :: ba_raw(:), ba(:), dry_b(:), bb_el(:), ra_el(:)
     REAL(wp) :: mode1_omega
     REAL(wp), ALLOCATABLE :: contact_kn(:), contact_cn(:)
@@ -3347,7 +3358,14 @@ CONTAINS
     CALL finite_viv_diameters(ln, sections, types, viv_dva)
     ALLOCATE (cdy_a(SIZE(l0)), cdy_b(SIZE(l0)), cdy_c(SIZE(l0)))
     CALL finite_viv_cdy(ln, sections, types, cdy_a, cdy_b, cdy_c)
+    ALLOCATE (viv_sto(4, SIZE(l0)))
+    CALL finite_viv_sto(ln, sections, types, viv_sto)
     IF (SIZE(l0_am) /= SIZE(l0)) THEN
+      BLOCK
+        INTEGER, ALLOCATABLE :: parent(:)
+        CALL reference_arc_parents(l0, l0_am, parent)
+        viv_sto = viv_sto(:, parent)
+      END BLOCK
       CALL remap_elem_by_reference_arc(viv_tix, l0, l0_am)
       CALL remap_elem_by_reference_arc(viv_dva, l0, l0_am)
       CALL remap_elem_by_reference_arc(cdy_a, l0, l0_am)
@@ -3754,7 +3772,7 @@ CONTAINS
                                              tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, il_alpha=viv_al, &
                                              chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn, dviv=viv_dva, &
                                              cdy=RESHAPE([cdy_a, cdy_b, cdy_c], [3, SIZE(cdy_a)], ORDER=[2, 1]), &
-                                             tf=wo_tf)
+                                             tf=wo_tf, sto=viv_sto)
           ELSE
             CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
                                              MERGE(opts%viv_rms_window, &
@@ -3763,7 +3781,7 @@ CONTAINS
                                              tangent_reversed=.NOT. ln%ends_swapped, amp=viv_amp3, amp_n=viv_ampn, &
                                              dviv=viv_dva, &
                                              cdy=RESHAPE([cdy_a, cdy_b, cdy_c], [3, SIZE(cdy_a)], ORDER=[2, 1]), &
-                                             tf=wo_tf)
+                                             tf=wo_tf, sto=viv_sto)
           END IF
         END BLOCK
         IF (es /= CD_HCDYN_OK) THEN
@@ -10496,6 +10514,8 @@ CONTAINS
     REAL(wp), ALLOCATABLE :: viv_wo(:, :)
     ! the VIV FRAME filter time per element (0 where none)
     REAL(wp), ALLOCATABLE :: viv_ftf(:)
+    ! the VIV STOCHASTIC (sigma, c, Nf, seed) per element (viv_sto_row; sigma 0 where none)
+    REAL(wp), ALLOCATABLE :: viv_sto(:, :)
     INTEGER, ALLOCATABLE :: viv_ampn(:)
     LOGICAL, ALLOCATABLE :: syr_el(:)
     REAL(wp) :: anchor(3), fairlead(3), mode1_omega
@@ -10536,7 +10556,8 @@ CONTAINS
               hydro_can(SIZE(l0)), hydro_cat(SIZE(l0)), ve_ead(SIZE(l0)), ve_bas(SIZE(l0)), &
               ve_bad(SIZE(l0)), ve_ambl(SIZE(l0)), ve_vbet(SIZE(l0)), viv_cl(SIZE(l0)), viv_cf(SIZE(l0)), &
               viv_df(SIZE(l0)), syr_el(SIZE(l0)), viv_clx(SIZE(l0)), viv_al(SIZE(l0)), viv_hh(SIZE(l0)), &
-              viv_tix(SIZE(l0)), viv_dia(SIZE(l0)), viv_wo(5, SIZE(l0)), viv_ftf(SIZE(l0)))
+              viv_tix(SIZE(l0)), viv_dia(SIZE(l0)), viv_wo(5, SIZE(l0)), viv_ftf(SIZE(l0)), viv_sto(4, SIZE(l0)))
+    viv_sto = CD_ZERO
     viv_tix = CD_ZERO
     viv_wo = CD_ZERO
     viv_ftf = CD_ZERO
@@ -10626,6 +10647,7 @@ CONTAINS
                            types(line_section_type(sections, ln%id, i))%viv_dv > CD_ZERO)
         syr_el(e) = types(line_section_type(sections, ln%id, i))%is_syrope
         viv_ftf(e) = types(line_section_type(sections, ln%id, i))%viv_tf
+        viv_sto(:, e) = viv_sto_row(types(line_section_type(sections, ln%id, i)), ln%id)
       END DO
     END DO
     syr_el = syr_el(SIZE(syr_el):1:-1)
@@ -10639,6 +10661,7 @@ CONTAINS
     viv_dia = viv_dia(SIZE(viv_dia):1:-1)
     viv_wo = viv_wo(:, SIZE(viv_wo, 2):1:-1)
     viv_ftf = viv_ftf(SIZE(viv_ftf):1:-1)
+    viv_sto = viv_sto(:, SIZE(viv_sto, 2):1:-1)
     IF (ANY(viv_wo(1, :) > CD_ZERO) .AND. ANY(viv_cl > CD_ZERO)) THEN
       CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(ln%id))//': a line takes one VIV model, but its '// &
                 'types mix the synchronisation lift (LINE TYPES Cl > 0) and the wake oscillator (WAKE '// &
@@ -10945,11 +10968,12 @@ CONTAINS
           ELSE IF (ANY(viv_clx > CD_ZERO)) THEN
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, viv_dia, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, &
-                                  il_alpha=viv_al, chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn, tf=viv_ftf)
+                                  il_alpha=viv_al, chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn, tf=viv_ftf, &
+                                  sto=viv_sto)
           ELSE
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, viv_dia, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, amp=viv_amp3, &
-                                  amp_n=viv_ampn, tf=viv_ftf)
+                                  amp_n=viv_ampn, tf=viv_ftf, sto=viv_sto)
           END IF
         END BLOCK
         IF (es == CD_MODEL_OK) CALL CD_Recompute_Model_Acceleration(model, es, em)
@@ -14050,6 +14074,9 @@ CONTAINS
     CHARACTER(DECK_RECLEN), ALLOCATABLE :: vfrm_rows(:)
     INTEGER, ALLOCATABLE :: vfrm_lines(:)
     INTEGER :: n_vfrm
+    CHARACTER(DECK_RECLEN), ALLOCATABLE :: vsto_rows(:)
+    INTEGER, ALLOCATABLE :: vsto_lines(:)
+    INTEGER :: n_vsto
     CHARACTER(2*NAMELEN), ALLOCATABLE :: channel_keys(:)
     LOGICAL :: ext_march, types_stock_cols, rodtypes_legacy_cols, turb_ok, static_finite_ok, tors_marched
     INTEGER :: unit, ios, section, nt, nb, nrt, nr, np, nlin, nsec, neq, nch, nfl, nct, nec, lineno
@@ -14068,7 +14095,7 @@ CONTAINS
                           SEC_EQUIV = 10, SEC_FAILURE = 11, SEC_CONTROL = 12, SEC_SYROPE_IC = 13, &
                           SEC_ENDCONN = 14, SEC_TURBINES = 15, SEC_EXTLOADS = 16, SEC_ATTACH = 17, &
                           SEC_STIFF = 18, SEC_VIV = 19, SEC_WAKE = 20, SEC_VIVAMP = 21, SEC_VIVDIA = 22, &
-                          SEC_VIVDAMP = 23, SEC_VIVFRAME = 25
+                          SEC_VIVDAMP = 23, SEC_VIVFRAME = 25, SEC_VIVSTO = 26
 
     ErrStat = 0; ErrMsg = ''
     ext_march = .FALSE.
@@ -14100,6 +14127,8 @@ CONTAINS
     n_vdmp = 0
     ALLOCATE (vfrm_rows(0), vfrm_lines(0))
     n_vfrm = 0
+    ALLOCATE (vsto_rows(0), vsto_lines(0))
+    n_vsto = 0
     n_vdia = 0
     n_wake = 0
     nt = 0; nb = 0; nrt = 0; nr = 0; np = 0; nlin = 0; nsec = 0; neq = 0; nch = 0; nfl = 0; nct = 0; nec = 0
@@ -14272,6 +14301,15 @@ CONTAINS
         END IF
         vfrm_rows(n_vfrm) = line(1:MIN(LEN(line), DECK_RECLEN))
         vfrm_lines(n_vfrm) = lineno
+      CASE (SEC_VIVSTO)
+        IF (.NOT. has_numeric_token(line)) CYCLE
+        n_vsto = n_vsto + 1
+        IF (n_vsto > SIZE(vsto_rows)) THEN
+          vsto_rows = [vsto_rows, [(REPEAT(' ', DECK_RECLEN), i_ch=1, 8)]]
+          vsto_lines = [vsto_lines, [(0, i_ch=1, 8)]]
+        END IF
+        vsto_rows(n_vsto) = line(1:MIN(LEN(line), DECK_RECLEN))
+        vsto_lines(n_vsto) = lineno
       CASE (SEC_VIVDIA)
         IF (.NOT. has_numeric_token(line)) CYCLE
         n_vdia = n_vdia + 1
@@ -14417,6 +14455,13 @@ CONTAINS
       CALL apply_type_viv_frame(vfrm_rows(i_ch), types, ErrStat, ErrMsg)
       IF (ErrStat /= 0) THEN
         CALL add_row_context('deck', vfrm_lines(i_ch), vfrm_rows(i_ch), ErrMsg)
+        RETURN
+      END IF
+    END DO
+    DO i_ch = 1, n_vsto
+      CALL apply_type_viv_sto(vsto_rows(i_ch), types, ErrStat, ErrMsg)
+      IF (ErrStat /= 0) THEN
+        CALL add_row_context('deck', vsto_lines(i_ch), vsto_rows(i_ch), ErrMsg)
         RETURN
       END IF
     END DO
@@ -16103,6 +16148,8 @@ CONTAINS
       section = 23
     CASE ('VIV FRAME', 'VIV FRAMES')
       section = 25
+    CASE ('VIV STOCHASTIC')
+      section = 26
     CASE ('WAKE OSCILLATOR', 'WAKE OSCILLATORS', 'WAKE')
       section = 20
     CASE DEFAULT
@@ -17997,6 +18044,101 @@ CONTAINS
     types(it)%viv_tf = v
     types(it)%has_vivf_row = .TRUE.
   END SUBROUTINE apply_type_viv_frame
+
+  SUBROUTINE apply_type_viv_sto(row, types, ErrStat, ErrMsg)
+    !! One VIV STOCHASTIC row: TypeName sigma c [Nf [seed]] -- the stochastic band centre of a line
+    !! type's synchronisation model (Ulveseter et al. 2017): the centre cF becomes a slowly varying
+    !! process of standard deviation sigma (0 <= sigma <= 1e3; 0 keeps it constant), the sum of Nf
+    !! (an integer, 1 to CD_VIV_STO_MAXF, default CD_VIV_STO_DEFAULT_NF) sinusoids of a flat spectrum
+    !! up to c times cF (0 < c <= 1) in non-dimensional frequency, each advancing at its frequency
+    !! times U/D as the shedding phase does, from start phases the integer seed (0 to 2147483646,
+    !! default 0) fixes per node. The type needs LINE TYPES Cl > 0 and no WAKE OSCILLATOR row. A type
+    !! takes one row.
+    CHARACTER(*), INTENT(IN) :: row
+    TYPE(DeckLineType), INTENT(INOUT) :: types(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    CHARACTER(DECK_RECLEN) :: tok
+    INTEGER :: it, n, k
+    REAL(wp) :: v(4)
+    LOGICAL :: found, ok
+
+    ErrStat = 0; ErrMsg = ''
+    n = count_tokens(row)
+    IF (n < 3 .OR. n > 5) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV STOCHASTIC rows must be: TypeName sigma c [Nf [seed]]'); RETURN
+    END IF
+    CALL get_token(row, 1, tok, found)
+    it = find_type(types, TRIM(tok))
+    IF (it == 0) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV STOCHASTIC row names undefined LINE TYPE "'//TRIM(tok)//'"'); RETURN
+    END IF
+    IF (types(it)%has_vivs_row) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV STOCHASTIC names LINE TYPE "'//TRIM(types(it)%name)//'" twice'); RETURN
+    END IF
+    v = [CD_ZERO, CD_ZERO, REAL(CD_VIV_STO_DEFAULT_NF, wp), CD_ZERO]
+    DO k = 2, n
+      CALL get_token(row, k, tok, found)
+      CALL parse_real_token(tok, v(k - 1), ok)
+      IF (.NOT. ok) THEN
+        CALL fail(ErrStat, ErrMsg, 'VIV STOCHASTIC sigma, c, Nf and seed must be plain numbers'); RETURN
+      END IF
+    END DO
+    IF (.NOT. (ALL(IEEE_IS_FINITE(v)) .AND. v(1) >= CD_ZERO .AND. v(1) <= 1.0e3_wp .AND. v(2) > CD_ZERO .AND. &
+               v(2) <= CD_ONE)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV STOCHASTIC needs 0 <= sigma <= 1e3 and 0 < c <= 1'); RETURN
+    END IF
+    IF (.NOT. (v(3) >= CD_ONE .AND. v(3) <= REAL(CD_VIV_STO_MAXF, wp) .AND. &
+               .NOT. (ABS(v(3) - AINT(v(3))) > CD_ZERO))) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV STOCHASTIC Nf must be an integer from 1 to '// &
+                TRIM(int_to_str(CD_VIV_STO_MAXF))); RETURN
+    END IF
+    IF (.NOT. (v(4) >= CD_ZERO .AND. v(4) <= 2147483646.0_wp .AND. &
+               .NOT. (ABS(v(4) - AINT(v(4))) > CD_ZERO))) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV STOCHASTIC seed must be an integer from 0 to 2147483646'); RETURN
+    END IF
+    IF (.NOT. (types(it)%cl > CD_ZERO) .OR. types(it)%wo_cl0 > CD_ZERO) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV STOCHASTIC of LINE TYPE "'//TRIM(types(it)%name)//'" varies the band '// &
+                'centre of its synchronisation model: give the type LINE TYPES Cl > 0 and no WAKE OSCILLATOR row')
+      RETURN
+    END IF
+    types(it)%sto_sigma = v(1)
+    types(it)%sto_c = v(2)
+    types(it)%sto_nf = NINT(v(3))
+    types(it)%sto_seed = NINT(v(4))
+    types(it)%has_vivs_row = .TRUE.
+  END SUBROUTINE apply_type_viv_sto
+
+  SUBROUTINE finite_viv_sto(ln, sections, types, sto)
+    !! The VIV STOCHASTIC (sigma, c, Nf, seed) of every element's line type (sigma 0 where the type has
+    !! none), in the element order of finite_hydro_arrays (the deck order reversed); the seed of a
+    !! line is the type's plus 7919 times the line ID (modulo 2147483647), so two lines of one type
+    !! take different realisations.
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    REAL(wp), INTENT(OUT) :: sto(:, :)
+    INTEGER :: i, j, e
+    e = 0
+    DO i = 1, SIZE(sections)
+      IF (sections(i)%line_id /= ln%id) CYCLE
+      DO j = 1, sections(i)%nsegs
+        e = e + 1
+        sto(:, e) = viv_sto_row(types(sections(i)%ltype), ln%id)
+      END DO
+    END DO
+    sto = sto(:, SIZE(sto, 2):1:-1)
+  END SUBROUTINE finite_viv_sto
+
+  PURE FUNCTION viv_sto_row(t, line_id) RESULT(r)
+    !! A line type's VIV STOCHASTIC values (sigma, c, Nf, seed) on line line_id (finite_viv_sto).
+    TYPE(DeckLineType), INTENT(IN) :: t
+    INTEGER, INTENT(IN) :: line_id
+    REAL(wp) :: r(4)
+    INTEGER(INT64) :: sd
+    sd = MOD(INT(t%sto_seed, INT64) + 7919_INT64*INT(ABS(line_id), INT64), 2147483647_INT64)
+    r = [t%sto_sigma, t%sto_c, REAL(t%sto_nf, wp), REAL(sd, wp)]
+  END FUNCTION viv_sto_row
 
   SUBROUTINE append_line_stiffener(row, lines, ErrStat, ErrMsg)
     !! One STIFFENERS row: LineID End Length RootOD TipOD InnerD E Density -- a conical segment of

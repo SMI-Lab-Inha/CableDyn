@@ -60,7 +60,8 @@ MODULE CableDyn_Model
                           CD_VIV_Wrap_Phase, CD_VIV_NM, CD_VIV_TWO_PI, CD_VIV_Node_Inline, CD_VIV_Inline_Phase_Rate, &
                           CD_VIV_NMS, CD_VIV_NMS_AMP, CD_VIV_AMP_MAXP, CD_VIV_Amplitude_Update, CD_VIV_Table, &
                           CD_VIV_Check_Amp_Table, CD_VIV_Ambient_Crossflow_Rate, CD_VIV_Wake_Advance, &
-                          CD_VIV_NMS_FRAME, CD_VIV_Mean_Square_Weight, CD_VIV_Filter_Linear
+                          CD_VIV_NMS_FRAME, CD_VIV_Mean_Square_Weight, CD_VIV_Filter_Linear, &
+                          CD_VIV_Sto_Node, CD_VIV_Sto_Centre, CD_VIV_STO_MAXF
   USE CableDyn_Dynamic, ONLY: GenAlphaConfig, CD_CableGenAlphaWorkspace, CD_Clear_GenAlpha_Workspace, &
                               CD_Cable_Initial_Acceleration, CD_Cable_Gen_Alpha_Step, CD_Cable_Step_Loads, &
                               CD_DYN_OK, CD_DYN_ALLOCFAIL, &
@@ -451,6 +452,14 @@ MODULE CableDyn_Model
     ! velocity across the ambient flow both relative to it (frame_node).
     LOGICAL :: viv_frame = .FALSE.
     REAL(wp), ALLOCATABLE :: viv_ftf(:)
+    ! The stochastic band centre (CD_Set_Model_VIV sto; VIV STOCHASTIC section; CableDyn_VIV): with
+    ! sigma > 0 on some element (viv_sto) viv_ms has one more row, its last, the node's travelled
+    ! non-dimensional distance theta = integral U/D dt; node nd's band centre is then
+    ! CD_VIV_Sto_Centre(viv_cf(nd), viv_sto_a(nd), viv_sto_f(1:n, nd), viv_sto_p(1:n, nd), theta)
+    ! with n = viv_sto_n(nd) components (0: the constant viv_cf(nd); viv_centre).
+    LOGICAL :: viv_sto = .FALSE.
+    REAL(wp), ALLOCATABLE :: viv_sto_a(:), viv_sto_f(:, :), viv_sto_p(:, :)
+    INTEGER, ALLOCATABLE :: viv_sto_n(:)
     ! Wake-oscillator VIV (CD_Set_Model_VIV wake; Facchinetti et al. 2004): the van der Pol wake
     ! variable q = 2 C_L/C_L0 replaces the synchronisation phase of the whole line, the lift scale
     ! taking viv_cl = C_L0/2. Per node the Strouhal number, van der Pol eps and coupling A
@@ -3972,7 +3981,7 @@ CONTAINS
   END SUBROUTINE CD_Set_Model_Syrope_State
 
   SUBROUTINE CD_Set_Model_VIV(model, rho, cl, diameter, cf, df, t_window, ErrStat, ErrMsg, phase_seed, &
-                              tangent_reversed, clx, il_alpha, chh, amp, amp_n, wake, tf)
+                              tangent_reversed, clx, il_alpha, chh, amp, amp_n, wake, tf, sto)
     !! Install the cross-flow VIV model (CableDyn_VIV) on an initialised line. Per element:
     !! the lift coefficient cl (0 = no lift on that element), hydrodynamic diameter, and the
     !! synchronisation centre cf and half-range df of the non-dimensional shedding frequency;
@@ -4026,9 +4035,16 @@ CONTAINS
     INTEGER, INTENT(IN), OPTIONAL :: amp_n(:)
     REAL(wp), INTENT(IN), OPTIONAL :: wake(:, :)
     REAL(wp), INTENT(IN), OPTIONAL :: tf(:)
-    INTEGER :: n_nodes, n_elem, e, nd, istat, k, nms
-    REAL(wp) :: wsum
-    LOGICAL :: want_il, want_amp, want_wake, want_filter, want_frame
+    !! sto (optional, (4, n_elem); not with the wake oscillator), per element (sigma, c, N_f, seed) of
+    !! the stochastic band centre of Ulveseter et al. (2017; CD_VIV_Sto_Node), as the finite-EI model
+    !! takes it (CD_HermiteCable_Dyn_Set_VIV): sigma >= 0 (0: the constant cf), and where sigma > 0
+    !! (only where cl > 0) 0 < c <= 1, an integer N_f from 1 to CD_VIV_STO_MAXF and an integer seed
+    !! from 0 to 2^31 - 2. A node takes the length-weighted sigma over its lifting elements, the
+    !! length-weighted c over those with sigma > 0, the most components and the seed of the first.
+    REAL(wp), INTENT(IN), OPTIONAL :: sto(:, :)
+    INTEGER :: n_nodes, n_elem, e, nd, istat, k, nms, nfm, nfk, seedk
+    REAL(wp) :: wsum, ssum, csum, cw
+    LOGICAL :: want_il, want_amp, want_wake, want_filter, want_frame, want_sto
     CHARACTER(160) :: amsg
 
     ErrStat = CD_MODEL_OK
@@ -4175,6 +4191,35 @@ CONTAINS
       END IF
       want_frame = ANY(tf > CD_ZERO)
     END IF
+    want_sto = .FALSE.
+    IF (PRESENT(sto)) THEN
+      IF (SIZE(sto, 1) /= 4 .OR. SIZE(sto, 2) /= n_elem .OR. .NOT. CD_All_Finite(sto)) THEN
+        CALL fail(ErrStat, ErrMsg, 'the VIV stochastic band centre sto must be finite with shape (4, n_elem)')
+        RETURN
+      END IF
+      DO e = 1, n_elem
+        IF (sto(1, e) < CD_ZERO) THEN
+          CALL fail(ErrStat, ErrMsg, 'the VIV stochastic band centre needs sigma >= 0')
+          RETURN
+        END IF
+        IF (.NOT. (sto(1, e) > CD_ZERO)) CYCLE
+        IF (.NOT. (cl(e) > CD_ZERO) .OR. want_wake) THEN
+          CALL fail(ErrStat, ErrMsg, 'a VIV stochastic band centre (sigma > 0) acts on the synchronisation model: '// &
+                    'only where cl > 0, and not with the wake oscillator')
+          RETURN
+        END IF
+        IF (.NOT. (sto(1, e) <= 1.0e3_wp .AND. sto(2, e) > CD_ZERO .AND. sto(2, e) <= CD_ONE .AND. &
+                   sto(3, e) >= CD_ONE .AND. sto(3, e) <= REAL(CD_VIV_STO_MAXF, wp) .AND. &
+                   .NOT. (ABS(sto(3, e) - AINT(sto(3, e))) > CD_ZERO) .AND. sto(4, e) >= CD_ZERO .AND. &
+                   sto(4, e) <= 2147483646.0_wp .AND. .NOT. (ABS(sto(4, e) - AINT(sto(4, e))) > CD_ZERO))) THEN
+          WRITE (amsg, '(A,I0,A)') 'the VIV stochastic band centre needs sigma at most 1e3, 0 < c <= 1, an '// &
+            'integer N_f from 1 to ', CD_VIV_STO_MAXF, ' and an integer seed from 0 to 2147483646'
+          CALL fail(ErrStat, ErrMsg, TRIM(amsg))
+          RETURN
+        END IF
+      END DO
+      want_sto = ANY(sto(1, :) > CD_ZERO)
+    END IF
     CALL clear_viv(model)
     IF (.NOT. ANY(cl > CD_ZERO)) RETURN
     IF (.NOT. (CD_Is_Finite(rho) .AND. rho > CD_ZERO)) THEN
@@ -4204,6 +4249,8 @@ CONTAINS
     IF (want_frame) nms = CD_VIV_NMS_FRAME
     ! the step predictor after the motion statistics (viv_pred_row; row 2 on a wake line)
     IF (.NOT. want_wake) nms = nms + MERGE(2, 1, want_il)
+    ! the travelled distance of the stochastic band centre last (viv_theta)
+    IF (want_sto) nms = nms + 1
     ALLOCATE (model%viv_cl(n_elem), model%viv_d(n_elem), model%viv_node(n_nodes), model%viv_cf(n_nodes), &
               model%viv_df(n_nodes), model%viv_dn(n_nodes), model%viv_phi(n_nodes), model%viv_ms(nms, n_nodes), &
               model%viv_phi_rollback(n_nodes), model%viv_ms_rollback(nms, n_nodes), &
@@ -4257,6 +4304,41 @@ CONTAINS
       model%viv_phi(nd) = CD_VIV_Wrap_Phase(CD_VIV_TWO_PI*(REAL(n_nodes - nd, wp)/REAL(n_elem, wp) + 0.5_wp))
       IF (PRESENT(phase_seed)) model%viv_phi(nd) = CD_VIV_TWO_PI*phase_seed(nd)
     END DO
+    IF (want_sto) THEN
+      ! per node the length-weighted sigma over its lifting elements, the length-weighted c over
+      ! those with sigma > 0, their most components and the seed of the first; theta starts at 0
+      nfm = NINT(MAXVAL(sto(3, :), MASK=sto(1, :) > CD_ZERO))
+      ALLOCATE (model%viv_sto_a(n_nodes), model%viv_sto_f(nfm, n_nodes), model%viv_sto_p(nfm, n_nodes), &
+                model%viv_sto_n(n_nodes), STAT=istat)
+      IF (istat /= 0) THEN
+        CALL clear_viv(model)
+        CALL alloc_fail(ErrStat, ErrMsg, 'VIV stochastic band centre allocation failed')
+        RETURN
+      END IF
+      model%viv_sto_a = CD_ZERO
+      model%viv_sto_f = CD_ZERO
+      model%viv_sto_p = CD_ZERO
+      model%viv_sto_n = 0
+      DO nd = 2, n_nodes - 1
+        IF (.NOT. model%viv_node(nd)) CYCLE
+        wsum = CD_ZERO; ssum = CD_ZERO; csum = CD_ZERO; cw = CD_ZERO; nfk = 0; seedk = -1
+        DO k = nd - 1, nd
+          IF (.NOT. (cl(k) > CD_ZERO)) CYCLE
+          wsum = wsum + model%l0(k)
+          ssum = ssum + model%l0(k)*sto(1, k)
+          IF (.NOT. (sto(1, k) > CD_ZERO)) CYCLE
+          cw = cw + model%l0(k)
+          csum = csum + model%l0(k)*sto(2, k)
+          nfk = MAX(nfk, NINT(sto(3, k)))
+          IF (seedk < 0) seedk = NINT(sto(4, k))
+        END DO
+        IF (nfk < 1) CYCLE
+        CALL CD_VIV_Sto_Node(ssum/wsum, csum/cw, model%viv_cf(nd), nfk, seedk, nd, model%viv_sto_a(nd), &
+                             model%viv_sto_f(1:nfk, nd), model%viv_sto_p(1:nfk, nd))
+        model%viv_sto_n(nd) = nfk
+      END DO
+      model%viv_sto = .TRUE.
+    END IF
     IF (want_frame) THEN
       ALLOCATE (model%viv_ftf(n_nodes), STAT=istat)
       IF (istat /= 0) THEN
@@ -4713,11 +4795,13 @@ CONTAINS
     !! CD_VIV_NMS_AMP with amplitude tables (the amplitude estimate after the mean squares) or the
     !! wake filter (the filtered velocity in rows 3:5), CD_VIV_NMS_FRAME with the flow frame,
     !! CD_VIV_NMS otherwise; on a synchronisation-model line one more, the step predictor (two
-    !! with in-line VIV; viv_pred_row).
+    !! with in-line VIV; viv_pred_row), and one more with a stochastic band centre (viv_theta).
     TYPE(CD_ModelType), INTENT(IN) :: model
     n = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, model%has_viv_amp .OR. model%wo_filter)
     IF (model%viv_frame) n = CD_VIV_NMS_FRAME
     IF (model%has_viv .AND. .NOT. model%viv_wake) n = n + MERGE(2, 1, model%has_viv_il)
+    ! the travelled distance of a stochastic band centre last
+    IF (model%viv_sto) n = n + 1
   END FUNCTION CD_Model_VIV_NMS
 
   SUBROUTINE CD_Get_Model_VIV_Amplitude(model, amp, ErrStat, ErrMsg)
@@ -4821,6 +4905,30 @@ CONTAINS
     IF (ALLOCATED(model%fluid_velocity)) uu = model%fluid_velocity(:, nd)
   END SUBROUTINE viv_node_coef
 
+  PURE REAL(wp) FUNCTION viv_theta(model, nd) RESULT(theta)
+    !! Node nd's travelled non-dimensional distance of the stochastic band centre (the last row of
+    !! viv_ms; 0 without it).
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: nd
+    theta = CD_ZERO
+    IF (model%viv_sto) theta = model%viv_ms(SIZE(model%viv_ms, 1), nd)
+  END FUNCTION viv_theta
+
+  PURE REAL(wp) FUNCTION viv_centre(model, nd, theta) RESULT(centre)
+    !! Node nd's band centre: viv_cf(nd), or with a stochastic band centre its process at the
+    !! travelled distance theta (CD_VIV_Sto_Centre).
+    TYPE(CD_ModelType), INTENT(IN) :: model
+    INTEGER, INTENT(IN) :: nd
+    REAL(wp), INTENT(IN) :: theta
+    INTEGER :: n
+    centre = model%viv_cf(nd)
+    IF (.NOT. model%viv_sto) RETURN
+    n = model%viv_sto_n(nd)
+    IF (n < 1) RETURN
+    centre = CD_VIV_Sto_Centre(model%viv_cf(nd), model%viv_sto_a(nd), model%viv_sto_f(1:n, nd), &
+                               model%viv_sto_p(1:n, nd), theta)
+  END FUNCTION viv_centre
+
   PURE INTEGER FUNCTION viv_pred_row(model) RESULT(r)
     !! The row of viv_ms holding the step predictor (CableDyn_VIV): after the motion statistics on a
     !! synchronisation-model line (the in-line rate in the row after it), row 2 on a wake line.
@@ -4866,7 +4974,8 @@ CONTAINS
         CYCLE
       END IF
       model%viv_ms(ir, nd) = CD_VIV_Phase_Rate(yd, ydd, CD_ZERO, CD_ZERO, model%viv_phi(nd), un, model%viv_dn(nd), &
-                                               model%viv_cf(nd), model%viv_df(nd), phi_rest=model%viv_phi_rest)
+                                               viv_centre(model, nd, viv_theta(model, nd)), model%viv_df(nd), &
+                                               phi_rest=model%viv_phi_rest)
       IF (.NOT. model%has_viv_il) CYCLE
       IF (.NOT. model%vil_node(nd)) CYCLE
       model%viv_ms(ir + 1, nd) = CD_VIV_Inline_Phase_Rate(xd, xdd, CD_ZERO, CD_ZERO, model%vil_phi(nd), &
@@ -4968,7 +5077,7 @@ CONTAINS
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: nd, ia, ir, ip
     REAL(wp) :: wf, wh, yd, ydd, un, coef, uu(3), ms1, ms2, rate_mid, xd, xdd, rate_mid_x, st(4), sw(2), ap
-    REAL(wp) :: vs0(3), vs1(3), vf(3), qm(9), om
+    REAL(wp) :: vs0(3), vs1(3), vf(3), qm(9), om, th, dth, cfm
     LOGICAL :: ok
     ErrStat = CD_MODEL_OK
     ErrMsg = ''
@@ -5047,6 +5156,16 @@ CONTAINS
         END IF
         model%viv_ms_next(3:6, nd) = st
       END IF
+      ! the stochastic band centre at the mid-point of the travelled distance, which moves on with the
+      ! step's shedding speed
+      th = viv_theta(model, nd)
+      dth = CD_ZERO
+      IF (model%viv_sto) THEN
+        dth = dt*un/model%viv_dn(nd)
+        IF (.NOT. CD_Is_Finite(dth)) dth = CD_ZERO
+        model%viv_ms_next(SIZE(model%viv_ms, 1), nd) = th + dth
+      END IF
+      cfm = viv_centre(model, nd, th + 0.5_wp*dth)
       ms1 = CD_VIV_Mean_Square(model%viv_ms(1, nd), yd, wh)
       ms2 = CD_VIV_Mean_Square(model%viv_ms(2, nd), ydd, wh)
       ! the implicit mid-point rule by one fixed-point pass: the mid-point phase from the predictor,
@@ -5054,7 +5173,7 @@ CONTAINS
       rate_mid = model%viv_rate(nd)
       DO ip = 1, 2
         rate_mid = CD_VIV_Phase_Rate(yd, ydd, ms1, ms2, model%viv_phi(nd) + 0.5_wp*dt*rate_mid, un, &
-                                     model%viv_dn(nd), model%viv_cf(nd), model%viv_df(nd), phi_rest=model%viv_phi_rest)
+                                     model%viv_dn(nd), cfm, model%viv_df(nd), phi_rest=model%viv_phi_rest)
       END DO
       model%viv_ms_next(1, nd) = CD_VIV_Mean_Square(model%viv_ms(1, nd), yd, wf)
       model%viv_ms_next(2, nd) = CD_VIV_Mean_Square(model%viv_ms(2, nd), ydd, wf)
@@ -5168,6 +5287,8 @@ CONTAINS
     IF (ALLOCATED(model%wo_a)) DEALLOCATE (model%wo_a)
     IF (ALLOCATED(model%wo_tf)) DEALLOCATE (model%wo_tf)
     IF (ALLOCATED(model%viv_ftf)) DEALLOCATE (model%viv_ftf)
+    IF (ALLOCATED(model%viv_sto_a)) DEALLOCATE (model%viv_sto_a, model%viv_sto_f, model%viv_sto_p, model%viv_sto_n)
+    model%viv_sto = .FALSE.
     model%viv_frame = .FALSE.
     model%viv_wake = .FALSE.
     model%wo_filter = .FALSE.
@@ -7942,6 +8063,15 @@ CONTAINS
     IF (ErrStat /= CD_MODEL_OK) RETURN
     CALL copy_real1(src%viv_ftf, work%viv_ftf, 'viv_ftf', ErrStat, ErrMsg)
     IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real1(src%viv_sto_a, work%viv_sto_a, 'viv_sto_a', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real2(src%viv_sto_f, work%viv_sto_f, 'viv_sto_f', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_real2(src%viv_sto_p, work%viv_sto_p, 'viv_sto_p', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    CALL copy_int1(src%viv_sto_n, work%viv_sto_n, 'viv_sto_n', ErrStat, ErrMsg)
+    IF (ErrStat /= CD_MODEL_OK) RETURN
+    work%viv_sto = src%viv_sto
     work%wo_filter = src%wo_filter
     work%viv_frame = src%viv_frame
     work%has_viv_amp = src%has_viv_amp
@@ -8141,6 +8271,11 @@ CONTAINS
     CALL MOVE_ALLOC(from%wo_tf, to%wo_tf)
     CALL MOVE_ALLOC(from%viv_ftf, to%viv_ftf)
     to%viv_frame = from%viv_frame
+    CALL MOVE_ALLOC(from%viv_sto_a, to%viv_sto_a)
+    CALL MOVE_ALLOC(from%viv_sto_f, to%viv_sto_f)
+    CALL MOVE_ALLOC(from%viv_sto_p, to%viv_sto_p)
+    CALL MOVE_ALLOC(from%viv_sto_n, to%viv_sto_n)
+    to%viv_sto = from%viv_sto
     to%wo_filter = from%wo_filter
     to%has_viv_amp = from%has_viv_amp
     CALL MOVE_ALLOC(from%viv_amp, to%viv_amp)
