@@ -42,11 +42,22 @@ MODULE CableDyn_VIV
   !! phi_xd the phase of the in-line velocity x' = r'.v_n/U from x', x'' normalised by their
   !! running RMS values, as phi_y.
   !!
+  !! Stochastic synchronisation (Ulveseter, Thorsen, Saevik and Larsen, Mar. Struct. 56, 2017,
+  !! 260-280, Eq. 6 and Fig. 4): the band centre cF of a node becomes the slowly varying process
+  !!
+  !!   F0(t) = cF + sum_i a sin(p_i + 2 pi f_i theta(t)),   d theta/dt = U/D
+  !!
+  !! of N_f components with a flat spectrum up to c cF (f_i = (i - 1/2) c cF/N_f, a = sigma
+  !! sqrt(2/N_f), so F0 has the standard deviation sigma), each advancing at its non-dimensional
+  !! frequency times U/D as the shedding phase does, with random start phases p_i of the node
+  !! (CD_VIV_Sto_Node); the nodes are independent.
+  !!
   !! Load convention (CableDyn_Hydro, CD_Cable_Dynamic_Load_Proc): `force` is the external
   !! load; the Jacobians are residual contributions, -dF/d(node velocity) and
   !! -dF/d(neighbour positions) through the node tangent. The wetted-fraction factor in C is
   !! held at its current value in the Jacobians (it moves only for an element that crosses
   !! the waterline); the residual itself is exact.
+  USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: INT64
   USE CableDyn_Precision, ONLY: wp, CD_ZERO, CD_ONE
   IMPLICIT NONE
   PRIVATE
@@ -68,6 +79,8 @@ MODULE CableDyn_VIV
   PUBLIC :: CD_VIV_Table
   PUBLIC :: CD_VIV_Check_Amp_Table
   PUBLIC :: CD_VIV_Ambient_Crossflow_Rate
+  PUBLIC :: CD_VIV_Sto_Node
+  PUBLIC :: CD_VIV_Sto_Centre
 
   !> MoorDyn's running-RMS window in time steps (Line%n_m): each step updates the stored
   !> mean square as ((n_m - 1) old + new) / n_m.
@@ -102,6 +115,10 @@ MODULE CableDyn_VIV
   REAL(wp), PARAMETER, PUBLIC :: CD_VIV_AMP_KDT = 0.1_wp
   !> The most rows of one line type's amplitude table.
   INTEGER, PARAMETER, PUBLIC :: CD_VIV_AMP_MAXP = 32
+  !> The most frequency components of the stochastic band centre of a node (CD_VIV_Sto_Node), and
+  !> the number Ulveseter et al. (2017, Sec. 3) take.
+  INTEGER, PARAMETER, PUBLIC :: CD_VIV_STO_MAXF = 1000
+  INTEGER, PARAMETER, PUBLIC :: CD_VIV_STO_DEFAULT_NF = 100
 
   !> Chord below which a node tangent is undefined (a collapsed pair of neighbours).
   REAL(wp), PARAMETER :: TINY_CHORD = 1.0e-12_wp
@@ -680,6 +697,38 @@ CONTAINS
     END DO
     y = ys(i - 1) + (ys(i) - ys(i - 1))*(x - xs(i - 1))/(xs(i) - xs(i - 1))
   END FUNCTION CD_VIV_Table
+
+  PURE SUBROUTINE CD_VIV_Sto_Node(sigma, c, cf, nf, seed, node, a, fhat, p0)
+    !! The stochastic band centre of a node (Ulveseter et al. 2017, Eq. 6, Fig. 4): nf components of
+    !! a flat spectrum of variance sigma^2 over (0, c cf], at the mid-points f_i = (i - 1/2) c cf/nf
+    !! of its nf intervals, each of amplitude a = sigma sqrt(2/nf), with start phases p0 uniform in
+    !! [0, 2 pi) drawn from a minimal-standard (Park-Miller) stream that the integer seed (0 to
+    !! 2^31 - 2) and the node number select, so a run repeats its realisation and two nodes
+    !! differ. fhat and p0 are filled in 1:nf.
+    REAL(wp), INTENT(IN) :: sigma, c, cf
+    INTEGER, INTENT(IN) :: nf, seed, node
+    REAL(wp), INTENT(OUT) :: a, fhat(:), p0(:)
+    INTEGER(INT64), PARAMETER :: M = 2147483647_INT64, MUL = 48271_INT64
+    INTEGER(INT64) :: state
+    INTEGER :: i
+    a = sigma*SQRT(2.0_wp/REAL(nf, wp))
+    state = MOD(INT(seed, INT64)*69621_INT64 + INT(node, INT64)*16807_INT64 + 1_INT64, M - 1_INT64) + 1_INT64
+    DO i = 1, 3
+      state = MOD(MUL*state, M)
+    END DO
+    DO i = 1, nf
+      fhat(i) = (REAL(i, wp) - 0.5_wp)*c*cf/REAL(nf, wp)
+      state = MOD(MUL*state, M)
+      p0(i) = CD_VIV_TWO_PI*REAL(state - 1_INT64, wp)/REAL(M - 1_INT64, wp)
+    END DO
+  END SUBROUTINE CD_VIV_Sto_Node
+
+  PURE REAL(wp) FUNCTION CD_VIV_Sto_Centre(cf, a, fhat, p0, theta) RESULT(centre)
+    !! The band centre cF + sum_i a sin(p0_i + 2 pi fhat_i theta) at the node's travelled
+    !! non-dimensional distance theta = integral U/D dt (CD_VIV_Sto_Node).
+    REAL(wp), INTENT(IN) :: cf, a, fhat(:), p0(:), theta
+    centre = cf + a*SUM(SIN(p0 + CD_VIV_TWO_PI*theta*fhat))
+  END FUNCTION CD_VIV_Sto_Centre
 
   ELEMENTAL REAL(wp) FUNCTION CD_VIV_Wrap_Phase(phi) RESULT(wrapped)
     !! The phase mapped to [0, 2 pi); the model only uses cos(phi) and sin(. - phi).

@@ -317,6 +317,20 @@ def test_viv_frame_rows_are_written(tmp_path: Path) -> None:
         model.to_text(validate=False)
 
 
+def test_viv_stochastic_rows_are_written(tmp_path: Path) -> None:
+    model = _chain_model(tmp_path)
+    model.add_line_type(
+        "riser", diam=0.1, mass=10.0, ea=5.0e7, cl=0.8, viv_stochastic=(0.016, 0.07, 100, 3)
+    )
+    deck = DeckFile.from_text(model.to_text(validate=False), path=tmp_path / "deck.dat")
+    assert [row.tokens for row in deck._rows("VIV STOCHASTIC")] == [
+        ("riser", "0.016", "0.07", "100.0", "3.0")
+    ]
+    model.add_line_type("plain", diam=0.1, mass=10.0, ea=5.0e7, viv_stochastic=(0.016, 0.07))
+    with pytest.raises(ValueError, match="set cl > 0 and no wake_cl0"):
+        model.to_text(validate=False)
+
+
 def test_viv_diameter_rows_are_written(tmp_path: Path) -> None:
     model = _chain_model(tmp_path)
     model.add_line_type(

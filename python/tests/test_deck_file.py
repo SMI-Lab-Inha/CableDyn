@@ -5177,3 +5177,42 @@ def test_as_laid_statics_refused_on_a_finite_ei_line_between_two_moving_points()
     with pytest.raises(DeckFormatError, match="has a moving End B"):
         DeckFile.from_text(deck)
     DeckFile.from_text(deck.replace("asLaid staticsFriction", "none staticsFriction"))
+
+
+def test_viv_stochastic_rows_are_read_and_kept(tmp_path):
+    from cabledyn import DeckModel
+
+    lift_only = _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8"))
+    text = _with_section(
+        lift_only, "VIV STOCHASTIC", "TypeName sigma c Nf seed", "chain 0.016 0.07 100 3"
+    )
+    DeckFile.from_text(text)
+    path = tmp_path / "sto.dat"
+    path.write_text(text, encoding="utf-8")
+    assert DeckModel.load(path).line_types["chain"].viv_stochastic == (0.016, 0.07, 100.0, 3.0)
+    saved = tmp_path / "saved.dat"
+    DeckModel.load(path).save(saved)
+    assert DeckModel.load(saved).line_types["chain"].viv_stochastic == (0.016, 0.07, 100.0, 3.0)
+    DeckFile.from_text(_with_section(lift_only, "VIV STOCHASTIC", "chain 0.016 0.07"))
+
+
+@pytest.mark.parametrize(
+    "lift, wake, rows, message",
+    [
+        (True, False, ("chain 0.016",), "rows must be: TypeName sigma c [Nf [seed]]"),
+        (True, False, ("cable 0.016 0.07",), 'undefined LINE TYPE "cable"'),
+        (True, False, ("chain 0.016 0.07", "chain 0.02 0.07"), 'names LINE TYPE "chain" twice'),
+        (True, False, ("chain 0.016 1.5",), "0 < c <= 1"),
+        (True, False, ("chain -0.1 0.07",), "0 <= sigma <= 1e3"),
+        (True, False, ("chain 0.016 0.07 10.5",), "Nf must be an integer from 1 to 1000"),
+        (True, False, ("chain 0.016 0.07 100 -1",), "seed must be an integer"),
+        (False, False, ("chain 0.016 0.07",), "give the type LINE TYPES Cl > 0 and no WAKE"),
+        (False, True, ("chain 0.016 0.07",), "give the type LINE TYPES Cl > 0 and no WAKE"),
+    ],
+)
+def test_viv_stochastic_rows_follow_the_native_checks(lift, wake, rows, message):
+    text = _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8")) if lift else _DYNAMIC
+    if wake:
+        text = _with_section(text, "WAKE OSCILLATOR", "chain 0.3")
+    with pytest.raises(DeckFormatError, match=re.escape(message)):
+        DeckFile.from_text(_with_section(text, "VIV STOCHASTIC", *rows))

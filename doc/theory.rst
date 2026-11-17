@@ -1682,6 +1682,47 @@ estimate, stay 0 without a table), so it is part of the step-recovery, snapshot 
 state; an ``EI = 0`` line filters its smoothed node velocity. :math:`T_f` 0 or no row leaves the
 run unchanged to the bit.
 
+.. _theory-viv-stochastic:
+
+Stochastic band centre
+~~~~~~~~~~~~~~~~~~~~~~
+
+The synchronisation band of :ref:`theory-viv` has a constant centre :math:`\hat f_0` (``cF``), so
+a long cable in a steady current settles on one response. Measured high-mode responses wander in
+amplitude and frequency. Ulveseter et al. (2017, Eq. 6) make the centre a slowly varying random
+process; a ``VIV STOCHASTIC`` row gives a line type this centre:
+
+.. math::
+
+   \hat F_0(t) = \hat f_0 + \sum_{i=1}^{N_f} a\,\sin\bigl(p_i + 2\pi \hat f_i\,\theta(t)\bigr),
+   \qquad \theta(t) = \int_0^t \frac{U}{D}\,\mathrm d t ,
+
+with :math:`U` the shedding speed of the phase rate. The spectrum is flat over
+:math:`(0, c\,\hat f_0]` (their Fig. 4); its :math:`N_f` components sit at the mid-points
+:math:`\hat f_i = (i - 1/2)\,c\,\hat f_0/N_f` of equal intervals with the amplitude
+:math:`a = \sigma\sqrt{2/N_f}`, so :math:`\hat F_0` has the mean :math:`\hat f_0` and the standard
+deviation :math:`\sigma`, and for many components it is close to Gaussian. Each component advances
+at its non-dimensional frequency times :math:`U/D`, as the shedding phase does, which keeps the
+process free of the fluctuation of :math:`U` that a time-based phase would carry (their Fig. 5);
+for :math:`c \ll 1` it is slow against the VIV, so the response has time to build up before the band
+moves. The half-width :math:`\Delta\hat f` (``dF``) stays constant. The start phases
+:math:`p_i` are uniform on :math:`[0, 2\pi)` and independent between nodes, as in the article (no
+spanwise correlation). Ulveseter et al. take :math:`N_f` 100, :math:`c` 0.07 and :math:`\sigma`
+0.016 for the NDP riser, and 0.040 as an upper case.
+
+**Implementation.** Each lifting node carries :math:`\theta` as one more row of its motion
+statistics. The step advances it by :math:`\Delta t\,U/D` with :math:`U` at the step's mid-point,
+and the phase rate takes :math:`\hat F_0` at :math:`\theta + \Delta t\,U/(2D)`, so the centre follows
+the mid-point rule of the phase (:ref:`theory-viv`). The phases :math:`p_i` come from a
+minimal-standard generator seeded by the row's seed, the line and the node, so a run repeats its
+realisation and needs no stored phases: :math:`\theta` alone is part of the step-recovery,
+snapshot and checkpoint state. The process over :math:`\theta` = 0 to :math:`4\times 10^6` (about
+200 periods of the lowest component) with the NDP values has the mean :math:`\hat f_0` to
+:math:`2\times 10^{-6}`, the standard deviation :math:`\sigma` to four digits and an excess kurtosis of
+-0.18. A row with :math:`\sigma` = 0 leaves the run unchanged to the bit; with :math:`\sigma` 0.02 the
+taut cable of the flow-frame gates stays locked in (A/D within 1 % of the constant centre's over
+50-80 s on both line kinds). A seed is one realisation: statistics of a response need several.
+
 .. _theory-viv-coefficients:
 
 Published coefficient sets

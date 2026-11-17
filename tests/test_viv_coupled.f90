@@ -45,6 +45,9 @@ PROGRAM test_viv_coupled
   !!   statistics), with the same restart and rewind checks;
   !! * the flow frame on the lift alone (VIV FRAME Tf 5 s, no tables): both blocks carry the
   !!   filtered velocity in rows 7-9 of 9 motion statistics (rows 3-6 unused), with the same restart
+  !!   and rewind checks;
+  !! * a stochastic band centre (VIV STOCHASTIC sigma 0.02, c 0.07, 100 components on both types):
+  !!   both blocks grow by the travelled distance of the centre (1 per node), with the same restart
   !!   and rewind checks.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_End, CD_AGG_OK, &
@@ -66,7 +69,7 @@ PROGRAM test_viv_coupled
   ! the deck of the restart and rewind cases, and whether its lines carry in-line VIV
   CHARACTER(32) :: deck_name = 'viv_coupled.dat'
   LOGICAL :: il_case = .FALSE., wake_case = .FALSE., amp_case = .FALSE., wakef_case = .FALSE., ampf_case = .FALSE.
-  LOGICAL :: frame_case = .FALSE.
+  LOGICAL :: frame_case = .FALSE., sto_case = .FALSE.
 
   nfail = 0
   CALL write_deck('viv_coupled.dat', 0.8_wp)
@@ -77,6 +80,7 @@ PROGRAM test_viv_coupled
   CALL write_deck('viv_coupled_amp.dat', 0.8_wp, amp=.TRUE.)
   CALL write_deck('viv_coupled_ampf.dat', 0.8_wp, amp=.TRUE., wake_tf='5.0', damp=.TRUE.)
   CALL write_deck('viv_coupled_frame.dat', 0.8_wp, wake_tf='5.0')
+  CALL write_deck('viv_coupled_sto.dat', 0.8_wp, sto='0.02 0.07 100 3')
   CALL case_lockin()
   CALL case_restart()
   CALL case_rewind()
@@ -110,6 +114,12 @@ PROGRAM test_viv_coupled
   CALL case_rewind()
   deck_name = 'viv_coupled_ampf.dat'
   ampf_case = .TRUE.
+  CALL case_restart()
+  CALL case_rewind()
+  deck_name = 'viv_coupled_sto.dat'
+  amp_case = .FALSE.
+  ampf_case = .FALSE.
+  sto_case = .TRUE.
   CALL case_restart()
   CALL case_rewind()
   IF (nfail > 0) THEN
@@ -402,7 +412,7 @@ CONTAINS
       ! per node the phases and mean squares, the further motion statistics and, on a
       ! synchronisation line, the step predictor (two rows with in-line VIV)
       ok = ok .AND. nv == (MERGE(6, 3, il_case) + MERGE(4, 0, amp_case .OR. wakef_case) + &
-                           MERGE(3, 0, ampf_case) + MERGE(7, 0, frame_case) + &
+                           MERGE(3, 0, ampf_case) + MERGE(7, 0, frame_case) + MERGE(1, 0, sto_case) + &
                            MERGE(0, MERGE(2, 1, il_case), wake_case))*(ndof/3) + 1
       IF (with_viv .AND. nv > 0) THEN
         ALLOCATE (buf(nv))
@@ -418,7 +428,7 @@ CONTAINS
     nvc = CD_HFMF_VIVMirrorSize(a%cables(1))
     ok = ok .AND. nvc == (MERGE(6, 3, il_case) + MERGE(MERGE(5, 2, wakef_case), 0, wake_case) + &
                           MERGE(4, 0, amp_case) + MERGE(3, 0, ampf_case) + MERGE(7, 0, frame_case) + &
-                          MERGE(0, MERGE(2, 1, il_case), wake_case))*a%cables(1)%line%nn + 1
+                          MERGE(1, 0, sto_case) + MERGE(0, MERGE(2, 1, il_case), wake_case))*a%cables(1)%line%nn + 1
     IF (.NOT. with_viv) THEN
       ! the cable's VIV block as the fresh build has it (the torsion-free cable ends with it)
       CALL CD_HFMF_PackMirror(b%cables(1), fresh, es, em)
@@ -490,7 +500,7 @@ CONTAINS
     IF (n > 1) f = REAL(n - 1, wp)/(t1 - t0)
   END SUBROUTINE response
 
-  SUBROUTINE write_deck(path, cl, window, dtm, anchor_first, inline, wake, amp, wake_tf, damp)
+  SUBROUTINE write_deck(path, cl, window, dtm, anchor_first, inline, wake, amp, wake_tf, damp, sto)
     !! The EI = 0 riser (line 1) and the finite-EI cable (line 2), 20 m apart across the current;
     !! VIVrmsWindow 0.25 s unless window is given (0: none), and a deck dtM when dtm is given;
     !! inline adds the in-line VIV of both types (a VIV section, ClX 0.85); wake gives both types
@@ -503,6 +513,8 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: anchor_first, inline, wake, amp, damp
     ! the VIV FRAME filter time Tf of both types (no section without it)
     CHARACTER(*), INTENT(IN), OPTIONAL :: wake_tf
+    ! the VIV STOCHASTIC values (sigma c Nf seed) of both types (no section without them)
+    CHARACTER(*), INTENT(IN), OPTIONAL :: sto
     INTEGER :: u
     LOGICAL :: stock, wo
     REAL(wp) :: tw
@@ -578,6 +590,12 @@ CONTAINS
       WRITE (u, '(A)') 'TypeName Tf'
       WRITE (u, '(A)') 'riser '//wake_tf
       WRITE (u, '(A)') 'cable '//wake_tf
+    END IF
+    IF (PRESENT(sto)) THEN
+      WRITE (u, '(A)') '--------------------- VIV STOCHASTIC ---'
+      WRITE (u, '(A)') 'TypeName sigma c Nf seed'
+      WRITE (u, '(A)') 'riser '//sto
+      WRITE (u, '(A)') 'cable '//sto
     END IF
     WRITE (u, '(A)') '--------------------- OPTIONS ---'
     WRITE (u, '(A)') '100.0 WtrDpth'

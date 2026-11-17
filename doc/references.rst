@@ -95,6 +95,12 @@ Hydrodynamics and ocean environment
   cross-flow vortex-induced vibrations. *Marine Structures* **51**, 134–151.
   https://doi.org/10.1016/j.marstruc.2016.10.007
 
+.. _ref-ulveseter2017:
+
+- **Ulveseter, J. V., Thorsen, M. J., Sævik, S. & Larsen, C. M. (2017).** Stochastic modelling of
+  cross-flow vortex-induced vibrations. *Marine Structures* **56**, 260–280.
+  https://doi.org/10.1016/j.marstruc.2017.08.001
+
 .. _ref-ulveseter2018:
 
 - **Ulveseter, J. V., Thorsen, M. J., Sævik, S. & Larsen, C. M. (2018).** Time domain

@@ -158,6 +158,11 @@ Line and constitutive capability
        row (``Tf``) takes the cable's filtered motion as the frame of its phases, amplitude
        estimate and cross-flow damping (a towed or floater-driven cable,
        :ref:`theory-viv-frame`)
+   * - Stochastic VIV band centre (``VIV STOCHASTIC`` section ``sigma``, ``c``, ``Nf``, ``seed``)
+     - Standalone and coupled
+     - the slowly varying random synchronisation centre of Ulveseter et al. (2017) on ``EI = 0``
+       lines and finite-EI cables wherever the cross-flow lift runs, seeded and repeatable
+       (:ref:`theory-viv-stochastic`), its state in the checkpoint
    * - In-line VIV (``VIV`` section ``ClX``, ``alpha``)
      - Standalone and coupled
      - the in-line shedding force of Ulveseter et al. (2018) at twice the cross-flow frequency, and

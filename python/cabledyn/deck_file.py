@@ -89,6 +89,7 @@ _SECTION_ALIASES = {
     "VIV DAMPING": "VIV DAMPING",
     "VIV FRAME": "VIV FRAME",
     "VIV FRAMES": "VIV FRAME",
+    "VIV STOCHASTIC": "VIV STOCHASTIC",
 }
 # Table sections whose rows the native reader takes through a Fortran
 # list-directed READ. Their descriptive and units rows are recognized by the
@@ -123,6 +124,7 @@ _WHITESPACE_TABLE_SECTIONS = frozenset(
         "VIV DIAMETER",
         "VIV DAMPING",
         "VIV FRAME",
+        "VIV STOCHASTIC",
     }
 )
 _TABLE_SECTIONS = _LIST_DIRECTED_SECTIONS | _WHITESPACE_TABLE_SECTIONS
@@ -3426,6 +3428,64 @@ class DeckFile:
                     "VIV model: give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row"
                 )
 
+    def _check_viv_sto_section(self, viv_type_names: set[str], wake_type_names: set[str]) -> None:
+        """Native ``apply_type_viv_sto`` for the VIV STOCHASTIC section.
+
+        A row ``TypeName sigma c [Nf [seed]]`` makes the band centre of a line type's
+        synchronisation model a slowly varying random process (Ulveseter et al. 2017): standard
+        deviation ``0 <= sigma <= 1e3``, the top ``0 < c <= 1`` of its flat spectrum as a fraction
+        of ``cF``, ``Nf`` components (an integer from 1 to 1000, default 100) and the seed of their
+        start phases (an integer from 0 to 2147483646, default 0). The type needs LINE TYPES
+        ``Cl > 0`` (``viv_type_names``) and no WAKE OSCILLATOR row; a type takes one row.
+        """
+        types = {row.tokens[0].lower(): row.tokens[0] for row in self.line_types}
+        named: set[str] = set()
+        for row in self._rows("VIV STOCHASTIC"):
+            where = self._at(row)
+            if not 3 <= len(row.tokens) <= 5:
+                raise DeckFormatError(
+                    f"{where}: VIV STOCHASTIC rows must be: TypeName sigma c [Nf [seed]]"
+                )
+            name = row.tokens[0].lower()
+            if name not in types:
+                raise DeckFormatError(
+                    f'{where}: VIV STOCHASTIC row names undefined LINE TYPE "{row.tokens[0]}"'
+                )
+            if name in named:
+                raise DeckFormatError(
+                    f'{where}: VIV STOCHASTIC names LINE TYPE "{types[name]}" twice'
+                )
+            named.add(name)
+            values = [0.0, 0.0, 100.0, 0.0]
+            for k, token in enumerate(row.tokens[1:]):
+                try:
+                    values[k] = _native_float(token)
+                except ValueError as exc:
+                    raise DeckFormatError(
+                        f"{where}: VIV STOCHASTIC sigma, c, Nf and seed must be plain numbers"
+                    ) from exc
+            sigma, c, nf, seed = values
+            if not (
+                all(math.isfinite(v) for v in values) and 0.0 <= sigma <= 1.0e3 and 0.0 < c <= 1.0
+            ):
+                raise DeckFormatError(
+                    f"{where}: VIV STOCHASTIC needs 0 <= sigma <= 1e3 and 0 < c <= 1"
+                )
+            if not (1.0 <= nf <= 1000.0 and nf == int(nf)):
+                raise DeckFormatError(
+                    f"{where}: VIV STOCHASTIC Nf must be an integer from 1 to 1000"
+                )
+            if not (0.0 <= seed <= 2147483646.0 and seed == int(seed)):
+                raise DeckFormatError(
+                    f"{where}: VIV STOCHASTIC seed must be an integer from 0 to 2147483646"
+                )
+            if name not in viv_type_names or name in wake_type_names:
+                raise DeckFormatError(
+                    f'{where}: VIV STOCHASTIC of LINE TYPE "{types[name]}" varies the band '
+                    "centre of its synchronisation model: give the type LINE TYPES Cl > 0 and "
+                    "no WAKE OSCILLATOR row"
+                )
+
     def _check_viv_damp_section(self, amp_type_names: set[str]) -> set[str]:
         """Native ``apply_type_viv_damp`` for the VIV DAMPING section; the types it names.
 
@@ -4842,6 +4902,7 @@ class DeckFile:
         amp_type_names = self._check_viv_amp_section(viv_type_names)
         self._check_viv_diam_section(viv_type_names | wake_type_names)
         self._check_viv_frame_section(viv_type_names | wake_type_names)
+        self._check_viv_sto_section(viv_type_names, wake_type_names)
         damp_type_names = self._check_viv_damp_section(amp_type_names)
         amp_lines = {
             line_id

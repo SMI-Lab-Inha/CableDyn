@@ -134,7 +134,8 @@ exist. A conventional layout is:
 
 LINE TYPES → BODIES → EXTERNAL LOADS → ROD TYPES → RODS → POINTS → TURBINES → LINES → SYROPE IC →
 SECTIONS → END CONNECTIONS / EQUIVALENT BUOYANCY / ATTACHMENTS / STIFFENERS / VIV / WAKE OSCILLATOR /
-VIV AMPLITUDE / VIV DIAMETER / VIV DAMPING / VIV FRAME / FAILURE / CONTROL → OPTIONS → OUTPUTS
+VIV AMPLITUDE / VIV DIAMETER / VIV DAMPING / VIV FRAME / VIV STOCHASTIC / FAILURE / CONTROL → OPTIONS →
+OUTPUTS
 
 Within LINE TYPES, the header row must precede the data rows because it selects their column
 order.
@@ -216,6 +217,7 @@ are collapsed. It must match one of the spellings below; any other name fails wi
 | VIV DIAMETER | `VIV DIAMETER`, `VIV DIAMETERS` |
 | VIV DAMPING | `VIV DAMPING` |
 | VIV FRAME | `VIV FRAME`, `VIV FRAMES` |
+| VIV STOCHASTIC | `VIV STOCHASTIC` |
 | FAILURE | `FAILURE`, `FAILURES` |
 | CONTROL | `CONTROL`, `CONTROLS` |
 | TURBINES | `TURBINES`, `TURBINE` |
@@ -1423,6 +1425,45 @@ Behaviour:
   standalone and coupled. A row fails if it is not `TypeName Tf`, names an undefined or already
   named type or one without VIV (neither LINE TYPES `Cl > 0` nor a WAKE OSCILLATOR row), or holds
   a value out of range.
+
+### VIV STOCHASTIC (optional)
+
+The stochastic synchronisation of Ulveseter et al. (2017): the centre `cF` of a line type's
+synchronisation band becomes a slowly varying random process, so the response can wander between
+modes as in long risers in shear (see [Stochastic band centre](theory.rst)).
+
+```text
+--------------------- VIV STOCHASTIC -----------------------------------
+TypeName   sigma   c      Nf    seed
+riser      0.016   0.07   100   1
+```
+
+| Column | Meaning |
+|--------|---------|
+| `TypeName` | an existing LINE TYPES name (case-insensitive) with `Cl > 0` and no WAKE OSCILLATOR row, at most one row each |
+| `sigma` | standard deviation of the band centre, 0 to 1e3 (0: the constant `cF`) |
+| `c` | top of the centre's flat spectrum as a fraction of `cF`, 0 < `c` <= 1 |
+| `Nf` | number of frequency components, an integer from 1 to 1000 (optional, default 100) |
+| `seed` | seed of the components' start phases, an integer from 0 to 2147483646 (optional, default 0) |
+
+Behaviour:
+
+- At a lifting node the centre is `cF + sum_i a sin(p_i + 2 pi f_i theta)`, `theta` the
+  integral of `U/D` over time (`U` the shedding speed of the phase rate), with `Nf` components
+  at the mid-points `f_i = (i - 1/2) c cF/Nf` of a flat spectrum over `(0, c cF]` and amplitude
+  `a = sigma sqrt(2/Nf)`, so its standard deviation is `sigma`. Each component advances at its
+  non-dimensional frequency times `U/D`, as the shedding phase does, so the centre is slow
+  against the VIV for `c` well below 1 (Ulveseter et al. take `c` 0.07). The band half-width `dF`
+  stays constant.
+- The start phases are uniform in `[0, 2 pi)`, drawn for each node from the seed, the node and
+  the line, so the nodes are independent (no spanwise correlation, as in the article), a run
+  repeats its realisation and two lines of one type differ. A different seed is another
+  realisation; report statistics over several.
+- `theta` is part of the step-recovery, snapshot and checkpoint state (one value per node). A
+  row with `sigma = 0` leaves the run exactly as without it. It acts on `EI = 0` lines and
+  finite-EI cables, standalone and coupled, with or without in-line VIV.
+- A row fails if it is not `TypeName sigma c [Nf [seed]]`, names an undefined or already named
+  type, one without `Cl > 0` or one with a WAKE OSCILLATOR row, or holds a value out of range.
 
 ### VIV DAMPING (optional, finite-EI lines)
 

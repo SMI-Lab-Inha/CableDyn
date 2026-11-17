@@ -10,6 +10,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- Stochastic VIV band centre: an optional `VIV STOCHASTIC` section, rows `TypeName sigma c
+  [Nf [seed]]`, makes the centre `cF` of a line type's synchronisation band the slowly varying
+  random process of Ulveseter et al. (2017): `Nf` (default 100) sinusoids of a flat spectrum up to
+  `c` times `cF` with standard deviation `sigma`, each advancing at its non-dimensional frequency
+  times `U/D` as the shedding phase does, from start phases the seed fixes per node and line (the
+  nodes independent). On `EI = 0` lines and finite-EI cables, standalone and coupled, with or
+  without in-line VIV. The node's travelled distance `integral U/D dt` is the one new state (step
+  recovery, snapshots, checkpoints); a run repeats its realisation, `sigma` 0 leaves runs unchanged
+  to the bit. With the article's NDP values the process has the mean `cF` to 2e-6 and the standard
+  deviation `sigma` to four digits.
 - Rayleigh damping of finite-EI cables: the LINE TYPES EI column takes `EI|-zeta|f1|f2`, the
   damping ratio `zeta` at the two frequencies `f1` and `f2` [Hz]. Beside the bending damping
   `Bb = zeta EI/(pi (f1 + f2))` it adds a mass-proportional transverse damping

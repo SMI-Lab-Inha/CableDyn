@@ -1379,6 +1379,13 @@ add_executable(test_viv_frame_deck tests/test_viv_frame_deck.f90)
 target_link_libraries(test_viv_frame_deck PRIVATE cabledyn_core)
 add_test(NAME viv_frame_deck COMMAND test_viv_frame_deck WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(viv_frame_deck PROPERTIES LABELS "fortran;integration;dynamic;viv;driver")
+# The VIV STOCHASTIC section (the stochastic band centre of Ulveseter et al. 2017): the process's
+# mean, standard deviation, near-Gaussian shape and seeded phases; a sigma 0 row bit-identical to
+# none, a seeded run repeatable and locked in, on both cores; and the refusals.
+add_executable(test_viv_stochastic tests/test_viv_stochastic.f90)
+target_link_libraries(test_viv_stochastic PRIVATE cabledyn_core)
+add_test(NAME viv_stochastic COMMAND test_viv_stochastic WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(viv_stochastic PROPERTIES LABELS "fortran;integration;dynamic;viv;driver")
 
 # Amplitude-dependent VIV coefficients on a deck (VIV AMPLITUDE section), both line kinds: the
 # identity table, the amplitude channel against the response, self-limiting, drag amplification
