@@ -87,9 +87,10 @@ jobs:
         # threading set their own thread counts.
         #
         # A pull request runs the Debug tier without the tests labelled slow (the long lazy-wave,
-        # mooring and statics campaigns, about 6500 CPU-s of a 21900 CPU-s Debug suite): the -O0
-        # faults this tier exists for live in code the remaining tests reach, and the slow tests
-        # still run in Release on both platforms and on the Prescott kernel. Every push to dev
+        # mooring and statics campaigns) or debug_long (tests over about 200 CPU-s at -O0, listed in
+        # CMakeLists.txt): the -O0 faults this tier exists for live in code the remaining tests
+        # reach, and the skipped tests still run in Release on both platforms and on the Prescott
+        # kernel. Every push to dev
         # and main runs the full suite at -O0, so each merge is hardened without holding the PR.
         env:
           OMP_NUM_THREADS: "1"
@@ -97,7 +98,7 @@ jobs:
           FAST_DEBUG: ${{ matrix.build_type == 'Debug' && github.event_name == 'pull_request' }}
         run: |
           if [ "$FAST_DEBUG" = "true" ]; then
-            ctest --test-dir build --output-on-failure --parallel 4 -LE slow
+            ctest --test-dir build --output-on-failure --parallel 4 -LE 'slow|debug_long'
           else
             ctest --test-dir build --output-on-failure --parallel 4
           fi

@@ -3791,3 +3791,41 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     endif()
   endforeach()
 endif()
+
+# Tests over about 200 CPU-s at -O0 on the Windows Debug runner (the CI run of #181). A pull
+# request's Debug tier skips them with the slow tests (fortran.yml); Release runs them on every
+# pull request and the Debug tier on every push to dev and main.
+set(CABLEDYN_DEBUG_LONG_TESTS
+    viv_coupled
+    viv_inline_deck
+    viv_frame_deck
+    viv_wake_deck
+    python_package
+    graded_mesh_statics
+    viv_riser
+    viv_step_order
+    coupled_cable_tolerance
+    static_current_balance
+    bending_damping_deck
+    viv_amplitude_deck
+    hermite_static_azimuth
+    ei0_slack_dynamics
+    arclength_rigid_end
+    viv_lockin
+    viv_diameter_deck
+    torsion_current_start
+    body_rod_physics
+    c_api_threads_exit
+    load_power_deck
+    driver_axial_damping_ratio
+    example_lazy_wave_vessel_rao
+    torsion_orcaflex
+    monolithic_gates
+    driver_graded_cross_current
+    attachment_polish_floor
+)
+foreach(_t IN LISTS CABLEDYN_DEBUG_LONG_TESTS)
+  if(TEST ${_t})
+    set_property(TEST ${_t} APPEND PROPERTY LABELS debug_long)
+  endif()
+endforeach()
