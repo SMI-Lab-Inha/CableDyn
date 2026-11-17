@@ -86,6 +86,7 @@ article's methods, are compared in
 | **L3-D** | Chaplin Delta Flume riser in a stepped current, blind-trial cases 1–9, cross-flow and in-line VIV | measured dominant mode, peak cross-flow amplitude, mean in-line displacement, curvature standard deviations | mode right in 5/9, within one in 9/9; mean in-line within ±17% in 7/9 (−25% to +34%); cross-flow amplitude −45% to +4%; cross-flow curvature −39% to +26% | generic coefficient set, no fitted parameter | Pass measured |
 | **L3-W** | SJTU steel catenary riser in 0.2 m/s current, cross-flow VIV | measured r.m.s. strain (25 stations) and dominant frequency | frequency 0.992 vs 1.00 Hz; max r.m.s. strain +7.3%, station mean +3.6% | published coefficient set, no fitted parameter | Pass |
 | **L3-N** | NDP 38 m high-mode riser in uniform flow, 0.3–2.4 m/s (22 tests), cross-flow VIV | measured maximum r.m.s. cross-flow strain, dominant frequency, spatial-mean σ/D | strain r.m.s. log error: Ulveseter et al. (2019) set 0.178, Andersen et al. (2024b) 0.186, generic set 0.277, Thorsen et al. (2016) 0.363 (their own simulation 0.187); f D/U 0.145 / 0.134 / 0.192 / 0.193 vs 0.143 measured | generic set blind; the other sets fitted by their authors to NDP tests (implementation check) | Pass measured |
+| **L3-F** | FLOTANT OD 48 mm power-cable specimen with a 200 kg clump, tow tests at 0.025–1.0 m/s (40 tests), cross-flow and in-line VIV | measured A/D_rms (σ/OD) at 1/2L, 3/4L and L (de Wilde et al. 2021, App. 3) | CF r.m.s. log error (Ur ≥ 3): Ulveseter et al. (2019) set 0.731, generic set 0.594, wake oscillator 1.208; first peak at 1/2L 0.755 / 0.483 / 0.296 vs 0.776 measured; release Ur 7.06 / 5.89 / 5.30 vs 5.88 | published VIV sets, none fitted to these tests; structure identified from the specimen's in-air and in-water RAOs | Pass measured |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
 | **L4-1** | Coupled platform + mooring | synthetic reference | bit-for-bit | — | Pass |
 | **L4-1b** | VolturnUS-S coupled platform + power cable | OpenFAST v5.0.0 (CompMooring 5 vs 3) | platform DOFs <0.6% (3-seed DLC-1.1); fairlead and anchor <0.001% static | <3% platform | Pass |
@@ -305,8 +306,9 @@ initialisation.
 
 ### Physical experiments
 
-No line or load parameter is fitted to any of the experiments. Inputs, reduction
-scripts, results, and source provenance are in
+No line or load parameter is fitted to the measurements a case is compared with (L3-F
+identifies its structure from forced-oscillation tests of the same specimen, separate from
+the tow tests it predicts). Inputs, reduction scripts, results, and source provenance are in
 [`validation/experiments`](https://github.com/SMI-Lab-Inha/CableDyn/tree/main/validation/experiments).
 
 - **L3-H Holcombe static lazy-wave test**
@@ -400,6 +402,32 @@ scripts, results, and source provenance are in
   the 22 speeds hold: the full sweep at half the time step gives r.m.s. log errors 0.280, 0.187,
   0.184 and 0.375 for the generic, Andersen, Ulveseter and Thorsen sets, f D/U within 0.001 and
   σ/D within 1.4%.
+
+- **L3-F FLOTANT power-cable specimen, cross-flow and in-line VIV in tow tests**
+  ([de Wilde et al., 2021](https://cabledyn.readthedocs.io/en/latest/references.html#ref-dewilde2021)):
+  the 6.4 m OD 48 mm cable hanging from the carriage with its 200 kg clump weight, towed at the 40
+  speeds of 0.025–1.0 m/s, compared with the measured A/D_rms (σ/OD) at 1/2L, 3/4L and L, the
+  model's displacements processed as the report's accelerometer motions (tilt term, 3.5 rad/s
+  high-pass). The line follows the report's FEM tables node by node. The structure the tests
+  leave open is identified from the specimen's forced-oscillation RAOs, not from the tow data:
+  the cable's EI (1650 N m², where the tables' 3000 N m² needs an empirical factor to match the
+  resonance) and bending damping from the in-air RAOs (resonance at the measured 1.7 Hz, peaks
+  7.4 and 7.2 against 8.7 and 5.9 at 5 and 10 mm), and in water a bending link chain and a
+  laterally restrained clump that reproduce the measured split of the first mode (peaks 1.2 and
+  1.9 Hz against 1.3 and 1.8 Hz; r.m.s. log error 0.46 against 1.19 with MARIN's fixed clump).
+  Three published VIV sets, none fitted to these tests (r.m.s. log error of the cross-flow
+  A/D_rms over the three stations, Ur ≥ 3):
+  - the set Ulveseter et al. (2019) fitted to the NDP riser gives the first peak at mid-length,
+    0.755 at Ur 5.30 against 0.776 at Ur 5.58, but responds from a lower speed (0.42 against
+    0.18 at Ur 3.53), releases at Ur 7.06 against 5.88 and holds 0.64–0.71 above Ur 9 where the
+    test falls to 0.18–0.44: 0.731;
+  - the generic set is 38% low at the peak (0.483) and releases at the measured Ur: 0.594;
+  - the wake oscillator of Facchinetti et al. (2004) is 62% low (0.296): 1.208.
+
+  No set predicts the speed range of the lock-in. With MARIN's fixed clump or a free clump the
+  same set scores 0.721 and 0.692 but releases at Ur 8.83 and 9.12 and misses the in-water RAOs.
+  Half the time step, two elements per table element and 120 s runs change no A/D_rms by more
+  than 0.006 at five speeds; the default run reproduces the committed record byte for byte.
 
 ## L4 coupled OpenFAST
 

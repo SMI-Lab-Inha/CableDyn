@@ -1,0 +1,505 @@
+{
+  "dt_s": 0.002,
+  "elements_per_table_element": 1,
+  "tow": {
+    "end": "identified",
+    "tmax_s": 60.0,
+    "statistics_after_s": 20.0,
+    "highpass_rad_s": 3.5,
+    "Ur_frequency_hz": 1.77,
+    "release_fraction_of_peak": 0.7,
+    "per_set": {
+      "uls19": {
+        "label": "Ulveseter et al. (2019), Table 1, Chh 1.5",
+        "fitted_to": "the NDP riser in uniform flow; blind here",
+        "speeds": [
+          0.025,
+          0.05,
+          0.075,
+          0.1,
+          0.125,
+          0.15,
+          0.175,
+          0.2,
+          0.225,
+          0.25,
+          0.275,
+          0.3,
+          0.325,
+          0.35,
+          0.375,
+          0.4,
+          0.425,
+          0.45,
+          0.475,
+          0.5,
+          0.525,
+          0.55,
+          0.575,
+          0.6,
+          0.625,
+          0.65,
+          0.675,
+          0.7,
+          0.725,
+          0.75,
+          0.775,
+          0.8,
+          0.825,
+          0.85,
+          0.875,
+          0.9,
+          0.925,
+          0.95,
+          0.975,
+          1.0
+        ],
+        "compared_tests": "Ur >= 3",
+        "cf_rms_log_error_all_stations": 0.730599035507909,
+        "cf_ratio_median_all_stations": 1.6045546300304596,
+        "il_rms_log_error_all_stations": 0.7422498473783267,
+        "il_ratio_median_all_stations": 1.0403634795667123,
+        "cf_rms_log_error": {
+          "1_2L": 0.6896505635145447,
+          "3_4L": 0.6054958725179113,
+          "L": 0.8757002334921515
+        },
+        "il_rms_log_error": {
+          "1_2L": 0.6242433471759753,
+          "3_4L": 0.5201489867187723,
+          "L": 0.9962779646872738
+        },
+        "cf_rms_log_error_1_2L_by_direction": {
+          "forwards": 0.6473677602467042,
+          "backwards": 0.7294866568382343
+        },
+        "cf_1_2L_peak": {
+          "peak_AD": 0.7547273832653888,
+          "peak_Ur": 5.296610169491525,
+          "release_Ur": 7.062146892655367,
+          "f_hz_at_peak": 1.2499999999984723
+        },
+        "cf_1_2L_peak_measured": {
+          "peak_AD": 0.7755,
+          "peak_Ur": 5.583,
+          "release_Ur": 5.884
+        },
+        "mean_top_tension_N_range": [
+          1962,
+          2076
+        ]
+      },
+      "b1": {
+        "label": "generic set (Delta Flume case)",
+        "fitted_to": "no; blind",
+        "speeds": [
+          0.025,
+          0.05,
+          0.075,
+          0.1,
+          0.125,
+          0.15,
+          0.175,
+          0.2,
+          0.225,
+          0.25,
+          0.275,
+          0.3,
+          0.325,
+          0.35,
+          0.375,
+          0.4,
+          0.425,
+          0.45,
+          0.475,
+          0.5,
+          0.525,
+          0.55,
+          0.575,
+          0.6,
+          0.625,
+          0.65,
+          0.675,
+          0.7,
+          0.725,
+          0.75,
+          0.775,
+          0.8,
+          0.825,
+          0.85,
+          0.875,
+          0.9,
+          0.925,
+          0.95,
+          0.975,
+          1.0
+        ],
+        "compared_tests": "Ur >= 3",
+        "cf_rms_log_error_all_stations": 0.5941536831759612,
+        "cf_ratio_median_all_stations": 0.9491137600334464,
+        "il_rms_log_error_all_stations": 1.0166460852408143,
+        "il_ratio_median_all_stations": 0.5752475108833648,
+        "cf_rms_log_error": {
+          "1_2L": 0.496789066673788,
+          "3_4L": 0.4791025608890916,
+          "L": 0.7685296331328462
+        },
+        "il_rms_log_error": {
+          "1_2L": 0.8550027299528041,
+          "3_4L": 1.1234580174708335,
+          "L": 1.0523878575222048
+        },
+        "cf_rms_log_error_1_2L_by_direction": {
+          "forwards": 0.5636506860751169,
+          "backwards": 0.41940035481658433
+        },
+        "cf_1_2L_peak": {
+          "peak_AD": 0.48303768537307423,
+          "peak_Ur": 3.8253295668549905,
+          "release_Ur": 5.885122410546138,
+          "f_hz_at_peak": 1.2499999999984723
+        },
+        "cf_1_2L_peak_measured": {
+          "peak_AD": 0.7755,
+          "peak_Ur": 5.583,
+          "release_Ur": 5.884
+        },
+        "mean_top_tension_N_range": [
+          1962,
+          2185
+        ]
+      },
+      "wake": {
+        "label": "Facchinetti et al. (2004) wake oscillator",
+        "fitted_to": "rigid-cylinder data; blind",
+        "speeds": [
+          0.025,
+          0.05,
+          0.075,
+          0.1,
+          0.125,
+          0.15,
+          0.175,
+          0.2,
+          0.225,
+          0.25,
+          0.275,
+          0.3,
+          0.325,
+          0.35,
+          0.375,
+          0.4,
+          0.425,
+          0.45,
+          0.475,
+          0.5,
+          0.525,
+          0.55,
+          0.575,
+          0.6,
+          0.625,
+          0.65,
+          0.675,
+          0.7,
+          0.725,
+          0.75,
+          0.775,
+          0.8,
+          0.825,
+          0.85,
+          0.875,
+          0.9,
+          0.925,
+          0.95,
+          0.975,
+          1.0
+        ],
+        "compared_tests": "Ur >= 3",
+        "cf_rms_log_error_all_stations": 1.2083674966459748,
+        "cf_ratio_median_all_stations": 0.4070965464436991,
+        "il_rms_log_error_all_stations": 3.605803405022973,
+        "il_ratio_median_all_stations": 0.02753921577465114,
+        "cf_rms_log_error": {
+          "1_2L": 1.1895195653845272,
+          "3_4L": 1.2909523301731947,
+          "L": 1.13726967599545
+        },
+        "il_rms_log_error": {
+          "1_2L": 3.325377943947132,
+          "3_4L": 3.92168317276405,
+          "L": 3.545097630446166
+        },
+        "cf_rms_log_error_1_2L_by_direction": {
+          "forwards": 1.214376106938135,
+          "backwards": 1.1641324081748472
+        },
+        "cf_1_2L_peak": {
+          "peak_AD": 0.2964251183985482,
+          "peak_Ur": 4.413841807909604,
+          "release_Ur": 5.296610169491525,
+          "f_hz_at_peak": 1.299999999998411
+        },
+        "cf_1_2L_peak_measured": {
+          "peak_AD": 0.7755,
+          "peak_Ur": 5.583,
+          "release_Ur": 5.884
+        },
+        "mean_top_tension_N_range": [
+          1962,
+          2031
+        ]
+      }
+    }
+  },
+  "rao": {
+    "air_table_5mm": {
+      "surge": {
+        "rms_log_error": 0.2271249523692518,
+        "band_hz": [
+          1.4,
+          2.0
+        ],
+        "peaks_1_2L_cabledyn": [
+          [
+            1.7,
+            7.386
+          ]
+        ],
+        "peaks_1_2L_measured": [
+          [
+            1.7,
+            8.683
+          ]
+        ]
+      },
+      "sway": {
+        "rms_log_error": 0.2775305840736591,
+        "band_hz": [
+          1.4,
+          2.0
+        ],
+        "peaks_1_2L_cabledyn": [
+          [
+            1.7,
+            7.386
+          ]
+        ],
+        "peaks_1_2L_measured": [
+          [
+            1.7,
+            9.142
+          ]
+        ]
+      }
+    },
+    "air_table_10mm": {
+      "surge": {
+        "rms_log_error": 0.20858196424547804,
+        "band_hz": [
+          1.4,
+          2.0
+        ],
+        "peaks_1_2L_cabledyn": [
+          [
+            1.7,
+            7.234
+          ]
+        ],
+        "peaks_1_2L_measured": [
+          [
+            1.7,
+            5.881
+          ]
+        ]
+      },
+      "sway": {
+        "rms_log_error": 0.22969544591422794,
+        "band_hz": [
+          1.4,
+          2.0
+        ],
+        "peaks_1_2L_cabledyn": [
+          [
+            1.7,
+            7.234
+          ]
+        ],
+        "peaks_1_2L_measured": [
+          [
+            1.7,
+            6.398
+          ]
+        ]
+      }
+    },
+    "water_free_5mm": {
+      "surge": {
+        "rms_log_error": 1.1742370919761518,
+        "band_hz": [
+          1.0,
+          3.0
+        ],
+        "peaks_1_2L_cabledyn": [
+          [
+            1.4,
+            3.678
+          ],
+          [
+            2.6,
+            1.311
+          ]
+        ],
+        "peaks_1_2L_measured": [
+          [
+            1.3,
+            4.246
+          ],
+          [
+            1.8,
+            4.403
+          ]
+        ]
+      },
+      "sway": {
+        "rms_log_error": 1.2074671000645258,
+        "band_hz": [
+          1.0,
+          3.0
+        ],
+        "peaks_1_2L_cabledyn": [
+          [
+            1.4,
+            3.678
+          ],
+          [
+            2.6,
+            1.311
+          ]
+        ],
+        "peaks_1_2L_measured": [
+          [
+            1.3,
+            4.314
+          ],
+          [
+            1.9,
+            2.993
+          ]
+        ]
+      }
+    },
+    "water_identified_5mm": {
+      "surge": {
+        "rms_log_error": 0.45854152035091567,
+        "band_hz": [
+          1.0,
+          3.0
+        ],
+        "peaks_1_2L_cabledyn": [
+          [
+            1.2,
+            3.758
+          ],
+          [
+            1.9,
+            2.451
+          ]
+        ],
+        "peaks_1_2L_measured": [
+          [
+            1.3,
+            4.246
+          ],
+          [
+            1.8,
+            4.403
+          ]
+        ]
+      },
+      "sway": {
+        "rms_log_error": 0.7431022078522367,
+        "band_hz": [
+          1.0,
+          3.0
+        ],
+        "peaks_1_2L_cabledyn": [
+          [
+            1.2,
+            3.758
+          ],
+          [
+            1.9,
+            2.451
+          ]
+        ],
+        "peaks_1_2L_measured": [
+          [
+            1.3,
+            4.314
+          ],
+          [
+            1.9,
+            2.993
+          ]
+        ]
+      }
+    },
+    "water_table_5mm": {
+      "surge": {
+        "rms_log_error": 1.1862435338325563,
+        "band_hz": [
+          1.0,
+          3.0
+        ],
+        "peaks_1_2L_cabledyn": [
+          [
+            1.3,
+            3.943
+          ],
+          [
+            2.5,
+            1.359
+          ]
+        ],
+        "peaks_1_2L_measured": [
+          [
+            1.3,
+            4.246
+          ],
+          [
+            1.8,
+            4.403
+          ]
+        ]
+      },
+      "sway": {
+        "rms_log_error": 1.2156538997830377,
+        "band_hz": [
+          1.0,
+          3.0
+        ],
+        "peaks_1_2L_cabledyn": [
+          [
+            1.3,
+            3.943
+          ],
+          [
+            2.5,
+            1.359
+          ]
+        ],
+        "peaks_1_2L_measured": [
+          [
+            1.3,
+            4.314
+          ],
+          [
+            1.9,
+            2.993
+          ]
+        ]
+      }
+    }
+  },
+  "executable_sha256": "3a93a8b9ba3af58d2cf6d158cbcf61299b38de7541ab6ed8caef0a18bb3d2e4b"
+}

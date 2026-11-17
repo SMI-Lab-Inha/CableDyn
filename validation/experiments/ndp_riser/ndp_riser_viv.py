@@ -324,6 +324,11 @@ def run_case(
     if not (
         same and out.is_file() and ran.is_file() and ran.read_text().strip() == sha
     ):
+        # A run that fails or is interrupted must not leave the previous model's result next
+        # to the new inputs, where the next attempt would reuse it.
+        result.unlink(missing_ok=True)
+        ran.unlink(missing_ok=True)
+        out.unlink(missing_ok=True)
         deck.write_text(text, encoding="utf-8")
         (folder / "current_profile.txt").write_text(
             f"z ux uy uz\n(m) (m/s) (m/s) (m/s)\n{-WATER_DEPTH:.2f} 0 {u} 0\n0.0 0 {u} 0\n",

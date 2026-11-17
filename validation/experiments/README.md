@@ -2,7 +2,7 @@
 
 # Experimental comparisons
 
-This directory lets reviewers reproduce CableDyn's comparisons with six published physical
+This directory lets reviewers reproduce CableDyn's comparisons with seven published physical
 experiments. Each subdirectory gives the data source, the translation of the published
 parameters into a CableDyn model, the assessed quantity, the reproduction commands and the
 committed results.
@@ -15,5 +15,6 @@ committed results.
 | [`delta_flume/`](delta_flume/README.md) | Chaplin et al. (2005), 13.12 m vertical tension riser, stepped current, blind-trial cases 1–9 | Finite-EI riser, synchronisation VIV, cross-flow and in-line |
 | [`wang_scr/`](wang_scr/README.md) | Wang et al. (2014), truncated steel catenary riser in uniform current, cross-flow VIV | Finite-EI riser, synchronisation VIV |
 | [`ndp_riser/`](ndp_riser/README.md) | Trim et al. (2005), NDP 38 m high-mode riser in uniform flow, cross-flow VIV with a generic and three published coefficient sets | Finite-EI riser, synchronisation VIV |
+| [`flotant/`](flotant/README.md) | de Wilde et al. (2021), FLOTANT OD 48 mm power-cable specimen with a clump weight, tow tests and forced-oscillation RAOs, cross-flow and in-line VIV with three published coefficient sets | Finite-EI cable, synchronisation and wake-oscillator VIV |
 
-The results are summarised as cases L3-H, L3-B, L3-C, L3-D, L3-W and L3-N in [`VALIDATION.md`](../../VALIDATION.md).
+The results are summarised as cases L3-H, L3-B, L3-C, L3-D, L3-W, L3-N and L3-F in [`VALIDATION.md`](../../VALIDATION.md).

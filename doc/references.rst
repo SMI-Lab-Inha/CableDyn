@@ -308,6 +308,14 @@ Verification and validation references
   Offshore and Arctic Engineering (OMAE2011)*, Volume 7: CFD and VIV; Offshore Geotechnics,
   511–522. https://doi.org/10.1115/OMAE2011-49820
 
+.. _ref-dewilde2021:
+
+- **de Wilde, J., Heijnsdijk, R. & de Ridder, E.-J. (2021).** *D5.5 – Report on VIV
+  (hydrodynamic) behaviour.* FLOTANT project deliverable 210430-FLT-WP5_D-5-5_V0 (MARIN report
+  30995-53-DWB), Maritime Research Institute Netherlands, 30 April 2021. EU Horizon 2020 grant
+  agreement 815289 (https://doi.org/10.3030/815289); public deliverable, no DOI.
+  https://flotantproject.eu/wp-content/uploads/2021/11/210430_FLT-D5.5_VIV_test_v0.pdf
+
 Comparison codes
 ----------------
 

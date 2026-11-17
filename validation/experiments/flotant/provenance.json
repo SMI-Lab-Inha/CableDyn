@@ -1,0 +1,434 @@
+{
+  "source": "de Wilde, Heijnsdijk & de Ridder (2021), D5.5 - Report on VIV (hydrodynamic) behaviour, FLOTANT deliverable 210430-FLT-WP5_D-5-5_V0, MARIN report 30995-53-DWB, 30 April 2021 (Tables 2-1, 2-2, 3-4, 6-1, 6-2; Secs. 2.3-2.5, 3.4, 4.4, 4.5, 5.3, 5.4, 6.3; Appendices 1-3); Ulveseter, Thorsen, Saevik & Larsen (2019), Applied Ocean Research 90, 101856 (Table 1, Sec. 4.1); Ulveseter, Thorsen, Saevik & Larsen (2018), Marine Structures 60, 241-260 (Table 3); Chaplin, Bearman, Huera Huarte & Pattenden (2005), Journal of Fluids and Structures 21(1), 3-24 (Eq. 4); Facchinetti, de Langre & Biolley (2004), Journal of Fluids and Structures 19(2), 123-140 (Secs. 2-3)",
+  "report_url": "https://flotantproject.eu/wp-content/uploads/2021/11/210430_FLT-D5.5_VIV_test_v0.pdf",
+  "report_sha256": "0b1f1b06f84c3d44fe0ecc2c114feb5bc82911a84d29411d3197ca935810511b",
+  "report_doi": "none (a public project deliverable, dissemination level PU); the project's CORDIS record lists it under Results; grant agreement 815289, https://doi.org/10.3030/815289",
+  "doi": [
+    "10.1016/j.apor.2019.101856",
+    "10.1016/j.marstruc.2018.04.001",
+    "10.1016/j.jfluidstructs.2005.04.010",
+    "10.1016/j.jfluidstructs.2003.12.004"
+  ],
+  "bibliographic_data": "the report's title page, document number and authors from the PDF; volumes, issues and pages of the articles from Crossref (api.crossref.org), 2026-11-16",
+  "data_used": "FEM input tables in air (Sec. 4.5) and in water (Sec. 5.4): 101 nodes, element labels, positions, lumped masses, weights, static tensions, EA, EI, accelerometer stations; RAOs at 5 and 10 mm, 200 kg, surge and sway, in air (Appendix 1, pp. 63-64) and in water (Appendix 2, pp. 67-68); A/D_rms = sigma/OD against Ur of the 40 tow tests at 200 kg, cross-flow (Y) and in line (X), at 1/2L, 3/4L and L (Appendix 3, pp. 70-72); test speeds and directions (Table 6-2); top and bottom tensions (Table 6-1); OD, length, mass (Table 2-1) and wet weight (Table 2-2); the tow-test high-pass of 3.5 rad/s (Table 3-4); f1 = 1.77 Hz for Ur (Sec. 6.3)",
+  "extraction": "extract_d55.py: the FEM tables from the PDF text; the RAO charts, vector graphics, as plotted coordinates mapped through the tick labels (axis residual at most 1.2e-3 rad/s and 1e-3), series named by the legend marker colour; the Appendix 3 charts, embedded 1386 x 867 raster images, calibrated on the grey grid lines (Ur residual 0.004), markers found by colour (40 points per chart, 39 for Y at L where an edge marker is clipped), each mapped to a tested speed within 0.0085 m/s",
+  "identified_structure": "from the forced-oscillation RAOs of the same specimen, not from the tow data: cable EI 1650 N m^2 and bending damping Bb 130 N m^2 s from the in-air surge RAOs at 5 and 10 mm (the tables' EI 3000 N m^2 matches the in-air resonance only with MARIN's empirical factor lambda 1.10, Sec. 4.5); in water the link chain and load cell with EI 100 N m^2 and the clump held laterally by K 32.5 kN/m and C 20 N s/m (a cantilever post of 0.3 m from a still anchor), from the surge and sway RAOs over 1.0-3.0 Hz (MARIN's table fixes the clump node and makes the chain rigid)",
+  "assumptions": "fresh water 1000 kg/m^3 (not stated; Table 2-2's 2.8 kg/m and 9.7 N/m at OD 48 mm imply it); the cable's diameter the OD, the other parts the diameter of the displaced volume of their table weight; the counterweight or clump as an axial spring k_ax 20 kN/m in series with the tables' EA, the unstretched lengths set for the tables' static tensions; uniform current over the whole line; Cd 1.2 and Ca 1 on the cable and the hardware; the clump's drag area 0.05 m^2 (not given); the accelerometers' axes normal to the cable, so the model's displacement takes the gravity term g theta/omega^2 the measurement holds",
+  "coefficients": {
+    "uls19": "Ulveseter et al. (2019), Table 1, fitted by them to the NDP riser in uniform flow (Sec. 4.1, Chh 1.5): Cd 1.2, CM 2, Cl 0.85, cF 0.144, dF 0.064; VIV ClX 0.75, alpha 0.15, Chh 1.5; blind here",
+    "b1": "the generic set of the Delta Flume riser case, nothing fitted to these tests: Cl 0.8, cF 0.18, dF 0.08, Cd 1.2; VIV ClX 0.85, alpha 0.15 (Ulveseter et al. 2018, Table 3); VIV AMPLITUDE Cv 0.8 with CdAmp = 1 + 2.3 s + 1.7 s^2, s = (A/D)/sqrt(2), at A/D 0-1.5 (Chaplin et al. 2005, Eq. 4); VIV DAMPING 0 0 1",
+    "wake": "Facchinetti et al. (2004): WAKE OSCILLATOR CL0 0.3, St 0.2, eps 0.3, A 12 (their values from rigid-cylinder lift and lock-in data in the literature), LINE TYPES Cl 0, Cd 1.2; cross-flow only"
+  },
+  "processing": "statistics over t > 20 s of 60 s runs; each station's displacement plus g theta/omega^2, high-passed at 3.5 rad/s, A/D_rms = sigma/OD; Ur = V/(OD f1), f1 1.77 Hz; r.m.s. log errors over the tests with Ur >= 3; release: the first tested Ur above the 1/2L cross-flow peak at which A/D_rms falls below 70 % of the peak; RAOs: harmonic fit over the last 10 s of 5/f + 25 s runs, scored over 1.4-2.0 Hz in air and 1.0-3.0 Hz in water",
+  "CableDyn_commit": "3d779fb (dev)",
+  "validation_date": "2026-11-17",
+  "executable_name": "cabledyn.exe",
+  "executable_sha256": "see summary.json",
+  "compiler": "GNU Fortran 16.2.0",
+  "build_type": "Release",
+  "platform": "Windows 11 x86-64",
+  "dt_s": 0.002,
+  "tmax_s": 60.0,
+  "statistics_after_s": 20.0,
+  "reproduction": "the default command, run into a new work directory with the executable of summary.json, reproduces response_comparison.csv, rao_comparison.csv and summary.json byte for byte",
+  "sensitivity": {
+    "note": "tow: A/D_rms at the given speeds [m/s] against response_comparison.csv; rao: r.m.s. log errors against summary.json; end_*: the full uls19 sweep with another lower end",
+    "dt_0p001": {
+      "uls19": {
+        "0.3": {
+          "AD_CF_1_2L": 0.4193,
+          "AD_CF_3_4L": 0.4192,
+          "AD_CF_L": 0.2864,
+          "AD_IL_1_2L": 0.0804,
+          "f_cf_1_2L_hz": 1.15
+        },
+        "0.45": {
+          "AD_CF_1_2L": 0.7556,
+          "AD_CF_3_4L": 0.7757,
+          "AD_CF_L": 0.5686,
+          "AD_IL_1_2L": 0.1154,
+          "f_cf_1_2L_hz": 1.275
+        },
+        "0.5": {
+          "AD_CF_1_2L": 0.7326,
+          "AD_CF_3_4L": 0.7724,
+          "AD_CF_L": 0.5994,
+          "AD_IL_1_2L": 0.1311,
+          "f_cf_1_2L_hz": 1.325
+        },
+        "0.6": {
+          "AD_CF_1_2L": 0.4879,
+          "AD_CF_3_4L": 0.2829,
+          "AD_CF_L": 0.3289,
+          "AD_IL_1_2L": 0.0903,
+          "f_cf_1_2L_hz": 1.825
+        },
+        "0.8": {
+          "AD_CF_1_2L": 0.7087,
+          "AD_CF_3_4L": 0.463,
+          "AD_CF_L": 0.1695,
+          "AD_IL_1_2L": 0.1238,
+          "f_cf_1_2L_hz": 2.0
+        }
+      },
+      "b1": {
+        "0.3": {
+          "AD_CF_1_2L": 0.4632,
+          "AD_CF_3_4L": 0.4779,
+          "AD_CF_L": 0.3493,
+          "AD_IL_1_2L": 0.0098,
+          "f_cf_1_2L_hz": 1.25
+        },
+        "0.45": {
+          "AD_CF_1_2L": 0.4392,
+          "AD_CF_3_4L": 0.4753,
+          "AD_CF_L": 0.383,
+          "AD_IL_1_2L": 0.0563,
+          "f_cf_1_2L_hz": 1.35
+        },
+        "0.5": {
+          "AD_CF_1_2L": 0.3244,
+          "AD_CF_3_4L": 0.185,
+          "AD_CF_L": 0.1455,
+          "AD_IL_1_2L": 0.0438,
+          "f_cf_1_2L_hz": 1.875
+        },
+        "0.6": {
+          "AD_CF_1_2L": 0.3886,
+          "AD_CF_3_4L": 0.2445,
+          "AD_CF_L": 0.1218,
+          "AD_IL_1_2L": 0.0525,
+          "f_cf_1_2L_hz": 1.95
+        },
+        "0.8": {
+          "AD_CF_1_2L": 0.4496,
+          "AD_CF_3_4L": 0.3261,
+          "AD_CF_L": 0.0623,
+          "AD_IL_1_2L": 0.0685,
+          "f_cf_1_2L_hz": 2.175
+        }
+      },
+      "wake": {
+        "0.3": {
+          "AD_CF_1_2L": 0.2552,
+          "AD_CF_3_4L": 0.2628,
+          "AD_CF_L": 0.19,
+          "AD_IL_1_2L": 0.0092,
+          "f_cf_1_2L_hz": 1.225
+        },
+        "0.45": {
+          "AD_CF_1_2L": 0.1707,
+          "AD_CF_3_4L": 0.0825,
+          "AD_CF_L": 0.0787,
+          "AD_IL_1_2L": 0.0037,
+          "f_cf_1_2L_hz": 1.825
+        },
+        "0.5": {
+          "AD_CF_1_2L": 0.2079,
+          "AD_CF_3_4L": 0.1136,
+          "AD_CF_L": 0.0665,
+          "AD_IL_1_2L": 0.0049,
+          "f_cf_1_2L_hz": 1.875
+        },
+        "0.6": {
+          "AD_CF_1_2L": 0.2139,
+          "AD_CF_3_4L": 0.1387,
+          "AD_CF_L": 0.0176,
+          "AD_IL_1_2L": 0.0047,
+          "f_cf_1_2L_hz": 2.0
+        },
+        "0.8": {
+          "AD_CF_1_2L": 0.0682,
+          "AD_CF_3_4L": 0.0797,
+          "AD_CF_L": 0.1708,
+          "AD_IL_1_2L": 0.0015,
+          "f_cf_1_2L_hz": 3.1
+        }
+      }
+    },
+    "refine_2": {
+      "uls19": {
+        "0.3": {
+          "AD_CF_1_2L": 0.4177,
+          "AD_CF_3_4L": 0.4174,
+          "AD_CF_L": 0.285,
+          "AD_IL_1_2L": 0.0804,
+          "f_cf_1_2L_hz": 1.15
+        },
+        "0.45": {
+          "AD_CF_1_2L": 0.7558,
+          "AD_CF_3_4L": 0.7763,
+          "AD_CF_L": 0.5696,
+          "AD_IL_1_2L": 0.1166,
+          "f_cf_1_2L_hz": 1.25
+        },
+        "0.5": {
+          "AD_CF_1_2L": 0.7366,
+          "AD_CF_3_4L": 0.7766,
+          "AD_CF_L": 0.6023,
+          "AD_IL_1_2L": 0.1313,
+          "f_cf_1_2L_hz": 1.325
+        },
+        "0.6": {
+          "AD_CF_1_2L": 0.485,
+          "AD_CF_3_4L": 0.2813,
+          "AD_CF_L": 0.3343,
+          "AD_IL_1_2L": 0.0906,
+          "f_cf_1_2L_hz": 1.825
+        },
+        "0.8": {
+          "AD_CF_1_2L": 0.7096,
+          "AD_CF_3_4L": 0.4626,
+          "AD_CF_L": 0.1757,
+          "AD_IL_1_2L": 0.1243,
+          "f_cf_1_2L_hz": 2.0
+        }
+      },
+      "b1": {
+        "0.3": {
+          "AD_CF_1_2L": 0.4635,
+          "AD_CF_3_4L": 0.4779,
+          "AD_CF_L": 0.3488,
+          "AD_IL_1_2L": 0.0101,
+          "f_cf_1_2L_hz": 1.25
+        },
+        "0.45": {
+          "AD_CF_1_2L": 0.4452,
+          "AD_CF_3_4L": 0.4814,
+          "AD_CF_L": 0.3871,
+          "AD_IL_1_2L": 0.0542,
+          "f_cf_1_2L_hz": 1.35
+        },
+        "0.5": {
+          "AD_CF_1_2L": 0.3233,
+          "AD_CF_3_4L": 0.1835,
+          "AD_CF_L": 0.1465,
+          "AD_IL_1_2L": 0.0443,
+          "f_cf_1_2L_hz": 1.85
+        },
+        "0.6": {
+          "AD_CF_1_2L": 0.3893,
+          "AD_CF_3_4L": 0.2447,
+          "AD_CF_L": 0.1238,
+          "AD_IL_1_2L": 0.0524,
+          "f_cf_1_2L_hz": 1.95
+        },
+        "0.8": {
+          "AD_CF_1_2L": 0.452,
+          "AD_CF_3_4L": 0.3276,
+          "AD_CF_L": 0.0633,
+          "AD_IL_1_2L": 0.0679,
+          "f_cf_1_2L_hz": 2.175
+        }
+      },
+      "wake": {
+        "0.3": {
+          "AD_CF_1_2L": 0.2553,
+          "AD_CF_3_4L": 0.2628,
+          "AD_CF_L": 0.1901,
+          "AD_IL_1_2L": 0.0092,
+          "f_cf_1_2L_hz": 1.225
+        },
+        "0.45": {
+          "AD_CF_1_2L": 0.1707,
+          "AD_CF_3_4L": 0.0825,
+          "AD_CF_L": 0.0787,
+          "AD_IL_1_2L": 0.0037,
+          "f_cf_1_2L_hz": 1.825
+        },
+        "0.5": {
+          "AD_CF_1_2L": 0.208,
+          "AD_CF_3_4L": 0.1137,
+          "AD_CF_L": 0.0666,
+          "AD_IL_1_2L": 0.0049,
+          "f_cf_1_2L_hz": 1.875
+        },
+        "0.6": {
+          "AD_CF_1_2L": 0.2139,
+          "AD_CF_3_4L": 0.1387,
+          "AD_CF_L": 0.0175,
+          "AD_IL_1_2L": 0.0047,
+          "f_cf_1_2L_hz": 2.0
+        },
+        "0.8": {
+          "AD_CF_1_2L": 0.0683,
+          "AD_CF_3_4L": 0.0798,
+          "AD_CF_L": 0.1714,
+          "AD_IL_1_2L": 0.0015,
+          "f_cf_1_2L_hz": 3.1
+        }
+      }
+    },
+    "tmax_120": {
+      "uls19": {
+        "0.3": {
+          "AD_CF_1_2L": 0.4195,
+          "AD_CF_3_4L": 0.4194,
+          "AD_CF_L": 0.2864,
+          "AD_IL_1_2L": 0.0799,
+          "f_cf_1_2L_hz": 1.14
+        },
+        "0.45": {
+          "AD_CF_1_2L": 0.7577,
+          "AD_CF_3_4L": 0.7789,
+          "AD_CF_L": 0.5727,
+          "AD_IL_1_2L": 0.1154,
+          "f_cf_1_2L_hz": 1.26
+        },
+        "0.5": {
+          "AD_CF_1_2L": 0.7316,
+          "AD_CF_3_4L": 0.771,
+          "AD_CF_L": 0.5972,
+          "AD_IL_1_2L": 0.1339,
+          "f_cf_1_2L_hz": 1.32
+        },
+        "0.6": {
+          "AD_CF_1_2L": 0.4857,
+          "AD_CF_3_4L": 0.2802,
+          "AD_CF_L": 0.3346,
+          "AD_IL_1_2L": 0.0906,
+          "f_cf_1_2L_hz": 1.82
+        },
+        "0.8": {
+          "AD_CF_1_2L": 0.7094,
+          "AD_CF_3_4L": 0.4634,
+          "AD_CF_L": 0.174,
+          "AD_IL_1_2L": 0.1247,
+          "f_cf_1_2L_hz": 1.99
+        }
+      },
+      "b1": {
+        "0.3": {
+          "AD_CF_1_2L": 0.4638,
+          "AD_CF_3_4L": 0.4782,
+          "AD_CF_L": 0.349,
+          "AD_IL_1_2L": 0.0101,
+          "f_cf_1_2L_hz": 1.25
+        },
+        "0.45": {
+          "AD_CF_1_2L": 0.4438,
+          "AD_CF_3_4L": 0.48,
+          "AD_CF_L": 0.3862,
+          "AD_IL_1_2L": 0.0539,
+          "f_cf_1_2L_hz": 1.35
+        },
+        "0.5": {
+          "AD_CF_1_2L": 0.3231,
+          "AD_CF_3_4L": 0.184,
+          "AD_CF_L": 0.147,
+          "AD_IL_1_2L": 0.0444,
+          "f_cf_1_2L_hz": 1.86
+        },
+        "0.6": {
+          "AD_CF_1_2L": 0.3903,
+          "AD_CF_3_4L": 0.2442,
+          "AD_CF_L": 0.1229,
+          "AD_IL_1_2L": 0.0525,
+          "f_cf_1_2L_hz": 1.94
+        },
+        "0.8": {
+          "AD_CF_1_2L": 0.4516,
+          "AD_CF_3_4L": 0.3274,
+          "AD_CF_L": 0.0632,
+          "AD_IL_1_2L": 0.0693,
+          "f_cf_1_2L_hz": 2.18
+        }
+      },
+      "wake": {
+        "0.3": {
+          "AD_CF_1_2L": 0.2552,
+          "AD_CF_3_4L": 0.2626,
+          "AD_CF_L": 0.1898,
+          "AD_IL_1_2L": 0.0092,
+          "f_cf_1_2L_hz": 1.23
+        },
+        "0.45": {
+          "AD_CF_1_2L": 0.1707,
+          "AD_CF_3_4L": 0.0824,
+          "AD_CF_L": 0.0787,
+          "AD_IL_1_2L": 0.0037,
+          "f_cf_1_2L_hz": 1.83
+        },
+        "0.5": {
+          "AD_CF_1_2L": 0.208,
+          "AD_CF_3_4L": 0.1137,
+          "AD_CF_L": 0.0665,
+          "AD_IL_1_2L": 0.0049,
+          "f_cf_1_2L_hz": 1.88
+        },
+        "0.6": {
+          "AD_CF_1_2L": 0.2138,
+          "AD_CF_3_4L": 0.1387,
+          "AD_CF_L": 0.0175,
+          "AD_IL_1_2L": 0.0047,
+          "f_cf_1_2L_hz": 2.0
+        },
+        "0.8": {
+          "AD_CF_1_2L": 0.0682,
+          "AD_CF_3_4L": 0.0797,
+          "AD_CF_L": 0.1708,
+          "AD_IL_1_2L": 0.0015,
+          "f_cf_1_2L_hz": 3.11
+        }
+      }
+    },
+    "rao_refine_2": {
+      "air_table_5mm": {
+        "surge": 0.2272,
+        "sway": 0.2779
+      },
+      "air_table_10mm": {
+        "surge": 0.2086,
+        "sway": 0.23
+      },
+      "water_free_5mm": {
+        "surge": 1.1745,
+        "sway": 1.2077
+      },
+      "water_identified_5mm": {
+        "surge": 0.4592,
+        "sway": 0.744
+      },
+      "water_table_5mm": {
+        "surge": 1.1864,
+        "sway": 1.2157
+      }
+    },
+    "rao_dt_0p001": {
+      "air_table_5mm": {
+        "surge": 0.227,
+        "sway": 0.2771
+      },
+      "air_table_10mm": {
+        "surge": 0.2088,
+        "sway": 0.2295
+      },
+      "water_free_5mm": {
+        "surge": 1.1743,
+        "sway": 1.2076
+      },
+      "water_identified_5mm": {
+        "surge": 0.4587,
+        "sway": 0.743
+      },
+      "water_table_5mm": {
+        "surge": 1.1863,
+        "sway": 1.2157
+      }
+    },
+    "end_table_uls19": {
+      "cf_rms_log_error_all_stations": 0.7208,
+      "il_rms_log_error_all_stations": 0.9264,
+      "cf_1_2L_peak_AD": 0.8047,
+      "cf_1_2L_peak_Ur": 5.591,
+      "cf_1_2L_release_Ur": 8.828
+    },
+    "end_free_uls19": {
+      "cf_rms_log_error_all_stations": 0.6921,
+      "il_rms_log_error_all_stations": 0.942,
+      "cf_1_2L_peak_AD": 0.8106,
+      "cf_1_2L_peak_Ur": 5.591,
+      "cf_1_2L_release_Ur": 9.122
+    }
+  }
+}
