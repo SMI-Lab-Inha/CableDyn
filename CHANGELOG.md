@@ -190,6 +190,18 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- The side a finite-EI line leaves its vertical plane to in an in-plane current past the
+  pitchfork (the grounded run turned sideways on the seabed) followed the line's heading, not
+  the line. The symmetry-breaking cross-flow was taken from the line's local frame, which is
+  the identity for any chord without a y component, so a chord along -x took it at +y (to its
+  right) and a chord a round-off away from -x at -y (to its left), and a deck rotated by 180
+  degrees about the vertical left to the same global side as the original. The cross-flow now
+  points to the left of the horizontal chord from the anchor (End B) to the fairlead (End A)
+  whatever its heading (+y for a vertical chord, as before), so the rotated deck reaches the
+  rotated equilibrium. A deck whose chord points exactly along -x and that reaches this branch
+  now leaves to the other side: the mirror image, with the same end forces. The statics matrix
+  checks the side of the deck and of its 180-degree rotation, and that a cross current of the
+  deck's own picks the side (mirror twins to 1e-6). The theory page states the rule.
 - The statics of a finite-EI line through the free surface could fail at isolated currents:
   each Gauss point's hydrodynamic load switched on and off at the surface, so the residual
   jumped and an equilibrium with a point at the waterline had no root (a light lazy-wave cable,
