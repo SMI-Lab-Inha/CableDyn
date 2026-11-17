@@ -1,0 +1,32 @@
+{
+  "source": "Fu, Wang, Baarholm, Wu & Larsen (2014), Features of vortex-induced vibration in oscillatory flow, Journal of Offshore Mechanics and Arctic Engineering 136(1), 011801 (Tables 1-3; Secs. 2, 3.1, 4.3, 4.6; Eqs. 19-20; Figs. 15-17 and their captions); Ulveseter, Thorsen, Saevik & Larsen (2019), Applied Ocean Research 90, 101856 (Table 1); Ulveseter, Thorsen, Saevik & Larsen (2018), Marine Structures 60, 241-260 (Table 3); Chaplin, Bearman, Huera Huarte & Pattenden (2005), Journal of Fluids and Structures 21(1), 3-24 (Eq. 4); Facchinetti, de Langre & Biolley (2004), Journal of Fluids and Structures 19(2), 123-140 (Secs. 2-3)",
+  "doi": [
+    "10.1115/1.4025759",
+    "10.1016/j.apor.2019.101856",
+    "10.1016/j.marstruc.2018.04.001",
+    "10.1016/j.jfluidstructs.2005.04.010",
+    "10.1016/j.jfluidstructs.2003.12.004"
+  ],
+  "bibliographic_data": "Fu et al. (2014): authors, title and DOI from the article's first page, journal, volume, article number and month from its page footers, the issue from the publisher's PDF address; the other articles as in the FLOTANT case",
+  "data_used": "the cylinder (Table 1: L 4 m, D 0.024 m, 0.69 kg/m, EI 10.5 N m^2, EA 6.67e5 N, pretension 500 N, f1 2.68 Hz in water); the cross-flow stations (Table 2: 7 at 0.5 m spacing); the motion amplitude A_m 0.68 m, the largest of Table 3 (KC 178); the periods 16.5, 10.2 and 8.45 s of the captions of Figs. 15-17; A/D against U_R on the acceleration and deceleration paths at CF4 (Figs. 15-17); the lock-in shares for KC > 100, about 17, 34 and 50 % of the half period, and their definition, the envelope above sqrt(2)/2 of its maximum (Sec. 4.6); C_a 1 of their natural frequencies (Eq. 19)",
+  "extraction": "extract_fu2014.py: Figs. 15-17 are embedded raster images (1503 px wide); each is calibrated on its plot frame (the outermost dark lines spanning the plot, at the axis limits printed at its corners); the inset, legend and title box and the tick marks are masked; each line is followed column by column by colour (black solid acceleration, red dashed deceleration), its centre the median row of its run, arrowhead columns bridged linearly; written at U_R steps of 0.25. The traced gaps 0.164 (U_R 3.5, Fig. 16) and 0.222 (U_R 4, Fig. 17) against the figures' annotations 0.15D and 0.2D",
+  "assumptions": "fresh water 1000 kg/m^3; the cylinder 2 m below the surface (not stated) in 4 m of water; pinned ends (universal joints); C_d 1.2 and C_a 1; no structural damping (not reported); CF4 at mid-span (the fourth of seven stations at 0.5 m spacing); a one-period cosine ramp of the motion; the measured A/D, reconstructed by the article from strain with constant-tension modes, compared with the model's displacement",
+  "coefficients": {
+    "uls19": "Ulveseter et al. (2019), Table 1, fitted by them to the NDP riser in uniform flow (Sec. 4.1, Chh 1.5): Cd 1.2, CM 2, Cl 0.85, cF 0.144, dF 0.064; VIV ClX 0.75, alpha 0.15, Chh 1.5; blind here",
+    "b1": "the generic set of the Delta Flume case, nothing fitted to these tests: Cl 0.8, cF 0.18, dF 0.08, Cd 1.2; VIV ClX 0.85, alpha 0.15 (Ulveseter et al. 2018, Table 3); VIV AMPLITUDE Cv 0.8 with CdAmp = 1 + 2.3 s + 1.7 s^2, s = (A/D)/sqrt(2), at A/D 0-1.5 (Chaplin et al. 2005, Eq. 4); VIV DAMPING 0 0 1",
+    "wake": "Facchinetti et al. (2004): WAKE OSCILLATOR CL0 0.3, St 0.2, eps 0.3, A 12, LINE TYPES Cl 0, Cd 1.2; cross-flow only",
+    "viv_frame": "VIV FRAME Tf 0.2 s on every set in the primary runs (the cylinder moves through still water); none, 0.1 and 0.3 s as sensitivity"
+  },
+  "processing": "the vertical (cross-flow) displacement at mid-span, band-passed 0.5-25 Hz by FFT, Hilbert envelope over D; U_R(t) = |V(t)|/(f1 D) of the prescribed motion; the acceleration path where |V| rises; the envelope averaged in U_R bins of +-0.125 at the grid points over the half-cycles from 2 periods to the end less half a period (13 half-cycles); scores over the measured grid points of both paths: r.m.s. and mean A/D error, the mean gap deceleration less acceleration where both paths exist, the largest A/D; the lock-in share of each half-cycle above sqrt(2)/2 of its maximum, averaged",
+  "CableDyn_commit": "a244dfc (dev)",
+  "validation_date": "2026-11-17",
+  "executable_name": "cabledyn.exe",
+  "executable_sha256": "see summary.json",
+  "compiler": "GNU Fortran 16.2.0",
+  "build_type": "Release",
+  "platform": "Windows 11 x86-64",
+  "dt_s": 0.001,
+  "segments": 40,
+  "cycles_after_ramp": 8,
+  "reproduction": "the default command, run into a new work directory with the executable of summary.json, reproduces response_comparison.csv and summary.json byte for byte"
+}

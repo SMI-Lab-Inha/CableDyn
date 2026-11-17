@@ -272,6 +272,12 @@ Verification and validation references
   catenary riser from vortex-induced vibration caused by vessel motions. *Marine Structures*
   **39**, 131–156. https://doi.org/10.1016/j.marstruc.2014.07.002
 
+.. _ref-fu2014:
+
+- **Fu, S., Wang, J., Baarholm, R., Wu, J. & Larsen, C. M. (2014).** Features of vortex-induced
+  vibration in oscillatory flow. *Journal of Offshore Mechanics and Arctic Engineering*
+  **136**\ (1), 011801. https://doi.org/10.1115/1.4025759
+
 .. _ref-davies2026:
 
 - **Davies, R., Lekkala, M. R., Michaloliakos, A., Wong, W.-Y., Hall, M., Vakakis, A. & Zuo, L.

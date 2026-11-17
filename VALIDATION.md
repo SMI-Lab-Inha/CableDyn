@@ -88,6 +88,7 @@ article's methods, are compared in
 | **L3-Wh** | SJTU steel catenary riser, heave-induced cross-flow VIV in still water (measured top motion, 5.96 s) | measured r.m.s. strain (25 stations, band-passed 0.67–50 Hz) and dominant frequency | no `VIV FRAME`: frequency 1.019 Hz vs close to 1 Hz; max r.m.s. strain +20.8%, station mean +33%, lower/upper half 1.71/0.93 (Thorsen et al. 2017: +5.6%, +8.7%, 1.44/0.71); `VIV FRAME` `Tf` 0.35–1 s: two branches, 1.01–1.02 Hz (max +7 to +13%) or 0.88–0.89 Hz (max −2.8 to −4.2%), `Tf` 0.5 s changes branch at dt/2 | published coefficient set, no fitted parameter; heave period about 6 VIV periods, below the `VIV FRAME` scale separation | Pass measured |
 | **L3-N** | NDP 38 m high-mode riser in uniform flow, 0.3–2.4 m/s (22 tests), cross-flow VIV | measured maximum r.m.s. cross-flow strain, dominant frequency, spatial-mean σ/D | strain r.m.s. log error: Ulveseter et al. (2019) set 0.178, Andersen et al. (2024b) 0.186, generic set 0.277, Thorsen et al. (2016) 0.363 (their own simulation 0.187); f D/U 0.145 / 0.134 / 0.192 / 0.193 vs 0.143 measured | generic set blind; the other sets fitted by their authors to NDP tests (implementation check) | Pass measured |
 | **L3-F** | FLOTANT OD 48 mm power-cable specimen with a 200 kg clump, tow tests at 0.025–1.0 m/s (40 tests), cross-flow and in-line VIV | measured A/D_rms (σ/OD) at 1/2L, 3/4L and L (de Wilde et al. 2021, App. 3) | CF r.m.s. log error (Ur ≥ 3): Ulveseter et al. (2019) set 0.731, generic set 0.594, wake oscillator 1.208; first peak at 1/2L 0.755 / 0.483 / 0.296 vs 0.776 measured; release Ur 7.06 / 5.89 / 5.30 vs 5.88 | published VIV sets, none fitted to these tests; structure identified from the specimen's in-air and in-water RAOs | Pass measured |
+| **L3-O** | SJTU 4 m flexible cylinder moved harmonically through still water, KC 178 at U_R,max 4, 6.5 and 7.9, cross-flow VIV | measured A/D on the acceleration and deceleration paths at mid-span (Fu et al. 2014, Figs. 15–17); lock-in shares 17/34/50 % | A/D r.m.s. error: wake oscillator 0.088 / 0.177 / 0.132, generic set 0.138 / 0.339 / 0.345, Ulveseter et al. (2019) set 0.079 / 0.340 / 0.338; largest A/D at U_R,max 4: 0.280 / 0.472 / 0.124 vs 0.286; at 6.5 and 7.9 every set holds the lock-in while the flow slows: mean deceleration-acceleration gap 0.25–0.50 vs 0.09–0.12 measured | published VIV sets, none fitted to these tests; `VIV FRAME` Tf 0.2 s (sensitivity none, 0.1, 0.3 s) | Pass measured |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
 | **L4-1** | Coupled platform + mooring | synthetic reference | bit-for-bit | — | Pass |
 | **L4-1b** | VolturnUS-S coupled platform + power cable | OpenFAST v5.0.0 (CompMooring 5 vs 3) | platform DOFs <0.6% (3-seed DLC-1.1); fairlead and anchor <0.001% static | <3% platform | Pass |
@@ -449,6 +450,27 @@ the tow tests it predicts). Inputs, reduction scripts, results, and source prove
   same set scores 0.721 and 0.692 but releases at Ur 8.83 and 9.12 and misses the in-water RAOs.
   Half the time step, two elements per table element and 120 s runs change no A/D_rms by more
   than 0.006 at five speeds; the default run reproduces the committed record byte for byte.
+
+- **L3-O SJTU flexible cylinder in oscillatory flow, cross-flow VIV hysteresis**
+  ([Fu et al., 2014](https://cabledyn.readthedocs.io/en/latest/references.html#ref-fu2014)):
+  the 4 m cylinder (D 24 mm, pretension 500 N) moved across its axis through still water, A_m
+  0.68 m (KC 178) at periods 16.5, 10.2 and 8.45 s (U_R,max 4, 6.5 and 7.9), so the relative flow
+  reverses twice per cycle. The cross-flow A/D at mid-span is compared against the instantaneous
+  U_R on the acceleration and deceleration paths with the measured paths of Figs. 15–17 (read from
+  the raster figures; the traced gaps match the figures' annotations 0.15D and 0.2D), and the share
+  of each half-cycle above √2/2 of its peak with the article's lock-in shares. Three published sets,
+  none fitted to these tests, each with a `VIV FRAME` row (Tf 0.2 s), without which the wake
+  oscillator does not shed for a cylinder moving through still water. Every run converges through
+  the flow reversals. At U_R,max 4 the wake oscillator gives the measured largest A/D (0.280
+  against 0.286), the generic set is 65% high and the Ulveseter et al. (2019) set barely responds.
+  At U_R,max 6.5 and 7.9 every set holds the lock-in while the flow slows: the deceleration path
+  stays near its peak, the mean gap between the paths is 2–5 times the measured one and the largest
+  A/D 1.3–2.3 times the measured; the wake oscillator comes closest (A/D r.m.s. error 0.18 and
+  0.13). Without the row the synchronisation sets respond less (the generic set 0.034 at U_R,max 4,
+  the best of any run) but keep the hold; with Tf 0.1 and 0.3 s their largest A/D moves by up to
+  21%, the wake oscillator's by up to 11%. Half the time step and 80 elements change the largest A/D
+  by at most 0.1% (generic set, wake oscillator) and 4.1% (Ulveseter et al. set); the default run
+  reproduces the committed record byte for byte.
 
 ## L4 coupled OpenFAST
 
