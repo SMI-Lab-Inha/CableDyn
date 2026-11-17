@@ -1,0 +1,1013 @@
+{
+  "sets": {
+    "uls19": "Ulveseter et al. (2019), Table 1, Chh 1.5",
+    "b1": "generic set (Delta Flume case)",
+    "wake": "Facchinetti et al. (2004) wake oscillator",
+    "none": "no VIV, C_d 1.2"
+  },
+  "model": {
+    "length_m": 5.36,
+    "diameter_m": 0.056,
+    "EI_Nm2": 1.3,
+    "EA_N": 790000.0,
+    "mass_kg_per_m": {
+      "1.12": 2.75873,
+      "1.84": 4.59422
+    },
+    "submerged_weight_N_per_m": {
+      "1.12": 2.9,
+      "1.84": 20.9
+    },
+    "rayleigh_damping": {
+      "zeta": 0.03,
+      "f1_hz": 0.3,
+      "f2_hz": 3.0
+    },
+    "floor_friction": 0.5,
+    "segments": 54,
+    "dt_s": 0.0025,
+    "tmax_s": 110.0,
+    "statistics_from_s": 30.0,
+    "current_ramp_s": 10.0,
+    "welch_segment_s": 20.0,
+    "probe_elevations_m": {
+      "upper_a": -0.57,
+      "upper_b": -1.186,
+      "lower": -1.582,
+      "mid_depth": -1.0
+    }
+  },
+  "still_water_top_tension_N": {
+    "1.12": {
+      "model": 15.0821,
+      "measured_fig10": 13.3836,
+      "measured_fig13": 11.4975
+    },
+    "1.84": {
+      "model": 81.1893,
+      "measured_fig10": 59.0952,
+      "measured_fig13": 61.7794
+    }
+  },
+  "scores": {
+    "uls19_m1.12_pos": {
+      "T_rms_rel_error": 0.178227,
+      "T_mean_rel_error": -0.129766,
+      "T_points": 13,
+      "dT_rms_error_N": 14.5405,
+      "dT_mean_error_N": -11.2207,
+      "sd_T_ratio_median": 0.80798,
+      "sd_T_points": 12,
+      "f_upper_acc_peak_at_harmonic": 5,
+      "f_upper_model_fd_over_U_median": 0.121333,
+      "f_upper_measured_fd_over_U_median": 0.111253,
+      "f_upper_measured_points": 6,
+      "f_upper_ratio_to_nearest_measured_median": 1.10624,
+      "f_upper_within_10pct": 1,
+      "f_upper_points": 5,
+      "f_lower_acc_peak_at_harmonic": 1,
+      "f_lower_model_fd_over_U_median": 0.121333,
+      "f_lower_measured_fd_over_U_median": 0.09,
+      "f_lower_measured_points": 11,
+      "f_lower_ratio_to_nearest_measured_median": 1.37083,
+      "f_lower_within_10pct": 0,
+      "f_lower_points": 11,
+      "f_span_spread_median": 0.0
+    },
+    "uls19_m1.12_neg": {
+      "T_rms_rel_error": 0.322249,
+      "T_mean_rel_error": 0.105473,
+      "T_points": 13,
+      "dT_rms_error_N": 6.87095,
+      "dT_mean_error_N": -5.07762,
+      "sd_T_ratio_median": 1.42526,
+      "sd_T_points": 11,
+      "psi_rms_error_deg": 14.9851,
+      "psi_mean_error_deg": 13.0682,
+      "cd_eq9_model_median": 0.901194,
+      "cd_eq9_measured_median": 1.83619,
+      "f_mid_acc_peak_at_harmonic": 5,
+      "f_mid_model_fd_over_U_median": 0.0896,
+      "f_mid_measured_fd_over_U_median": 0.06349,
+      "f_mid_measured_points": 13,
+      "f_mid_model_fd_over_Un_median": 0.183805,
+      "f_mid_measured_fd_over_Un_median": 0.210911,
+      "f_mid_ratio_to_nearest_measured_median": 1.4667,
+      "f_mid_within_10pct": 0,
+      "f_mid_points": 10,
+      "f_span_spread_median": 1.72414
+    },
+    "uls19_m1.84_pos": {
+      "T_rms_rel_error": 0.150491,
+      "T_mean_rel_error": 0.126341,
+      "T_points": 12,
+      "dT_rms_error_N": 12.2279,
+      "dT_mean_error_N": -11.2468,
+      "sd_T_ratio_median": 1.14421,
+      "sd_T_points": 11,
+      "f_upper_acc_peak_at_harmonic": 3,
+      "f_upper_model_fd_over_U_median": 0.121333,
+      "f_upper_measured_fd_over_U_median": 0.1112,
+      "f_upper_measured_points": 23,
+      "f_upper_ratio_to_nearest_measured_median": 1.06873,
+      "f_upper_within_10pct": 7,
+      "f_upper_points": 12,
+      "f_lower_acc_peak_at_harmonic": 3,
+      "f_lower_model_fd_over_U_median": 0.121333,
+      "f_lower_measured_fd_over_U_median": 0.105272,
+      "f_lower_measured_points": 18,
+      "f_lower_ratio_to_nearest_measured_median": 1.07817,
+      "f_lower_within_10pct": 6,
+      "f_lower_points": 12,
+      "f_span_spread_median": 0.0
+    },
+    "uls19_m1.84_neg": {
+      "T_rms_rel_error": 0.296105,
+      "T_mean_rel_error": 0.199745,
+      "T_points": 13,
+      "dT_rms_error_N": 14.3201,
+      "dT_mean_error_N": -9.74128,
+      "sd_T_ratio_median": 1.61341,
+      "sd_T_points": 12,
+      "psi_rms_error_deg": 10.1491,
+      "psi_mean_error_deg": 4.20246,
+      "cd_eq9_model_median": 1.35935,
+      "cd_eq9_measured_median": 2.4706,
+      "f_mid_acc_peak_at_harmonic": 2,
+      "f_mid_model_fd_over_U_median": 0.102667,
+      "f_mid_measured_fd_over_U_median": 0.0589018,
+      "f_mid_measured_points": 25,
+      "f_mid_model_fd_over_Un_median": 0.129569,
+      "f_mid_measured_fd_over_Un_median": 0.119125,
+      "f_mid_ratio_to_nearest_measured_median": 1.32031,
+      "f_mid_within_10pct": 4,
+      "f_mid_points": 13,
+      "f_span_spread_median": 0.0
+    },
+    "b1_m1.12_pos": {
+      "T_rms_rel_error": 0.0982925,
+      "T_mean_rel_error": 0.0759066,
+      "T_points": 13,
+      "dT_rms_error_N": 1.75874,
+      "dT_mean_error_N": 0.602227,
+      "sd_T_ratio_median": 0.589627,
+      "sd_T_points": 12,
+      "f_upper_acc_peak_at_harmonic": 0,
+      "f_upper_model_fd_over_U_median": 0.137846,
+      "f_upper_measured_fd_over_U_median": 0.111253,
+      "f_upper_measured_points": 6,
+      "f_upper_ratio_to_nearest_measured_median": 1.24008,
+      "f_upper_within_10pct": 0,
+      "f_upper_points": 5,
+      "f_lower_acc_peak_at_harmonic": 0,
+      "f_lower_model_fd_over_U_median": 0.137846,
+      "f_lower_measured_fd_over_U_median": 0.09,
+      "f_lower_measured_points": 11,
+      "f_lower_ratio_to_nearest_measured_median": 1.51607,
+      "f_lower_within_10pct": 0,
+      "f_lower_points": 11,
+      "f_span_spread_median": 0.0
+    },
+    "b1_m1.12_neg": {
+      "T_rms_rel_error": 0.301008,
+      "T_mean_rel_error": 0.277109,
+      "T_points": 13,
+      "dT_rms_error_N": 3.88365,
+      "dT_mean_error_N": 1.95593,
+      "sd_T_ratio_median": 1.22063,
+      "sd_T_points": 11,
+      "psi_rms_error_deg": 14.7002,
+      "psi_mean_error_deg": 10.6771,
+      "cd_eq9_model_median": 0.937718,
+      "cd_eq9_measured_median": 1.83619,
+      "f_mid_acc_peak_at_harmonic": 2,
+      "f_mid_model_fd_over_U_median": 0.128,
+      "f_mid_measured_fd_over_U_median": 0.06349,
+      "f_mid_measured_points": 13,
+      "f_mid_model_fd_over_Un_median": 0.261949,
+      "f_mid_measured_fd_over_Un_median": 0.210911,
+      "f_mid_ratio_to_nearest_measured_median": 1.83987,
+      "f_mid_within_10pct": 0,
+      "f_mid_points": 10,
+      "f_span_spread_median": 0.590909
+    },
+    "b1_m1.84_pos": {
+      "T_rms_rel_error": 0.23847,
+      "T_mean_rel_error": 0.236845,
+      "T_points": 12,
+      "dT_rms_error_N": 4.92599,
+      "dT_mean_error_N": 1.829,
+      "sd_T_ratio_median": 0.686568,
+      "sd_T_points": 11,
+      "f_upper_acc_peak_at_harmonic": 0,
+      "f_upper_model_fd_over_U_median": 0.137455,
+      "f_upper_measured_fd_over_U_median": 0.1112,
+      "f_upper_measured_points": 23,
+      "f_upper_ratio_to_nearest_measured_median": 1.2527,
+      "f_upper_within_10pct": 0,
+      "f_upper_points": 12,
+      "f_lower_acc_peak_at_harmonic": 1,
+      "f_lower_model_fd_over_U_median": 0.137455,
+      "f_lower_measured_fd_over_U_median": 0.105272,
+      "f_lower_measured_points": 18,
+      "f_lower_ratio_to_nearest_measured_median": 1.279,
+      "f_lower_within_10pct": 1,
+      "f_lower_points": 12,
+      "f_span_spread_median": 0.0
+    },
+    "b1_m1.84_neg": {
+      "T_rms_rel_error": 0.24774,
+      "T_mean_rel_error": 0.17449,
+      "T_points": 13,
+      "dT_rms_error_N": 13.745,
+      "dT_mean_error_N": -10.5128,
+      "sd_T_ratio_median": 1.20507,
+      "sd_T_points": 12,
+      "psi_rms_error_deg": 4.97044,
+      "psi_mean_error_deg": -2.68136,
+      "cd_eq9_model_median": 2.55351,
+      "cd_eq9_measured_median": 2.4706,
+      "f_mid_acc_peak_at_harmonic": 0,
+      "f_mid_model_fd_over_U_median": 0.098,
+      "f_mid_measured_fd_over_U_median": 0.0589018,
+      "f_mid_measured_points": 25,
+      "f_mid_model_fd_over_Un_median": 0.165005,
+      "f_mid_measured_fd_over_Un_median": 0.119125,
+      "f_mid_ratio_to_nearest_measured_median": 1.45267,
+      "f_mid_within_10pct": 3,
+      "f_mid_points": 13,
+      "f_span_spread_median": 0.0
+    },
+    "wake_m1.12_pos": {
+      "T_rms_rel_error": 0.23445,
+      "T_mean_rel_error": -0.184807,
+      "T_points": 13,
+      "dT_rms_error_N": 18.8472,
+      "dT_mean_error_N": -14.5683,
+      "sd_T_ratio_median": 0.188049,
+      "sd_T_points": 12,
+      "f_upper_acc_peak_at_harmonic": 0,
+      "f_upper_model_fd_over_U_median": 0.172667,
+      "f_upper_measured_fd_over_U_median": 0.111253,
+      "f_upper_measured_points": 6,
+      "f_upper_ratio_to_nearest_measured_median": 1.30584,
+      "f_upper_within_10pct": 1,
+      "f_upper_points": 5,
+      "f_lower_acc_peak_at_harmonic": 1,
+      "f_lower_model_fd_over_U_median": 0.168,
+      "f_lower_measured_fd_over_U_median": 0.09,
+      "f_lower_measured_points": 11,
+      "f_lower_ratio_to_nearest_measured_median": 1.82537,
+      "f_lower_within_10pct": 0,
+      "f_lower_points": 11,
+      "f_span_spread_median": 0.0
+    },
+    "wake_m1.12_neg": {
+      "T_rms_rel_error": 0.351188,
+      "T_mean_rel_error": -0.00712777,
+      "T_points": 13,
+      "dT_rms_error_N": 10.4983,
+      "dT_mean_error_N": -7.90692,
+      "sd_T_ratio_median": 0.421873,
+      "sd_T_points": 11,
+      "psi_rms_error_deg": 15.6904,
+      "psi_mean_error_deg": 13.0248,
+      "cd_eq9_model_median": 0.922007,
+      "cd_eq9_measured_median": 1.83619,
+      "f_mid_acc_peak_at_harmonic": 8,
+      "f_mid_model_fd_over_U_median": 0.0735,
+      "f_mid_measured_fd_over_U_median": 0.06349,
+      "f_mid_measured_points": 13,
+      "f_mid_model_fd_over_Un_median": 0.169652,
+      "f_mid_measured_fd_over_Un_median": 0.210911,
+      "f_mid_ratio_to_nearest_measured_median": 0.976461,
+      "f_mid_within_10pct": 0,
+      "f_mid_points": 10,
+      "f_span_spread_median": 0.0
+    },
+    "wake_m1.84_pos": {
+      "T_rms_rel_error": 0.13919,
+      "T_mean_rel_error": 0.0915524,
+      "T_points": 12,
+      "dT_rms_error_N": 17.7077,
+      "dT_mean_error_N": -15.5452,
+      "sd_T_ratio_median": 0.424804,
+      "sd_T_points": 11,
+      "f_upper_acc_peak_at_harmonic": 0,
+      "f_upper_model_fd_over_U_median": 0.168,
+      "f_upper_measured_fd_over_U_median": 0.1112,
+      "f_upper_measured_points": 23,
+      "f_upper_ratio_to_nearest_measured_median": 1.40477,
+      "f_upper_within_10pct": 0,
+      "f_upper_points": 12,
+      "f_lower_acc_peak_at_harmonic": 0,
+      "f_lower_model_fd_over_U_median": 0.168,
+      "f_lower_measured_fd_over_U_median": 0.105272,
+      "f_lower_measured_points": 18,
+      "f_lower_ratio_to_nearest_measured_median": 1.46893,
+      "f_lower_within_10pct": 0,
+      "f_lower_points": 12,
+      "f_span_spread_median": 0.0
+    },
+    "wake_m1.84_neg": {
+      "T_rms_rel_error": 0.316394,
+      "T_mean_rel_error": 0.177252,
+      "T_points": 13,
+      "dT_rms_error_N": 16.4008,
+      "dT_mean_error_N": -10.7383,
+      "sd_T_ratio_median": 0.760237,
+      "sd_T_points": 12,
+      "psi_rms_error_deg": 10.3235,
+      "psi_mean_error_deg": 4.31082,
+      "cd_eq9_model_median": 1.3565,
+      "cd_eq9_measured_median": 2.4706,
+      "f_mid_acc_peak_at_harmonic": 0,
+      "f_mid_model_fd_over_U_median": 0.127556,
+      "f_mid_measured_fd_over_U_median": 0.0589018,
+      "f_mid_measured_points": 25,
+      "f_mid_model_fd_over_Un_median": 0.182582,
+      "f_mid_measured_fd_over_Un_median": 0.119125,
+      "f_mid_ratio_to_nearest_measured_median": 2.02593,
+      "f_mid_within_10pct": 1,
+      "f_mid_points": 13,
+      "f_span_spread_median": 0.0
+    },
+    "none_m1.12_pos": {
+      "T_rms_rel_error": 0.244553,
+      "T_mean_rel_error": -0.194729,
+      "T_points": 13,
+      "dT_rms_error_N": 19.638,
+      "dT_mean_error_N": -15.1741,
+      "sd_T_ratio_median": 2.89274e-07,
+      "sd_T_points": 12
+    },
+    "none_m1.12_neg": {
+      "T_rms_rel_error": 0.365008,
+      "T_mean_rel_error": -0.0683198,
+      "T_points": 13,
+      "dT_rms_error_N": 11.4584,
+      "dT_mean_error_N": -8.8485,
+      "sd_T_ratio_median": 2.99115e-06,
+      "sd_T_points": 11,
+      "psi_rms_error_deg": 18.6388,
+      "psi_mean_error_deg": 14.5091,
+      "cd_eq9_model_median": 0.80427,
+      "cd_eq9_measured_median": 1.83619
+    },
+    "none_m1.84_pos": {
+      "T_rms_rel_error": 0.135055,
+      "T_mean_rel_error": 0.0849025,
+      "T_points": 12,
+      "dT_rms_error_N": 18.367,
+      "dT_mean_error_N": -16.2307,
+      "sd_T_ratio_median": 4.22593e-07,
+      "sd_T_points": 11
+    },
+    "none_m1.84_neg": {
+      "T_rms_rel_error": 0.385349,
+      "T_mean_rel_error": 0.0902642,
+      "T_points": 13,
+      "dT_rms_error_N": 22.8256,
+      "dT_mean_error_N": -14.7163,
+      "sd_T_ratio_median": 3.61758e-06,
+      "sd_T_points": 12,
+      "psi_rms_error_deg": 10.1204,
+      "psi_mean_error_deg": 3.34231,
+      "cd_eq9_model_median": 1.32629,
+      "cd_eq9_measured_median": 2.4706
+    }
+  },
+  "sensitivity_and_convergence": {
+    "uls19_m1.84_pos0.8_dt": {
+      "role": "half the time step",
+      "mean_T": -0.000213727,
+      "sd_T": 0.0547442,
+      "AD_rms_max": 0.0785622,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "uls19_m1.84_pos0.8_n108": {
+      "role": "twice the elements",
+      "mean_T": -0.00138539,
+      "sd_T": 0.0504323,
+      "AD_rms_max": 0.107866,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "uls19_m1.12_neg1.2_dt": {
+      "role": "half the time step",
+      "mean_T": 0.00615787,
+      "sd_T": -0.0375066,
+      "AD_rms_max": 0.0259441,
+      "f_mid": -0.0185185
+    },
+    "uls19_m1.12_neg1.2_n108": {
+      "role": "twice the elements",
+      "mean_T": -0.0292937,
+      "sd_T": -0.173652,
+      "AD_rms_max": -0.0886828,
+      "f_mid": -0.0185185
+    },
+    "b1_m1.84_pos0.8_dt": {
+      "role": "half the time step",
+      "mean_T": -0.000333733,
+      "sd_T": 0.0248872,
+      "AD_rms_max": -0.00513647,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "b1_m1.84_pos0.8_n108": {
+      "role": "twice the elements",
+      "mean_T": -0.000293523,
+      "sd_T": 0.00244924,
+      "AD_rms_max": -0.0104285,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "b1_m1.12_neg1.2_dt": {
+      "role": "half the time step",
+      "mean_T": 0.0528912,
+      "sd_T": 0.0230265,
+      "AD_rms_max": 0.0543951,
+      "f_mid": -0.111111
+    },
+    "b1_m1.12_neg1.2_n108": {
+      "role": "twice the elements",
+      "mean_T": 0.00971889,
+      "sd_T": 0.00576302,
+      "AD_rms_max": -0.00775592,
+      "f_mid": 0.0
+    },
+    "wake_m1.84_pos0.8_dt": {
+      "role": "half the time step",
+      "mean_T": -1.14851e-05,
+      "sd_T": -0.00183678,
+      "AD_rms_max": -7.15033e-05,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "wake_m1.84_pos0.8_n108": {
+      "role": "twice the elements",
+      "mean_T": 0.000176472,
+      "sd_T": 0.00104338,
+      "AD_rms_max": 0.0100616,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "wake_m1.12_neg1.2_dt": {
+      "role": "half the time step",
+      "mean_T": 9.78408e-05,
+      "sd_T": -0.00338539,
+      "AD_rms_max": -5.35361e-05,
+      "f_mid": 0.0
+    },
+    "wake_m1.12_neg1.2_n108": {
+      "role": "twice the elements",
+      "mean_T": 0.00192069,
+      "sd_T": 0.0683398,
+      "AD_rms_max": -0.00300082,
+      "f_mid": 0.0
+    },
+    "uls19_m1.12_pos0.4_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.00478151,
+      "sd_T": 0.0946651,
+      "AD_rms_max": 0.0108269,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "uls19_m1.12_pos0.4_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.0265117,
+      "sd_T": 1.00318,
+      "AD_rms_max": 0.281374,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "uls19_m1.12_pos0.8_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.0273574,
+      "sd_T": 0.541039,
+      "AD_rms_max": 0.100682,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "uls19_m1.12_pos0.8_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.00310262,
+      "sd_T": -0.0065773,
+      "AD_rms_max": 0.0893733,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "uls19_m1.12_pos1.2_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.011719,
+      "sd_T": 0.685669,
+      "AD_rms_max": -0.0146251,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "uls19_m1.12_pos1.2_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.00359373,
+      "sd_T": -0.0319049,
+      "AD_rms_max": 0.0168571,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "uls19_m1.12_neg0.4_undamped": {
+      "role": "no structural damping",
+      "mean_T": -0.00695026,
+      "sd_T": 0.115984,
+      "AD_rms_max": -0.040814,
+      "f_mid": 0.0
+    },
+    "uls19_m1.12_neg0.4_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.0387092,
+      "sd_T": -0.0167714,
+      "AD_rms_max": 0.364643,
+      "f_mid": 0.0
+    },
+    "uls19_m1.12_neg0.8_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.0499191,
+      "sd_T": 0.723415,
+      "AD_rms_max": 0.141373,
+      "f_mid": 1.76923
+    },
+    "uls19_m1.12_neg0.8_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": -0.00926855,
+      "sd_T": 0.0257577,
+      "AD_rms_max": 0.0274219,
+      "f_mid": 0.153846
+    },
+    "uls19_m1.12_neg1.2_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.0669251,
+      "sd_T": 1.64425,
+      "AD_rms_max": -0.187033,
+      "f_mid": 0.0
+    },
+    "uls19_m1.12_neg1.2_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.00363012,
+      "sd_T": -0.0186852,
+      "AD_rms_max": -0.0267742,
+      "f_mid": 0.0
+    },
+    "uls19_m1.84_pos0.4_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.00331159,
+      "sd_T": 0.337498,
+      "AD_rms_max": 0.209312,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "uls19_m1.84_pos0.4_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.00286032,
+      "sd_T": 0.610118,
+      "AD_rms_max": 0.0378133,
+      "f_upper": 0.1875,
+      "f_lower": 0.1875
+    },
+    "uls19_m1.84_pos0.8_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.00124073,
+      "sd_T": 0.272957,
+      "AD_rms_max": 0.119029,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "uls19_m1.84_pos0.8_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.0160846,
+      "sd_T": 0.529706,
+      "AD_rms_max": 0.283511,
+      "f_upper": 0.030303,
+      "f_lower": 0.030303
+    },
+    "uls19_m1.84_pos1.2_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.00905076,
+      "sd_T": 0.380209,
+      "AD_rms_max": 0.0491352,
+      "f_upper": -0.0384615,
+      "f_lower": -0.0961538
+    },
+    "uls19_m1.84_pos1.2_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": -0.00237351,
+      "sd_T": 0.0470997,
+      "AD_rms_max": 0.312951,
+      "f_upper": -0.0769231,
+      "f_lower": -0.0769231
+    },
+    "uls19_m1.84_neg0.4_undamped": {
+      "role": "no structural damping",
+      "mean_T": -0.000291763,
+      "sd_T": 0.0591125,
+      "AD_rms_max": -0.0200486,
+      "f_mid": 0.0
+    },
+    "uls19_m1.84_neg0.4_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.000682553,
+      "sd_T": 0.988066,
+      "AD_rms_max": -0.0126726,
+      "f_mid": 0.0666667
+    },
+    "uls19_m1.84_neg0.8_undamped": {
+      "role": "no structural damping",
+      "mean_T": -0.0129811,
+      "sd_T": 0.24324,
+      "AD_rms_max": 0.0250626,
+      "f_mid": 0.0
+    },
+    "uls19_m1.84_neg0.8_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.0412617,
+      "sd_T": 0.168008,
+      "AD_rms_max": 0.22774,
+      "f_mid": 0.037037
+    },
+    "uls19_m1.84_neg1.2_undamped": {
+      "role": "no structural damping",
+      "mean_T": -0.00641234,
+      "sd_T": 0.190758,
+      "AD_rms_max": -0.0611028,
+      "f_mid": 0.0333333
+    },
+    "uls19_m1.84_neg1.2_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.0435104,
+      "sd_T": 0.18567,
+      "AD_rms_max": 0.120453,
+      "f_mid": 0.0
+    },
+    "b1_m1.12_pos0.4_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.00337188,
+      "sd_T": 0.11451,
+      "AD_rms_max": 0.0598356,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "b1_m1.12_pos0.4_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.0528784,
+      "sd_T": 1.94534,
+      "AD_rms_max": 0.607314,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "b1_m1.12_pos0.8_undamped": {
+      "role": "no structural damping",
+      "mean_T": -0.0125056,
+      "sd_T": 0.0903299,
+      "AD_rms_max": -0.0847705,
+      "f_upper": 0.171429,
+      "f_lower": 0.171429
+    },
+    "b1_m1.12_pos0.8_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": -0.0307946,
+      "sd_T": -0.0328283,
+      "AD_rms_max": -0.137113,
+      "f_upper": 0.171429,
+      "f_lower": 0.171429
+    },
+    "b1_m1.12_pos1.2_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.0220779,
+      "sd_T": 0.259716,
+      "AD_rms_max": 0.0402986,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "b1_m1.12_pos1.2_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.00161545,
+      "sd_T": 0.0139552,
+      "AD_rms_max": 0.00830583,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "b1_m1.12_neg0.4_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.0227695,
+      "sd_T": -0.0195736,
+      "AD_rms_max": 0.0863363,
+      "f_mid": 0.0
+    },
+    "b1_m1.12_neg0.4_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.0342446,
+      "sd_T": 0.19911,
+      "AD_rms_max": 0.29079,
+      "f_mid": 0.2
+    },
+    "b1_m1.12_neg0.8_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.0554924,
+      "sd_T": 0.463296,
+      "AD_rms_max": 0.0195141,
+      "f_mid": 0.0
+    },
+    "b1_m1.12_neg0.8_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": -0.00972576,
+      "sd_T": -0.0398738,
+      "AD_rms_max": -0.0733204,
+      "f_mid": 1.5
+    },
+    "b1_m1.12_neg1.2_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.0596978,
+      "sd_T": 0.781224,
+      "AD_rms_max": 0.0899233,
+      "f_mid": 0.015873
+    },
+    "b1_m1.12_neg1.2_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.00255669,
+      "sd_T": -0.000636848,
+      "AD_rms_max": -0.0119029,
+      "f_mid": 0.0
+    },
+    "b1_m1.84_pos0.4_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.00782454,
+      "sd_T": 0.0983797,
+      "AD_rms_max": 0.151877,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "b1_m1.84_pos0.4_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.0042603,
+      "sd_T": 1.54874,
+      "AD_rms_max": 0.00227848,
+      "f_upper": 0.235294,
+      "f_lower": 0.235294
+    },
+    "b1_m1.84_pos0.8_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.000127782,
+      "sd_T": 0.32739,
+      "AD_rms_max": 0.0107553,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "b1_m1.84_pos0.8_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.0283157,
+      "sd_T": 2.03065,
+      "AD_rms_max": 0.304132,
+      "f_upper": 0.0465116,
+      "f_lower": 0.0465116
+    },
+    "b1_m1.84_pos1.2_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.000824041,
+      "sd_T": 0.569817,
+      "AD_rms_max": -0.00031999,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "b1_m1.84_pos1.2_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.0103245,
+      "sd_T": 0.761389,
+      "AD_rms_max": 0.0469476,
+      "f_upper": -0.0172414,
+      "f_lower": -0.0172414
+    },
+    "b1_m1.84_neg0.4_undamped": {
+      "role": "no structural damping",
+      "mean_T": -0.00625667,
+      "sd_T": 0.0274971,
+      "AD_rms_max": 0.0441987,
+      "f_mid": 0.0
+    },
+    "b1_m1.84_neg0.4_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.058606,
+      "sd_T": 1.99983,
+      "AD_rms_max": -0.390481,
+      "f_mid": 0.4
+    },
+    "b1_m1.84_neg0.8_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.154942,
+      "sd_T": 0.235442,
+      "AD_rms_max": -0.199025,
+      "f_mid": 0.0714286
+    },
+    "b1_m1.84_neg0.8_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.281418,
+      "sd_T": 0.018263,
+      "AD_rms_max": -0.358921,
+      "f_mid": 0.107143
+    },
+    "b1_m1.84_neg1.2_undamped": {
+      "role": "no structural damping",
+      "mean_T": -0.0075888,
+      "sd_T": 0.693758,
+      "AD_rms_max": -0.0498695,
+      "f_mid": 0.147059
+    },
+    "b1_m1.84_neg1.2_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": -0.00248897,
+      "sd_T": 0.0651826,
+      "AD_rms_max": -0.00460963,
+      "f_mid": -0.0294118
+    },
+    "wake_m1.12_pos0.4_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.00070455,
+      "sd_T": 0.129646,
+      "AD_rms_max": 0.062596,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "wake_m1.12_pos0.4_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.00794549,
+      "sd_T": 3.90394,
+      "AD_rms_max": 0.424917,
+      "f_upper": 0.142857,
+      "f_lower": 0.142857
+    },
+    "wake_m1.12_pos0.8_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.00597687,
+      "sd_T": 2.95918,
+      "AD_rms_max": 0.487728,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "wake_m1.12_pos0.8_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.0124979,
+      "sd_T": 4.09934,
+      "AD_rms_max": 0.993938,
+      "f_upper": -0.148148,
+      "f_lower": -0.148148
+    },
+    "wake_m1.12_pos1.2_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.0132288,
+      "sd_T": 0.679432,
+      "AD_rms_max": 0.286669,
+      "f_upper": -0.027027,
+      "f_lower": -0.027027
+    },
+    "wake_m1.12_pos1.2_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": -6.98416e-05,
+      "sd_T": -0.000317822,
+      "AD_rms_max": -0.00151722,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "wake_m1.12_neg0.4_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.032525,
+      "sd_T": 0.280969,
+      "AD_rms_max": 0.273797,
+      "f_mid": 0.0
+    },
+    "wake_m1.12_neg0.4_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.400073,
+      "sd_T": 0.848568,
+      "AD_rms_max": 1.74392,
+      "f_mid": -0.0952381
+    },
+    "wake_m1.12_neg0.8_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.0109013,
+      "sd_T": 1.06185,
+      "AD_rms_max": 0.0638437,
+      "f_mid": 0.0
+    },
+    "wake_m1.12_neg0.8_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": -7.78067e-06,
+      "sd_T": -0.00021671,
+      "AD_rms_max": -0.0184043,
+      "f_mid": 0.0
+    },
+    "wake_m1.12_neg1.2_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.0229739,
+      "sd_T": 1.98694,
+      "AD_rms_max": -0.0527667,
+      "f_mid": 0.0526316
+    },
+    "wake_m1.12_neg1.2_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": -4.41773e-06,
+      "sd_T": 1.74642e-05,
+      "AD_rms_max": 0.000181606,
+      "f_mid": 0.0
+    },
+    "wake_m1.84_pos0.4_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.000612241,
+      "sd_T": 0.12109,
+      "AD_rms_max": 0.0707901,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "wake_m1.84_pos0.4_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.000741443,
+      "sd_T": 0.290359,
+      "AD_rms_max": 0.202874,
+      "f_upper": -0.125,
+      "f_lower": -0.125
+    },
+    "wake_m1.84_pos0.8_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.000594474,
+      "sd_T": 0.0452808,
+      "AD_rms_max": 0.0317005,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "wake_m1.84_pos0.8_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.00410578,
+      "sd_T": 1.1986,
+      "AD_rms_max": 0.242015,
+      "f_upper": -0.0222222,
+      "f_lower": -0.0222222
+    },
+    "wake_m1.84_pos1.2_undamped": {
+      "role": "no structural damping",
+      "mean_T": -0.000385042,
+      "sd_T": -0.358935,
+      "AD_rms_max": -0.047561,
+      "f_upper": 0.0,
+      "f_lower": 0.0
+    },
+    "wake_m1.84_pos1.2_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.00851441,
+      "sd_T": 4.11944,
+      "AD_rms_max": 0.69433,
+      "f_upper": -0.012987,
+      "f_lower": -0.012987
+    },
+    "wake_m1.84_neg0.4_undamped": {
+      "role": "no structural damping",
+      "mean_T": -0.000446763,
+      "sd_T": 0.111242,
+      "AD_rms_max": 0.0535107,
+      "f_mid": 0.0
+    },
+    "wake_m1.84_neg0.4_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.00109584,
+      "sd_T": 0.5776,
+      "AD_rms_max": -0.0891654,
+      "f_mid": 0.0
+    },
+    "wake_m1.84_neg0.8_undamped": {
+      "role": "no structural damping",
+      "mean_T": -0.00145667,
+      "sd_T": -0.0277809,
+      "AD_rms_max": 0.051921,
+      "f_mid": 0.0
+    },
+    "wake_m1.84_neg0.8_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": -0.00697171,
+      "sd_T": 0.953695,
+      "AD_rms_max": 0.0461086,
+      "f_mid": -0.0487805
+    },
+    "wake_m1.84_neg1.2_undamped": {
+      "role": "no structural damping",
+      "mean_T": 0.140531,
+      "sd_T": -0.108429,
+      "AD_rms_max": 0.913708,
+      "f_mid": 0.0
+    },
+    "wake_m1.84_neg1.2_frictionless": {
+      "role": "frictionless floor",
+      "mean_T": 0.176446,
+      "sd_T": -0.0882717,
+      "AD_rms_max": 1.44709,
+      "f_mid": 0.0
+    }
+  },
+  "executable_sha256": "2cb307b11eab738867274a994d1364f75b9d79fd4562c00de82df59d946b7426"
+}

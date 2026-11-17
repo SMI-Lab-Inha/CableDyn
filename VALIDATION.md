@@ -89,6 +89,7 @@ article's methods, are compared in
 | **L3-N** | NDP 38 m high-mode riser in uniform flow, 0.3–2.4 m/s (22 tests), cross-flow VIV | measured maximum r.m.s. cross-flow strain, dominant frequency, spatial-mean σ/D | strain r.m.s. log error: Ulveseter et al. (2019) set 0.178, Andersen et al. (2024b) 0.186, generic set 0.277, Thorsen et al. (2016) 0.363 (their own simulation 0.187); f D/U 0.145 / 0.134 / 0.192 / 0.193 vs 0.143 measured | generic set blind; the other sets fitted by their authors to NDP tests (implementation check) | Pass measured |
 | **L3-F** | FLOTANT OD 48 mm power-cable specimen with a 200 kg clump, tow tests at 0.025–1.0 m/s (40 tests), cross-flow and in-line VIV | measured A/D_rms (σ/OD) at 1/2L, 3/4L and L (de Wilde et al. 2021, App. 3) | CF r.m.s. log error (Ur ≥ 3): Ulveseter et al. (2019) set 0.731, generic set 0.594, wake oscillator 1.208; first peak at 1/2L 0.755 / 0.483 / 0.296 vs 0.776 measured; release Ur 7.06 / 5.89 / 5.30 vs 5.88 | published VIV sets, none fitted to these tests; structure identified from the specimen's in-air and in-water RAOs | Pass measured |
 | **L3-O** | SJTU 4 m flexible cylinder moved harmonically through still water, KC 178 at U_R,max 4, 6.5 and 7.9, cross-flow VIV | measured A/D on the acceleration and deceleration paths at mid-span (Fu et al. 2014, Figs. 15–17); lock-in shares 17/34/50 % | A/D r.m.s. error: wake oscillator 0.088 / 0.177 / 0.132, generic set 0.138 / 0.339 / 0.345, Ulveseter et al. (2019) set 0.079 / 0.340 / 0.338; largest A/D at U_R,max 4: 0.280 / 0.472 / 0.124 vs 0.286; at 6.5 and 7.9 every set holds the lock-in while the flow slows: mean deceleration-acceleration gap 0.25–0.50 vs 0.09–0.12 measured | published VIV sets, none fitted to these tests; `VIV FRAME` Tf 0.2 s (sensitivity none, 0.1, 0.3 s) | Pass measured |
+| **L3-K** | Southampton untensioned catenary riser with high curvature and floor touchdown, two mass ratios, current of 0.2–1.4 m/s in both directions (13 speeds each), cross-flow VIV | measured mean top tension and its standard deviation, cross-flow spectral peak frequencies, inclination of the straight part (Chaplin & King 2018, Figs. 9, 10, 12, 13, 15) | frequency uniform along the span in positive current (26/26 runs generic set, 22 wake oscillator, 20 Ulveseter et al. 2019) at f d/U 0.138 / 0.17 / 0.121 vs 0.111 measured; light-riser tension in positive current r.m.s. 9.8% with drag amplification (generic set), 17.8–24.5% without; heavy-riser straight-part inclination 5.0° r.m.s. (implied C_d 2.55 vs 2.47); still-water top tension 81.2 vs 59.1 N (m* 1.84) | published VIV sets, none fitted to these tests; floor friction and damping assumed, with sensitivity runs | Pass measured |
 | **L-fig** | Along-arc curvature overlay (CableDyn / OrcaFlex / MoorDyn-F ±4×) | 3-code committed record | CableDyn peak 0.11% from OrcaFlex | <0.5% | Pass |
 | **L4-1** | Coupled platform + mooring | synthetic reference | bit-for-bit | — | Pass |
 | **L4-1b** | VolturnUS-S coupled platform + power cable | OpenFAST v5.0.0 (CompMooring 5 vs 3) | platform DOFs <0.6% (3-seed DLC-1.1); fairlead and anchor <0.001% static | <3% platform | Pass |
@@ -471,6 +472,37 @@ the tow tests it predicts). Inputs, reduction scripts, results, and source prove
   21%, the wake oscillator's by up to 11%. Half the time step and 80 elements change the largest A/D
   by at most 0.1% (generic set, wake oscillator) and 4.1% (Ulveseter et al. set); the default run
   reproduces the committed record byte for byte.
+- **L3-K Southampton untensioned catenary riser, cross-flow VIV with high curvature and
+  touchdown**
+  ([Chaplin & King, 2018](https://cabledyn.readthedocs.io/en/latest/references.html#ref-chaplin2018)):
+  the 5.36 m, 56 mm riser of very low bending stiffness (EI 1.3 N m²) pinned on the floor of a
+  2 m flume and 0.2 m above the surface 4.30 m away, at both mass ratios (2.9 and 20.9 N/m
+  submerged) in current of 0.2–1.4 m/s in both directions, with floor contact (friction 0.5,
+  assumed) and 3% Rayleigh damping. The article measures one cross-flow frequency along the
+  whole riser in positive current, close to f d/U = 0.11 on the speed at the near-vertical top,
+  so that the local Strouhal number on the normal velocity runs from 0.11 to above 0.3. Three
+  published VIV sets, none fitted to these tests, and a run without VIV:
+  - all three give one frequency along the suspended span, the curved lower part included
+    (within 10% in 26 of 26 positive runs with the generic set, 22 with the wake oscillator of
+    Facchinetti et al. (2004), 20 with Ulveseter et al.'s (2019) set), at their own level:
+    f d/U 0.121 for Ulveseter et al.'s set (9% above the measured 0.111), 0.138 for the generic
+    set and 0.17 for the wake oscillator;
+  - in negative current the heavy riser's measured frequency stays at 1.05–1.16 Hz from 1.1 m/s;
+    Ulveseter et al.'s set levels off at 1.45–1.5 Hz (f d/(U sin ψ) 0.130 against 0.119), the
+    generic set gives 1.45–1.85 Hz and the wake oscillator 2.1–2.45 Hz;
+  - the mean top tension needs the drag amplification of the generic set (Chaplin et al. 2005,
+    Eq. 4): the light riser's tension in positive current within 9.8% r.m.s. and a rise to
+    1.4 m/s of 88.8 N against 88.6 N measured (49.8 N without VIV, 60.1 and 51.4 N with the two
+    sets that keep C_d 1.2); the heavy riser's straight-line inclination in negative current
+    within 5.0° r.m.s., implying C_d 2.55 through the article's Eq. 9 against 2.47 measured.
+
+  With the article's length, span and weights the heavy riser's still-water top tension is
+  81.2 N against 59.1 and 61.8 N measured (light 15.1 against 13.4 and 11.5 N), a geometry the
+  article's numbers do not close, so the tension is also compared as its increment from still
+  water. Half the time step and twice the elements change the mean tension by at most 5.3% and
+  2.9%; without structural damping or floor friction the mean tension moves by up to 15% and
+  40% and its standard deviation by up to +296% and +412%. The default run reproduces the
+  committed record byte for byte.
 
 ## L4 coupled OpenFAST
 
