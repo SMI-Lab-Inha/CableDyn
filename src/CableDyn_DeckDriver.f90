@@ -4062,7 +4062,7 @@ CONTAINS
         ! the weights at the twisted state: an attachment the twist moved within its radius of the
         ! surface carries another share of its buoyancy (once more, with the loads of this state)
         CALL attachment_static_weight(q_static, att_node, ln%att, opts, f_att_now, surface=.TRUE.)
-        IF (.NOT. has_drag .AND. ALL(f_att_now == f_att)) RETURN
+        IF (.NOT. has_drag .AND. ALL(f_att_now <= f_att .AND. f_att_now >= f_att)) RETURN
         IF (MAXVAL(ABS(q_static - q_prev)) <= FIXED_POINT_TOL) RETURN
       END DO
       est = CD_DECKDRV_SOLVEFAIL

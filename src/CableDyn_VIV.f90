@@ -575,7 +575,7 @@ CONTAINS
     IF (.NOT. (dt > CD_ZERO)) RETURN
     y_old = st(4)
     p = y_old
-    IF (.NOT. (p /= CD_ZERO)) p = st(1)
+    IF (ABS(p) <= CD_ZERO) p = st(1)
     IF ((p > CD_ZERO .AND. yd < CD_ZERO) .OR. (p < CD_ZERO .AND. yd > CD_ZERO)) THEN
       ! theta = 0 when the step starts on the sample at zero that ends the half cycle
       theta = y_old/(y_old - yd)
@@ -619,6 +619,7 @@ CONTAINS
     INTEGER, INTENT(IN) :: amp_n(:)
     CHARACTER(*), INTENT(OUT) :: msg
     INTEGER :: e, n, i
+    REAL(wp) :: prev
     REAL(wp), PARAMETER :: big = 1.0e15_wp
     msg = ''
     IF (SIZE(amp, 1) /= 3 .OR. SIZE(amp, 2) /= CD_VIV_AMP_MAXP .OR. SIZE(amp, 3) /= SIZE(cl) .OR. &
@@ -637,18 +638,19 @@ CONTAINS
         msg = 'a VIV amplitude table needs the cross-flow lift (cl > 0) on its element'
         RETURN
       END IF
+      ! the previous row's A/D; below every valid first row, which the range check holds at >= 0
+      prev = -CD_ONE
       DO i = 1, n
         IF (.NOT. (amp(1, i, e) >= CD_ZERO .AND. amp(1, i, e) <= big .AND. amp(2, i, e) >= CD_ZERO .AND. &
                    amp(2, i, e) <= big .AND. amp(3, i, e) > CD_ZERO .AND. amp(3, i, e) <= big)) THEN
           msg = 'VIV amplitude table rows need finite A/D >= 0, C_v >= 0 and drag factor > 0, each at most 1e15'
           RETURN
         END IF
-        IF (i > 1) THEN
-          IF (.NOT. (amp(1, i, e) > amp(1, i - 1, e))) THEN
-            msg = 'the A/D of a VIV amplitude table must increase strictly'
-            RETURN
-          END IF
+        IF (.NOT. (amp(1, i, e) > prev)) THEN
+          msg = 'the A/D of a VIV amplitude table must increase strictly'
+          RETURN
         END IF
+        prev = amp(1, i, e)
       END DO
     END DO
   END SUBROUTINE CD_VIV_Check_Amp_Table

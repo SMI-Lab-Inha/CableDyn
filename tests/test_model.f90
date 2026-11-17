@@ -1742,7 +1742,8 @@ CONTAINS
     REAL(wp) :: q0(3*NN), v0(3*NN), f_ext(3*NN), pq(3*NN), pv(3*NN), pa(3*NN), fluid(3, NN), wl(NN)
     REAL(wp) :: l0(NE), ea(NE), rho_a(NE), cl(NE), dia(NE), cf(NE), df(NE), phi0(NN), w, t, phx0(NN)
     REAL(wp) :: tab(3, CD_VIV_AMP_MAXP, NE)
-    INTEGER :: tab_n(NE), ev0
+    INTEGER :: tab_n(NE)
+    INTEGER(KIND(auto_m%sub_stats%events)) :: ev0
     LOGICAL :: conv, stalled, all_conv
     CHARACTER(200) :: em
 
