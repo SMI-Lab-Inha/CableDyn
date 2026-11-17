@@ -300,6 +300,12 @@ Verification and validation references
   laboratory measurements of vortex-induced vibrations of a tension riser. *Journal of Fluids and
   Structures* **21**\ (1), 25–40. https://doi.org/10.1016/j.jfluidstructs.2005.05.016
 
+.. _ref-chaplin2018:
+
+- **Chaplin, J. R. & King, R. (2018).** Laboratory measurements of the vortex-induced vibrations
+  of an untensioned catenary riser with high curvature. *Journal of Fluids and Structures*
+  **79**, 26–38. https://doi.org/10.1016/j.jfluidstructs.2018.01.008
+
 .. _ref-trim2005:
 
 - **Trim, A. D., Braaten, H., Lie, H. & Tognarelli, M. A. (2005).** Experimental investigation

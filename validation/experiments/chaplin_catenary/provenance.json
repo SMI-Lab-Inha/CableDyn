@@ -1,0 +1,36 @@
+{
+  "source": "Chaplin & King (2018), Laboratory measurements of the vortex-induced vibrations of an untensioned catenary riser with high curvature, Journal of Fluids and Structures 79, 26-38 (Table 1; Secs. 2, 3, 4.1, 4.2; Eqs. 9-10; Figs. 3, 5, 9, 10, 12, 13, 15 and their captions); Ulveseter, Thorsen, Saevik & Larsen (2019), Applied Ocean Research 90, 101856 (Table 1); Ulveseter, Thorsen, Saevik & Larsen (2018), Marine Structures 60, 241-260 (Table 3); Chaplin, Bearman, Huera Huarte & Pattenden (2005), Journal of Fluids and Structures 21(1), 3-24 (Eq. 4); Facchinetti, de Langre & Biolley (2004), Journal of Fluids and Structures 19(2), 123-140 (Secs. 2-3)",
+  "doi": [
+    "10.1016/j.jfluidstructs.2018.01.008",
+    "10.1016/j.apor.2019.101856",
+    "10.1016/j.marstruc.2018.04.001",
+    "10.1016/j.jfluidstructs.2005.04.010",
+    "10.1016/j.jfluidstructs.2003.12.004"
+  ],
+  "article_pdf_sha256": "0903b21f16eacc374135408e5473d5c48cc20a041fd0f63621187a7032a42984",
+  "bibliographic_data": "Chaplin & King (2018): authors, title, journal, volume, year, pages and DOI from the article's first page; the other articles as in the FLOTANT case",
+  "data_used": "the riser (Table 1: d 56 mm, 5.36 m between the pin ends, EI 1.3 N m^2 and EA 790 kN estimated, structural damping in air about 3 % of critical, submerged weight 2.9 and 20.9 N/m at m* 1.12 and 1.84, water depth 2.0 m, lower pin on the floor, upper pin 200 mm above the surface, 4.30 m between the pins horizontally, U 0 to +-1.4 m/s); the current directions (Sec. 3: positive with the upstream pin on the floor); twelve accelerometers 400 mm apart (Sec. 2); mean top tension and its standard deviation against U (Fig. 10, positive; Fig. 13, negative); cross-flow spectral peak frequencies against U (Fig. 9(a), two accelerometers near the top, and 9(b), one lower down, positive; Fig. 15(a), around mid-depth, negative); the inclination of the straight part in negative current (Fig. 12(a)); Eq. 9 (the straight-line balance of normal drag and weight) for the implied drag coefficient; the statements f d/U about 0.11 (positive, Sec. 4.1) and f d/(U sin psi) about 0.13 (negative, Sec. 4.2); the mean profiles (Fig. 5) for the touchdown, by eye",
+  "extraction": "extract_chaplin2018.py: Figs. 9, 10, 12, 13 and 15 are embedded greyscale raster images; each panel calibrated on its frame and the tick marks found on both opposite sides of it (largest tick residual 0.0010 m/s, 0.0036 Hz, 0.07 deg, 0.14 N); markers found by a circle Hough transform and classed solid (m* 1.84) or open (m* 1.12) by their fill; speeds snapped to the 0.05 m/s test grid (largest snap 0.012 m/s); peaks off the grid by more than 0.0125 m/s or with a fill between the classes dropped and reported; error bars read from their caps (the bar centre moves the marker's by at most 0.59 N); points read (open/solid): Fig. 9(a) 12/40, 9(b) 22/34, 10 26/24 (46 standard deviations), 12(a) 20/25, 13 25/26 (44 standard deviations), 15(a) 26/47; checks: the line f d/U = 0.11 drawn in Fig. 9 reads 0.105 and 0.108, the lines W h drawn in Fig. 13 read 41.9 and 5.65 N against Table 1's 41.8 and 5.8 N",
+  "assumptions": "fresh water 1000 kg/m^3 (not stated; m* 1.12 and W 2.9 N/m agree at it); mass per metre with the internal water from the submerged weight, rho A + W/g (for m* 1.84 Table 1's m* gives 1.4 % less mass); the 0.2 m above the surface in air with the same mass; pinned ends at (0, 0, -2.0) and (4.30, 0, 0.2); uniform current over the depth, in the riser's plane, ramped linearly from still water over 10 s (a static solve in the full current finds no equilibrium for some light-riser cases in negative current); Cd 1.2 and Ca 1; floor contact with the default penalty stiffness and damping and friction coefficient 0.5 (not given; a silicone sheath on the flume floor; frictionless as sensitivity); structural damping as Rayleigh damping, 3 % at 0.3 and 3.0 Hz (the range of the measured cross-flow frequencies; none as sensitivity); the accelerometers 0.48 m from each pin, 0.4 m apart (positions not given); the compared points by their mean elevation, at the share of the height between the pins of the dots of the insets of Fig. 9 (0.65 and 0.37 for (a), 0.19 for (b)) and mid-depth for Fig. 15",
+  "coefficients": {
+    "uls19": "Ulveseter et al. (2019), Table 1, fitted by them to the NDP riser in uniform flow (Sec. 4.1, Chh 1.5): Cd 1.2, CM 2, Cl 0.85, cF 0.144, dF 0.064; VIV ClX 0.75, alpha 0.15, Chh 1.5; blind here",
+    "b1": "the generic set of the Delta Flume case, nothing fitted to these tests: Cl 0.8, cF 0.18, dF 0.08, Cd 1.2; VIV ClX 0.85, alpha 0.15 (Ulveseter et al. 2018, Table 3); VIV AMPLITUDE Cv 0.8 with CdAmp = 1 + 2.3 s + 1.7 s^2, s = (A/D)/sqrt(2), at A/D 0-1.5 (Chaplin et al. 2005, Eq. 4); VIV DAMPING 0 0 1",
+    "wake": "Facchinetti et al. (2004): WAKE OSCILLATOR CL0 0.3, St 0.2, eps 0.3, A 12, LINE TYPES Cl 0, Cd 1.2; cross-flow only",
+    "none": "no VIV force, Cd 1.2: the drag of the static solution"
+  },
+  "processing": "statistics over 30-110 s (30-40 s of 40 s runs without VIV); mean and standard deviation of the tension at the upper pin (FairTen1); the mean profile from the mean node positions; the inclination to the horizontal at mid-depth from the neighbouring nodes; the dominant cross-flow frequency as the peak of the averaged spectrum (20 s Hann segments, half overlapping, 0.05 Hz resolution) of the horizontal cross-flow displacement within 0.3-6 Hz, and the peak of the same spectrum times omega^4 (the acceleration spectrum) within 0.15-6 Hz as a second value; A/D_rms of the cross-flow displacement, all of it and above 0.3 Hz; the spread along the span over the assumed accelerometer stations that are suspended and below the surface; the model's frequency compared with the nearest measured point at the same speed and mass ratio (the figures give several spectral peaks at some speeds) and as median f d/U; the tension also as the increment from the still-water value of each figure and of the model; the drag coefficient implied by an inclination through Eq. 9, Cd = 2 W cos psi / (rho d U^2 sin^2 psi)",
+  "CableDyn_commit": "15b5ebc (dev)",
+  "validation_date": "2026-11-17",
+  "executable_name": "cabledyn.exe",
+  "executable_sha256": "see summary.json",
+  "compiler": "GNU Fortran 16.2.0",
+  "build_type": "Release",
+  "platform": "Windows 11 x86-64",
+  "segments": 54,
+  "dt_s": 0.0025,
+  "tmax_s": 110.0,
+  "statistics_after_s": 30.0,
+  "reproduction": "the default command, run into a new work directory with the executable of summary.json, reproduces response_comparison.csv and summary.json byte for byte",
+  "current_ramp_s": 10.0,
+  "runs": "2 still water, 208 primary (4 sets x 2 mass ratios x 2 directions x 13 speeds), 12 convergence, 72 sensitivity"
+}

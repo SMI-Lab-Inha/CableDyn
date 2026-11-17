@@ -1,0 +1,328 @@
+figure,quantity,current,where,m_star,U_mps,value,sd
+9a,f_cf_hz,positive,upper (two points of the inset),1.12,0.25,0.6065,
+9a,f_cf_hz,positive,upper (two points of the inset),1.12,0.30,0.8144,
+9a,f_cf_hz,positive,upper (two points of the inset),1.12,0.35,0.8944,
+9a,f_cf_hz,positive,upper (two points of the inset),1.12,0.40,0.8064,
+9a,f_cf_hz,positive,upper (two points of the inset),1.12,0.50,1.1104,
+9a,f_cf_hz,positive,upper (two points of the inset),1.12,0.55,1.1424,
+9a,f_cf_hz,positive,upper (two points of the inset),1.12,1.20,2.1183,
+9a,f_cf_hz,positive,upper (two points of the inset),1.12,1.20,2.3503,
+9a,f_cf_hz,positive,upper (two points of the inset),1.12,1.25,2.4383,
+9a,f_cf_hz,positive,upper (two points of the inset),1.12,1.35,2.2703,
+9a,f_cf_hz,positive,upper (two points of the inset),1.12,1.35,2.5503,
+9a,f_cf_hz,positive,upper (two points of the inset),1.12,1.40,2.3023,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.25,0.5425,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.30,0.6625,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.30,0.7184,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.35,0.7504,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.35,0.9984,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.40,0.9504,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.40,1.0064,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.45,0.9024,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.45,0.9584,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.45,1.0944,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.50,0.9824,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.55,1.0464,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.60,1.2784,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.60,1.3344,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.65,1.3504,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.70,1.3904,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.70,1.4464,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.75,1.4544,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.75,1.5424,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.80,1.5824,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.80,1.6384,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.80,1.6944,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.85,1.7743,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.90,1.7344,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.90,1.8223,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,0.95,1.9423,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.00,1.9583,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.00,2.0143,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.05,2.0463,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.10,2.0463,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.15,2.1503,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.15,2.2063,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.20,2.2783,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.25,2.2943,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.30,2.3103,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.30,2.4223,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.30,2.4863,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.35,2.4943,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.40,2.4543,
+9a,f_cf_hz,positive,upper (two points of the inset),1.84,1.40,2.5743,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.20,0.5268,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.45,0.9097,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.50,0.8698,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.60,0.9894,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.65,0.9575,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.65,1.3883,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.70,1.125,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.75,1.2527,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.75,1.5637,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.80,1.2766,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.85,1.2925,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.90,1.5717,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,0.95,1.6515,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,1.00,1.6435,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,1.05,1.6993,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,1.10,1.7472,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,1.15,1.6515,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,1.20,1.7392,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,1.25,1.6674,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,1.30,1.6993,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,1.35,1.7791,
+9b,f_cf_hz,positive,lower (the point of the inset),1.12,1.40,1.811,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.25,0.5826,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.30,0.6784,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.35,0.798,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.40,0.8219,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.45,0.7661,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.50,0.9815,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.55,1.0453,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.60,0.6704,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.60,1.2846,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.65,0.7182,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.65,1.3165,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.70,0.7023,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.70,1.4042,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.70,1.46,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.75,0.6624,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.75,1.5079,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.80,0.8219,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.80,1.6116,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.85,0.7661,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.85,1.7312,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.90,0.7661,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.90,1.827,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.95,0.9416,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,0.95,1.8429,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,1.00,0.8299,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,1.00,1.9466,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,1.05,1.9147,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,1.10,1.9945,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,1.15,2.0104,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,1.20,2.0503,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,1.25,2.146,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,1.30,2.2337,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,1.35,2.2816,
+9b,f_cf_hz,positive,lower (the point of the inset),1.84,1.40,2.3454,
+10,mean_top_tension_N,positive,top,1.12,0.00,13.3836,
+10,mean_top_tension_N,positive,top,1.12,0.20,15.2686,
+10,mean_top_tension_N,positive,top,1.12,0.25,16.2111,1.178
+10,mean_top_tension_N,positive,top,1.12,0.30,17.6249,1.414
+10,mean_top_tension_N,positive,top,1.12,0.35,19.5099,1.885
+10,mean_top_tension_N,positive,top,1.12,0.40,21.3949,2.356
+10,mean_top_tension_N,positive,top,1.12,0.45,23.5156,2.592
+10,mean_top_tension_N,positive,top,1.12,0.50,25.8718,3.534
+10,mean_top_tension_N,positive,top,1.12,0.55,28.5815,3.417
+10,mean_top_tension_N,positive,top,1.12,0.60,31.5269,4.477
+10,mean_top_tension_N,positive,top,1.12,0.65,34.59,5.184
+10,mean_top_tension_N,positive,top,1.12,0.70,36.9463,6.126
+10,mean_top_tension_N,positive,top,1.12,0.75,40.9519,7.304
+10,mean_top_tension_N,positive,top,1.12,0.80,45.311,7.893
+10,mean_top_tension_N,positive,top,1.12,0.85,49.0811,8.6
+10,mean_top_tension_N,positive,top,1.12,0.90,53.2045,10.132
+10,mean_top_tension_N,positive,top,1.12,0.95,56.3855,11.192
+10,mean_top_tension_N,positive,top,1.12,1.00,60.7446,12.017
+10,mean_top_tension_N,positive,top,1.12,1.05,65.9284,13.431
+10,mean_top_tension_N,positive,top,1.12,1.10,69.2271,14.373
+10,mean_top_tension_N,positive,top,1.12,1.15,75.1178,16.023
+10,mean_top_tension_N,positive,top,1.12,1.20,80.1838,16.612
+10,mean_top_tension_N,positive,top,1.12,1.25,85.4854,17.908
+10,mean_top_tension_N,positive,top,1.12,1.30,90.9048,18.615
+10,mean_top_tension_N,positive,top,1.12,1.35,96.7955,20.264
+10,mean_top_tension_N,positive,top,1.12,1.40,101.9793,21.678
+10,mean_top_tension_N,positive,top,1.84,0.00,59.0952,
+10,mean_top_tension_N,positive,top,1.84,0.20,67.1065,
+10,mean_top_tension_N,positive,top,1.84,0.25,66.9887,1.06
+10,mean_top_tension_N,positive,top,1.84,0.30,68.2846,1.178
+10,mean_top_tension_N,positive,top,1.84,0.35,69.934,1.414
+10,mean_top_tension_N,positive,top,1.84,0.40,71.1122,1.885
+10,mean_top_tension_N,positive,top,1.84,0.45,73.5862,2.945
+10,mean_top_tension_N,positive,top,1.84,0.60,82.6579,5.655
+10,mean_top_tension_N,positive,top,1.84,0.65,85.9566,6.598
+10,mean_top_tension_N,positive,top,1.84,0.70,89.0198,6.833
+10,mean_top_tension_N,positive,top,1.84,0.75,93.968,8.483
+10,mean_top_tension_N,positive,top,1.84,0.80,95.7352,9.072
+10,mean_top_tension_N,positive,top,1.84,0.85,100.8011,10.132
+10,mean_top_tension_N,positive,top,1.84,0.90,104.8068,11.781
+10,mean_top_tension_N,positive,top,1.84,0.95,109.0481,12.253
+10,mean_top_tension_N,positive,top,1.84,1.00,111.8756,13.195
+10,mean_top_tension_N,positive,top,1.84,1.05,119.8869,14.609
+10,mean_top_tension_N,positive,top,1.84,1.10,123.8926,16.258
+10,mean_top_tension_N,positive,top,1.84,1.15,126.7201,16.258
+10,mean_top_tension_N,positive,top,1.84,1.20,133.082,18.379
+10,mean_top_tension_N,positive,top,1.84,1.25,138.9727,20.971
+10,mean_top_tension_N,positive,top,1.84,1.30,144.0386,19.675
+10,mean_top_tension_N,positive,top,1.84,1.35,150.8718,23.68
+10,mean_top_tension_N,positive,top,1.84,1.40,154.8775,23.68
+12a,psi_deg,negative,straight part,1.12,0.25,56.599,
+12a,psi_deg,negative,straight part,1.12,0.30,44.7277,
+12a,psi_deg,negative,straight part,1.12,0.35,38.1864,
+12a,psi_deg,negative,straight part,1.12,0.40,33.0988,
+12a,psi_deg,negative,straight part,1.12,0.45,28.4956,
+12a,psi_deg,negative,straight part,1.12,0.50,25.3461,
+12a,psi_deg,negative,straight part,1.12,0.55,21.9543,
+12a,psi_deg,negative,straight part,1.12,0.60,19.5316,
+12a,psi_deg,negative,straight part,1.12,0.65,16.8666,
+12a,psi_deg,negative,straight part,1.12,0.75,13.9594,
+12a,psi_deg,negative,straight part,1.12,0.80,13.4749,
+12a,psi_deg,negative,straight part,1.12,0.85,12.748,
+12a,psi_deg,negative,straight part,1.12,0.95,12.5058,
+12a,psi_deg,negative,straight part,1.12,1.00,12.0212,
+12a,psi_deg,negative,straight part,1.12,1.10,12.2635,
+12a,psi_deg,negative,straight part,1.12,1.20,12.2635,
+12a,psi_deg,negative,straight part,1.12,1.25,11.779,
+12a,psi_deg,negative,straight part,1.12,1.30,11.5367,
+12a,psi_deg,negative,straight part,1.12,1.35,11.2944,
+12a,psi_deg,negative,straight part,1.12,1.40,11.5367,
+12a,psi_deg,negative,straight part,1.84,0.20,66.2898,
+12a,psi_deg,negative,straight part,1.84,0.25,65.3207,
+12a,psi_deg,negative,straight part,1.84,0.30,64.8362,
+12a,psi_deg,negative,straight part,1.84,0.35,62.1712,
+12a,psi_deg,negative,straight part,1.84,0.40,58.2949,
+12a,psi_deg,negative,straight part,1.84,0.45,58.2949,
+12a,psi_deg,negative,straight part,1.84,0.50,59.0217,
+12a,psi_deg,negative,straight part,1.84,0.55,57.5681,
+12a,psi_deg,negative,straight part,1.84,0.60,54.1763,
+12a,psi_deg,negative,straight part,1.84,0.65,49.3309,
+12a,psi_deg,negative,straight part,1.84,0.70,46.4236,
+12a,psi_deg,negative,straight part,1.84,0.75,42.305,
+12a,psi_deg,negative,straight part,1.84,0.80,38.671,
+12a,psi_deg,negative,straight part,1.84,0.85,37.2174,
+12a,psi_deg,negative,straight part,1.84,0.90,35.2792,
+12a,psi_deg,negative,straight part,1.84,0.95,33.5833,
+12a,psi_deg,negative,straight part,1.84,1.00,30.4338,
+12a,psi_deg,negative,straight part,1.84,1.05,30.1915,
+12a,psi_deg,negative,straight part,1.84,1.10,28.0111,
+12a,psi_deg,negative,straight part,1.84,1.15,27.042,
+12a,psi_deg,negative,straight part,1.84,1.20,25.1038,
+12a,psi_deg,negative,straight part,1.84,1.25,25.1038,
+12a,psi_deg,negative,straight part,1.84,1.30,23.1657,
+12a,psi_deg,negative,straight part,1.84,1.35,22.4389,
+12a,psi_deg,negative,straight part,1.84,1.40,22.1966,
+13,mean_top_tension_N,negative,top,1.12,0.00,11.4975,
+13,mean_top_tension_N,negative,top,1.12,0.20,7.7903,0.992
+13,mean_top_tension_N,negative,top,1.12,0.25,7.6337,0.835
+13,mean_top_tension_N,negative,top,1.12,0.30,6.3283,0.783
+13,mean_top_tension_N,negative,top,1.12,0.35,6.2761,
+13,mean_top_tension_N,negative,top,1.12,0.40,6.6938,
+13,mean_top_tension_N,negative,top,1.12,0.45,6.9549,0.992
+13,mean_top_tension_N,negative,top,1.12,0.50,7.216,0.835
+13,mean_top_tension_N,negative,top,1.12,0.55,7.6337,0.835
+13,mean_top_tension_N,negative,top,1.12,0.60,8.3124,0.783
+13,mean_top_tension_N,negative,top,1.12,0.65,11.132,1.41
+13,mean_top_tension_N,negative,top,1.12,0.70,13.2728,1.253
+13,mean_top_tension_N,negative,top,1.12,0.75,15.3613,1.462
+13,mean_top_tension_N,negative,top,1.12,0.80,16.249,2.036
+13,mean_top_tension_N,negative,top,1.12,0.85,18.0764,2.924
+13,mean_top_tension_N,negative,top,1.12,0.90,22.9845,4.073
+13,mean_top_tension_N,negative,top,1.12,0.95,25.282,4.177
+13,mean_top_tension_N,negative,top,1.12,1.00,28.0493,4.229
+13,mean_top_tension_N,negative,top,1.12,1.05,31.7565,5.013
+13,mean_top_tension_N,negative,top,1.12,1.10,34.4716,5.326
+13,mean_top_tension_N,negative,top,1.12,1.15,37.8133,
+13,mean_top_tension_N,negative,top,1.12,1.20,41.5205,6.736
+13,mean_top_tension_N,negative,top,1.12,1.30,49.8747,8.72
+13,mean_top_tension_N,negative,top,1.12,1.35,52.7464,8.354
+13,mean_top_tension_N,negative,top,1.12,1.40,58.2811,
+13,mean_top_tension_N,negative,top,1.84,0.00,61.7794,1.514
+13,mean_top_tension_N,negative,top,1.84,0.20,58.8555,1.827
+13,mean_top_tension_N,negative,top,1.84,0.25,58.0723,1.88
+13,mean_top_tension_N,negative,top,1.84,0.30,55.6182,2.036
+13,mean_top_tension_N,negative,top,1.84,0.35,55.1483,
+13,mean_top_tension_N,negative,top,1.84,0.40,51.2322,3.185
+13,mean_top_tension_N,negative,top,1.84,0.45,49.1959,3.133
+13,mean_top_tension_N,negative,top,1.84,0.50,47.8383,
+13,mean_top_tension_N,negative,top,1.84,0.55,44.0267,4.334
+13,mean_top_tension_N,negative,top,1.84,0.60,41.6771,4.177
+13,mean_top_tension_N,negative,top,1.84,0.65,40.3195,3.551
+13,mean_top_tension_N,negative,top,1.84,0.70,40.685,3.812
+13,mean_top_tension_N,negative,top,1.84,0.75,40.8939,4.334
+13,mean_top_tension_N,negative,top,1.84,0.80,40.9461,4.908
+13,mean_top_tension_N,negative,top,1.84,0.85,41.7293,5.9
+13,mean_top_tension_N,negative,top,1.84,0.90,42.6692,6.422
+13,mean_top_tension_N,negative,top,1.84,0.95,42.3559,6.109
+13,mean_top_tension_N,negative,top,1.84,1.00,42.1992,6.161
+13,mean_top_tension_N,negative,top,1.84,1.05,43.6612,6.892
+13,mean_top_tension_N,negative,top,1.84,1.10,44.1312,6.109
+13,mean_top_tension_N,negative,top,1.84,1.15,44.2356,6.213
+13,mean_top_tension_N,negative,top,1.84,1.20,46.1153,6.109
+13,mean_top_tension_N,negative,top,1.84,1.25,46.4808,7.519
+13,mean_top_tension_N,negative,top,1.84,1.30,47.0551,5.9
+13,mean_top_tension_N,negative,top,1.84,1.35,47.7339,6.37
+13,mean_top_tension_N,negative,top,1.84,1.40,49.457,6.944
+15a,f_cf_hz,negative,around mid-depth,1.12,0.40,0.344,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.45,0.3865,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.50,0.3759,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.55,0.3546,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.60,0.344,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.60,0.5354,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.65,0.3971,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.65,0.7002,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.70,0.445,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.70,0.8756,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.75,0.4609,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.75,0.8969,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.80,0.3918,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.80,0.9075,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.85,0.3918,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.85,0.9872,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.90,1.1308,
+15a,f_cf_hz,negative,around mid-depth,1.12,0.95,1.1733,
+15a,f_cf_hz,negative,around mid-depth,1.12,1.00,1.2956,
+15a,f_cf_hz,negative,around mid-depth,1.12,1.05,1.3806,
+15a,f_cf_hz,negative,around mid-depth,1.12,1.10,1.4498,
+15a,f_cf_hz,negative,around mid-depth,1.12,1.15,1.5455,
+15a,f_cf_hz,negative,around mid-depth,1.12,1.20,1.5986,
+15a,f_cf_hz,negative,around mid-depth,1.12,1.25,1.673,
+15a,f_cf_hz,negative,around mid-depth,1.12,1.30,1.7528,
+15a,f_cf_hz,negative,around mid-depth,1.12,1.35,1.7847,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.20,0.3759,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.20,0.445,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.25,0.5832,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.25,0.6045,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.30,0.5991,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.30,0.647,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.30,0.6523,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.35,0.647,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.35,0.6683,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.35,0.8278,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.40,0.8596,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.45,0.8437,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.45,0.865,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.50,0.8596,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.50,1.067,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.55,0.95,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.55,0.9713,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.60,1.0564,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.60,1.0776,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.65,0.4769,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.65,1.0298,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.70,0.7321,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.70,0.9872,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.75,0.95,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.75,1.051,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.80,0.8703,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.85,0.8331,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.85,0.8543,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.90,0.8384,
+15a,f_cf_hz,negative,around mid-depth,1.84,0.95,0.7959,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.00,0.7693,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.00,0.7905,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.05,0.7852,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.05,1.1361,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.10,1.0989,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.10,1.1201,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.10,1.1574,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.15,0.9872,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.15,1.1414,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.20,1.0829,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.25,1.0989,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.30,1.0457,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.30,1.067,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.35,1.0776,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.40,1.0989,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.40,1.1148,
+15a,f_cf_hz,negative,around mid-depth,1.84,1.40,1.1361,

@@ -151,6 +151,17 @@ All notable changes to CableDyn are recorded in this file. The format follows
   U_R,max 4 the wake oscillator gives the measured largest A/D (0.280 against 0.286); at 6.5 and
   7.9 every set holds the lock-in while the flow slows, the gap between the paths 2-5 times the
   measured one and the largest A/D 1.3-2.3 times the measured.
+- Validation case L3-K (`validation/experiments/chaplin_catenary`): cross-flow VIV of the
+  untensioned catenary model riser of Chaplin & King (2018), 5.36 m long with EI 1.3 N m² and
+  floor touchdown, at both mass ratios in current of 0.2–1.4 m/s in both directions, with three
+  published coefficient sets none of which is fitted to these tests, against the measured mean
+  top tension, cross-flow frequencies and straight-part inclination (read from the article's
+  figures by `extract_chaplin2018.py`). Every set gives the measured single frequency along the
+  span in positive current, at f d/U 0.121 (Ulveseter et al. 2019), 0.138 (generic set) and
+  0.17 (wake oscillator) against 0.111; the generic set's drag amplification gives the light
+  riser's tension rise (9.8 % r.m.s.) and the heavy riser's inclination in negative current
+  (5.0° r.m.s.). The heavy riser's still-water tension is 37 % above the measured with the
+  article's geometry, reported as a caveat of the data.
 - Theory manual, Published coefficient sets: the VIV coefficient sets of Thorsen et al. (2016,
   2017), Ulveseter et al. (2018), Andersen et al. (2024a, b) and Facchinetti et al. (2004), each
   with its source, its test data and the line-type columns it maps to, and Thorsen et al.'s
