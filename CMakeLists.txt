@@ -2785,6 +2785,14 @@ target_link_libraries(test_coupled_torsion PRIVATE cabledyn_core)
 add_test(NAME coupled_torsion COMMAND test_coupled_torsion WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 set_tests_properties(coupled_torsion PROPERTIES LABELS "fortran;unit;static;dynamic;openfast")
 
+# The channels of one output row evaluated together (CD_AGG_EvalChannels, the line-wide twists
+# and torques once per row) against one at a time, bit for bit, through a rolling march and a
+# probe transfer: a row value kept from another state would fail.
+add_executable(test_channel_row tests/test_channel_row.f90)
+target_link_libraries(test_channel_row PRIVATE cabledyn_core)
+add_test(NAME channel_row COMMAND test_channel_row WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(channel_row PROPERTIES LABELS "fortran;unit;dynamic;openfast")
+
 # OpenFAST linearisation of a line restrained in torsion, by the shell's lin_eval recipe on the
 # aggregate: the twist modes of A against n pi/L sqrt(GJ/Irn), the reduced roll stiffness GJ/L
 # (nodal twist and condensed), the damping and inertia columns of the platform's angular rates.

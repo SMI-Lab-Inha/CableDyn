@@ -222,6 +222,18 @@ All notable changes to CableDyn are recorded in this file. The format follows
   `EI = 0` lines and line systems. Outputs are unchanged to the bit; with the three line totals
   the VIV examples run about 11 % faster (`viv_taut_cable_inline.dat` 2.39 s to 2.14 s; the same
   line with 200 elements at 100 steps per cycle 18.1 s to 16.1 s).
+- The output channels of one row evaluate the line-wide values a finite-EI cable's channels
+  share once per row instead of once per channel: the element twists and torsion state behind
+  every `Twist<L>N<J>`, the node torques of `Torq<L>N<J>`, the section curvature of
+  `CurvX`/`CurvY` and the VIV amplitude. This applies to every `CalcOutput` of the OpenFAST
+  module (`CompMooring = 5`) and FAST.Farm, their committed-step `.CD.out` row and
+  linearization, and to the standalone mixed, multibody and cubic-Hermite routes. A supercycled
+  module's `.CD.out` row also takes the channels the same call has just evaluated on the
+  committed state. Outputs, `.CD.out`, linearization files and restarts are unchanged to the
+  bit. On the IEA-15MW UMaine model with the three chains and a 600-element lazy-wave cable
+  restrained in torsion (nine `Twist` and nine `BendMom` channels, `DT = 0.01 s`), `CalcOutput`
+  takes 12.3 ms per step instead of 26.6 ms (the channels 1.0 ms instead of 9.9 ms, the `.CD.out`
+  row 0.6 ms instead of 5.1 ms), and CableDyn as a whole 26 ms instead of 42 ms.
 - The bending damping of a finite-EI cable (`EI|Bb`, `EI|-zeta|f`) evaluates the second
   derivatives of the curvature only where the position Jacobian needs them, not in every residual
   evaluation. Results are unchanged to the bit; the Delta Flume case 9 deck of

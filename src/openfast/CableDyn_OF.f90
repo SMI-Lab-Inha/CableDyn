@@ -99,6 +99,7 @@ MODULE CableDyn
                                           CD_AGG_NTurbines, CD_AGG_TurbineOfMoving, &
                                           CD_AGG_NFluidNodes, CD_AGG_GetFluidNodePositions, CD_AGG_SetFluidFields, &
                                           CD_AGG_NumChannels, CD_AGG_ChannelHeader, CD_AGG_EvalChannel, &
+                                          CD_AGG_EvalChannels, &
                                           CD_AGG_GetInitMetadata, CD_AGG_GetInitLine, &
                                           CD_AGG_WriteStaticProfile, CD_AGG_Range_Graphs, CD_AGG_Range_Sample, &
                                           CD_AGG_Range_Write, CD_AGG_Range_MirrorSize, CD_AGG_Reopen_Start, &
@@ -201,6 +202,8 @@ MODULE CableDyn
       LOGICAL                 :: loads_cached = .FALSE.
       INTEGER(IntKi)          :: loads_at_n = -1
       REAL(wp), ALLOCATABLE   :: ws_chan(:)
+      ! the committed-step row of the .CD.out when it evaluates its own channels (CD_CalcOutput)
+      REAL(wp), ALLOCATABLE   :: ws_rowchan(:)
       ! Load predictor (nsuper > 1 with predictLoads; CableDyn_LoadPredictor): the coupled
       ! loads and moments of the committed solve before the last and its time (pred_t < 0:
       ! none), shifted in by CD_UpdateStates when a mooring step starts and mirrored into the
@@ -2553,13 +2556,14 @@ CONTAINS
       CHARACTER(*)                   , INTENT(INOUT) :: ErrMsg
 
       character(*), parameter   :: RoutineName = 'CD_CalcOutput'
-      INTEGER(IntKi)            :: ErrStat2, es, id, i
+      INTEGER(IntKi)            :: ErrStat2, es, id, i, n_chan
       INTEGER(IntKi)            :: prof_c0, prof_c1, prof_rate, prof_phase0
       CHARACTER(ErrMsgLen)      :: ErrMsg2
       CHARACTER(ErrMsgLen)            :: em
-      REAL(wp)                  :: cval
       REAL(wp)                  :: tau_pred   ! load predictor: fraction of the mooring step elapsed
       LOGICAL                   :: fresh, state_overlaid
+      ! the channels this call evaluated are those of the committed state as it stands
+      LOGICAL                   :: chan_committed
 
       ! Report this call's OWN status: clear at entry (ErrStat is INTENT(INOUT) and
       ! every SetErrStat below only ACCUMULATES, so on the all-success path an
@@ -2586,6 +2590,7 @@ CONTAINS
          Inst(id)%prof_n_calcout = Inst(id)%prof_n_calcout + 1_IntKi
       END IF
       state_overlaid = .FALSE.
+      chan_committed = .FALSE.
 
       ! Evaluate the loads the mooring exerts on the coupling points. At nsuper = 1 (the
       ! mooring stepping at the glue rate) the CURRENT coupled kinematics are transferred
@@ -2699,10 +2704,12 @@ CONTAINS
          END IF
          ! Deck OUTPUTS channels are evaluated at the same aggregate state as the returned
          ! loads: with supercycling the last committed zero-order-hold mooring state, at
-         ! nsuper = 1 the state including the current coupled kinematics.
+         ! nsuper = 1 the state including the current coupled kinematics. The channels are
+         ! one row: the line-wide values several of a cable's channels read (its element twists,
+         ! node torques, ...) are evaluated once for the row (CD_AGG_EvalChannels).
          IF (Inst(id)%prof_enabled) CALL SYSTEM_CLOCK(prof_phase0)
-         DO i = 1, p%NumOuts
-            CALL CD_AGG_EvalChannel( Inst(id)%agg, i, cval, es, em )
+         IF (p%NumOuts > 0) THEN
+            CALL CD_AGG_EvalChannels( Inst(id)%agg, Inst(id)%ws_chan, n_chan, es, em )
             IF (es /= CD_AGG_OK) THEN
                CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: output channel evaluation failed: '// &
                                 TRIM(em), ErrStat, ErrMsg, RoutineName )
@@ -2712,8 +2719,9 @@ CONTAINS
                END IF
                RETURN
             END IF
-            Inst(id)%ws_chan(i) = cval
-         END DO
+         END IF
+         ! supercycled, the state evaluated is the committed one itself (no overlay)
+         chan_committed = .NOT. state_overlaid
          IF (Inst(id)%prof_enabled) THEN
             CALL SYSTEM_CLOCK(prof_c1)
             Inst(id)%prof_t_channels = Inst(id)%prof_t_channels + &
@@ -2747,7 +2755,8 @@ CONTAINS
       ! probe/extra CalcOutput may drive with transient kinematics). The row must carry
       ! the committed state the stamp names, so its channels re-evaluate against the
       ! restored aggregate (at nsuper > 1 the committed state is live anyway and the
-      ! re-evaluation is identical). Keyed on last_solve_n: exactly one row per advance,
+      ! re-evaluation is identical, so a row whose channels this call has just evaluated on that
+      ! state takes them). Keyed on last_solve_n: exactly one row per advance,
       ! whichever call after it comes first; the t = 0 static row was written at Init.
       ! If a glue correction re-advances the same n, BACKSPACE replaces the provisional
       ! last record with the corrected committed result rather than duplicating the time.
@@ -2755,14 +2764,24 @@ CONTAINS
          IF (Inst(id)%prof_enabled) CALL SYSTEM_CLOCK(prof_phase0)
          IF (Inst(id)%last_solve_n == Inst(id)%native_wrote_n) BACKSPACE (Inst(id)%native_un)
          WRITE (Inst(id)%native_un, '(ES25.16E3)', ADVANCE='NO') MAX(Inst(id)%t_commit, 0.0_DbKi)
-         DO i = 1, p%NumOuts
-            CALL CD_AGG_EvalChannel( Inst(id)%agg, i, cval, es, em )
+         IF (chan_committed) THEN
+            DO i = 1, p%NumOuts
+               WRITE (Inst(id)%native_un, CD_NATIVE_CHANNEL_FMT, ADVANCE='NO') CHAR(9), Inst(id)%ws_chan(i)
+            END DO
+         ELSE
+            IF (.NOT. ALLOCATED(Inst(id)%ws_rowchan)) ALLOCATE (Inst(id)%ws_rowchan(p%NumOuts))
+            n_chan = 0
+            es = CD_AGG_OK
+            IF (p%NumOuts > 0) CALL CD_AGG_EvalChannels( Inst(id)%agg, Inst(id)%ws_rowchan, n_chan, es, em )
+            ! the channels before a failed one, as a channel-by-channel row writes them
+            DO i = 1, n_chan
+               WRITE (Inst(id)%native_un, CD_NATIVE_CHANNEL_FMT, ADVANCE='NO') CHAR(9), Inst(id)%ws_rowchan(i)
+            END DO
             IF (es /= CD_AGG_OK) THEN
                CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: committed-step channel record: '//TRIM(em), &
                                 ErrStat, ErrMsg, RoutineName ); RETURN
             END IF
-            WRITE (Inst(id)%native_un, CD_NATIVE_CHANNEL_FMT, ADVANCE='NO') CHAR(9), cval
-         END DO
+         END IF
          WRITE (Inst(id)%native_un, '(A)') ''
          ! keep the record readable during the run (and intact after a crash)
          FLUSH (Inst(id)%native_un)
@@ -3304,10 +3323,10 @@ CONTAINS
       TYPE(CD_OutputType),            INTENT(INOUT), OPTIONAL :: y_out
 
       character(*), parameter :: RoutineName = 'CableDyn:lin_eval'
-      INTEGER(IntKi)          :: ErrStat2, es, i, ic, il, ne, k
+      INTEGER(IntKi)          :: ErrStat2, es, i, ic, il, ne, k, n_chan
       REAL(wp), ALLOCATABLE   :: ve_rate(:), syr_rate(:)
       CHARACTER(ErrMsgLen)    :: ErrMsg2, em
-      REAL(wp)                :: cval, t_clock
+      REAL(wp)                :: t_clock
 
       ErrStat = ErrID_None
       ErrMsg  = ''
@@ -3426,16 +3445,18 @@ CONTAINS
             Inst(id)%lin_fld(:, i) = Inst(id)%ws_fld(:, i)
             Inst(id)%lin_moment(:, i) = Inst(id)%ws_moment(:, i)
          END DO
-         DO i = 1, p%NumOuts
-            CALL CD_AGG_EvalChannel( Inst(id)%agg, i, cval, es, em )
-            IF (es /= CD_AGG_OK) THEN
-               CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: output channel evaluation failed: '// &
-                                TRIM(em), ErrStat, ErrMsg, RoutineName )
-               CALL restore; RETURN
-            END IF
-            y_out%WriteOutput(i) = REAL(cval, ReKi)
-            Inst(id)%lin_chan(i) = cval
+         ! the channels as one row (their shared line-wide values once)
+         n_chan = 0
+         es = CD_AGG_OK
+         IF (p%NumOuts > 0) CALL CD_AGG_EvalChannels( Inst(id)%agg, Inst(id)%lin_chan, n_chan, es, em )
+         DO i = 1, n_chan
+            y_out%WriteOutput(i) = REAL(Inst(id)%lin_chan(i), ReKi)
          END DO
+         IF (es /= CD_AGG_OK) THEN
+            CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: output channel evaluation failed: '// &
+                             TRIM(em), ErrStat, ErrMsg, RoutineName )
+            CALL restore; RETURN
+         END IF
       END IF
       CALL restore
 

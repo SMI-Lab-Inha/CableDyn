@@ -66,7 +66,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   USE CableDyn_Model, ONLY: CD_ModelControlSaveType, CD_Recompute_Model_Acceleration, CD_MODEL_OK
   USE CableDyn_DeckDriver, ONLY: CD_DeckAggregateType, CD_Init_Deck_Aggregate, CD_End_Deck_Aggregate, &
                                  CD_DECKDRV_OK, CD_DECKDRV_BADINPUT, CD_Eval_Aggregate_Channel, &
-                                 CD_Cable_Deck_Node, &
+                                 CD_ChannelRow, CD_Channel_Row_Reset, CD_Cable_Deck_Node, &
                                  CD_Channel_Unit, CD_DECK_NAMELEN, CD_LineInitSummary, &
                                  DeckFailure, DeckLine, DeckPoint, CD_Fire_Deck_Failures, &
                                  CD_Replay_Deck_Failures, CD_Check_System_Plausibility, &
@@ -138,7 +138,7 @@ MODULE CableDyn_OpenFAST_Aggregate
   ! channel count/header/unit for registration, and the per-channel evaluator for CalcOutput.
   PUBLIC :: CD_AGG_NumChannels
   PUBLIC :: CD_AGG_ChannelHeader
-  PUBLIC :: CD_AGG_EvalChannel
+  PUBLIC :: CD_AGG_EvalChannel, CD_AGG_EvalChannels
   PUBLIC :: CD_AGG_WriteStaticProfile
   ! Range graphs of the LINES flag r: the standalone mixed route and the single-turbine OpenFAST
   ! module sample and write them; the accumulated state rides a host's checkpoint
@@ -229,6 +229,9 @@ MODULE CableDyn_OpenFAST_Aggregate
     CHARACTER(10), ALLOCATABLE :: chan_units(:)
     LOGICAL, ALLOCATABLE :: line_is_cable(:)
     INTEGER, ALLOCATABLE :: line_obj_index(:)
+    ! the line-wide values the channels of one CD_AGG_EvalChannels row share per cable (twists,
+    ! torques, load powers, section curvature, VIV amplitude); cleared at the start of every row
+    TYPE(CD_ChannelRow), ALLOCATABLE :: chan_rows(:)
     ! deck point ids of each cable's End A and End B (Point<P>F channels)
     INTEGER, ALLOCATABLE :: cable_points(:, :)
     ! FAILURE runtime table (line failures on the coupled path): rows fire at the
@@ -2465,6 +2468,7 @@ CONTAINS
     IF (ALLOCATED(self%chan_units)) DEALLOCATE (self%chan_units)
     IF (ALLOCATED(self%line_is_cable)) DEALLOCATE (self%line_is_cable)
     IF (ALLOCATED(self%line_obj_index)) DEALLOCATE (self%line_obj_index)
+    IF (ALLOCATED(self%chan_rows)) DEALLOCATE (self%chan_rows)
     IF (ALLOCATED(self%cable_points)) DEALLOCATE (self%cable_points)
     IF (ALLOCATED(self%fl_off)) DEALLOCATE (self%fl_off)
     IF (ALLOCATED(self%fl_q)) DEALLOCATE (self%fl_q)
@@ -2542,7 +2546,7 @@ CONTAINS
     is_initialized = self%initialized
   END FUNCTION CD_AGG_IsInitialized
 
-  INTEGER FUNCTION CD_AGG_NumChannels(self) RESULT(n)
+  PURE INTEGER FUNCTION CD_AGG_NumChannels(self) RESULT(n)
     !! Number of deck OUTPUTS channels this module emits to the OpenFAST WriteOutput surface
     !! (0 when the deck declares no OUTPUTS -- the coupled run then writes no CableDyn columns).
     TYPE(CD_AGG_ModuleType), INTENT(IN) :: self
@@ -2658,9 +2662,6 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
 
-    INTEGER :: es
-    CHARACTER(1024) :: em
-
     value = CD_ZERO
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     IF (.NOT. ALLOCATED(self%channels) .OR. i < 1 .OR. i > CD_AGG_NumChannels(self)) THEN
@@ -2668,7 +2669,87 @@ CONTAINS
       ErrMsg = 'CableDyn_OpenFAST_Aggregate: channel index out of range'
       RETURN
     END IF
-    IF (self%has_rigid6) THEN
+    CALL eval_channel(self, i, value, .FALSE., ErrStat, ErrMsg)
+  END SUBROUTINE CD_AGG_EvalChannel
+
+  SUBROUTINE CD_AGG_EvalChannels(self, values, n_done, ErrStat, ErrMsg)
+    !! Evaluate every channel (1 .. CD_AGG_NumChannels) into values(1:NumChannels) at the
+    !! aggregate's present state, as one output row: each channel's value is the one
+    !! CD_AGG_EvalChannel returns for it, bit for bit, while the line-wide values several channels
+    !! of a cable read (its element twists and torsion state, node torques, load powers, section
+    !! curvature, VIV amplitude) are evaluated once for the row instead of once per channel
+    !! (CD_ChannelRow, cleared at the start of every call, so nothing is carried from one state
+    !! to the next). n_done: the channels evaluated; on a failure values(1:n_done) hold the
+    !! channels before the one that failed, whose status and message are returned, as a loop over
+    !! CD_AGG_EvalChannel would stop there.
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    REAL(wp), INTENT(INOUT) :: values(:)
+    INTEGER, INTENT(OUT) :: n_done
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    INTEGER :: i, n, nc
+
+    n_done = 0
+    ErrStat = CD_AGG_OK
+    ErrMsg = ''
+    n = CD_AGG_NumChannels(self)
+    ! no channels: nothing to evaluate (as a loop over CD_AGG_EvalChannel would do nothing)
+    IF (n == 0) RETURN
+    IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
+    IF (SIZE(values) < n) THEN
+      ErrStat = CD_AGG_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: channel value array smaller than the channel count'
+      RETURN
+    END IF
+    nc = 0
+    IF (ALLOCATED(self%cables)) nc = SIZE(self%cables)
+    IF (ALLOCATED(self%chan_rows)) THEN
+      IF (SIZE(self%chan_rows) /= nc) DEALLOCATE (self%chan_rows)
+    END IF
+    IF (.NOT. ALLOCATED(self%chan_rows)) ALLOCATE (self%chan_rows(nc))
+    CALL CD_Channel_Row_Reset(self%chan_rows)
+    ErrStat = CD_AGG_OK
+    ErrMsg = ''
+    DO i = 1, n
+      CALL eval_channel(self, i, values(i), .TRUE., ErrStat, ErrMsg)
+      IF (ErrStat /= CD_AGG_OK) EXIT
+      n_done = i
+    END DO
+    ! the row's values belong to this state only
+    CALL CD_Channel_Row_Reset(self%chan_rows)
+  END SUBROUTINE CD_AGG_EvalChannels
+
+  SUBROUTINE eval_channel(self, i, value, use_row, ErrStat, ErrMsg)
+    !! Channel i (in range) at the present state through CD_Eval_Aggregate_Channel; use_row:
+    !! with the row values of CD_AGG_EvalChannels (self%chan_rows, sized and cleared there).
+    TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
+    INTEGER, INTENT(IN) :: i
+    REAL(wp), INTENT(OUT) :: value
+    LOGICAL, INTENT(IN) :: use_row
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+
+    INTEGER :: es
+    CHARACTER(1024) :: em
+
+    IF (use_row) THEN
+      IF (self%has_rigid6) THEN
+        CALL CD_Eval_Aggregate_Channel(self%channels(i), self%has_sys, self%sys%fast%system, self%cables, &
+                                       self%line_is_cable, self%line_obj_index, value, es, em, &
+                                       cable_points=self%cable_points, rigid_rt=self%rigid6, ranges=self%ranges, &
+                                       rows=self%chan_rows)
+      ELSE IF (self%has_rod) THEN
+        CALL CD_Eval_Aggregate_Channel(self%channels(i), self%has_sys, self%sys%fast%system, self%cables, &
+                                       self%line_is_cable, self%line_obj_index, value, es, em, &
+                                       cable_points=self%cable_points, rod_rt=self%rod, ranges=self%ranges, &
+                                       rows=self%chan_rows)
+      ELSE
+        CALL CD_Eval_Aggregate_Channel(self%channels(i), self%has_sys, self%sys%fast%system, self%cables, &
+                                       self%line_is_cable, self%line_obj_index, value, es, em, &
+                                       cable_points=self%cable_points, ranges=self%ranges, rows=self%chan_rows)
+      END IF
+    ELSE IF (self%has_rigid6) THEN
       CALL CD_Eval_Aggregate_Channel(self%channels(i), self%has_sys, self%sys%fast%system, self%cables, &
                                      self%line_is_cable, self%line_obj_index, value, es, em, &
                                      cable_points=self%cable_points, rigid_rt=self%rigid6, ranges=self%ranges)
@@ -2682,7 +2763,7 @@ CONTAINS
                                      cable_points=self%cable_points, ranges=self%ranges)
     END IF
     CALL map_deck_status(es, em, ErrStat, ErrMsg)
-  END SUBROUTINE CD_AGG_EvalChannel
+  END SUBROUTINE eval_channel
 
   SUBROUTINE CD_AGG_Range_Sample(self, time, ErrStat, ErrMsg)
     !! Accumulate the range graphs (LINES flag r) at a committed output time: once per written
