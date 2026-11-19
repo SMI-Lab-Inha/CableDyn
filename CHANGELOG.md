@@ -234,6 +234,18 @@ All notable changes to CableDyn are recorded in this file. The format follows
   restrained in torsion (nine `Twist` and nine `BendMom` channels, `DT = 0.01 s`), `CalcOutput`
   takes 12.3 ms per step instead of 26.6 ms (the channels 1.0 ms instead of 9.9 ms, the `.CD.out`
   row 0.6 ms instead of 5.1 ms), and CableDyn as a whole 26 ms instead of 42 ms.
+- `CalcOutput` of the OpenFAST module is cheaper for a finite-EI cable with the nodal twist
+  (torsion with polar inertia `Irn`). Its fairlead force and the moment of a rigid end connection
+  come from the end element, as without torsion, instead of from an assembly of the whole line:
+  the nodal twist's element torques reach a node's rows only from the node's elements. The
+  transfer of the current fairlead kinematics before the evaluation no longer checks the twist of
+  every element twice ahead of the write, which checks it again (the module reloads its committed
+  state on any failure), and the restore after it leaves the cable to the reload of its committed
+  state, which rewrites the coupled end, its frames and the twist, instead of transferring the
+  committed kinematics first. Outputs, `.CD.out`, linearization files and restarts are unchanged
+  to the bit. On the IEA-15MW UMaine model with the three chains and a lazy-wave cable of 184
+  elements restrained in torsion (`DT = 0.025 s`), `CalcOutput` takes 1.9 ms per step instead of
+  5.1 ms, and the run 26 minutes per simulated hour instead of 32.
 - The bending damping of a finite-EI cable (`EI|Bb`, `EI|-zeta|f`) evaluates the second
   derivatives of the curvature only where the position Jacobian needs them, not in every residual
   evaluation. Results are unchanged to the bit; the Delta Flume case 9 deck of

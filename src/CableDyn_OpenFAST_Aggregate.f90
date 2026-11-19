@@ -920,7 +920,7 @@ CONTAINS
   END SUBROUTINE CD_AGG_GetMovingPointMesh
 
   SUBROUTINE CD_AGG_UpdateStates_Moving(self, position, velocity, acceleration, ErrStat, ErrMsg, output_probe, &
-                                        orientation, angular_velocity, angular_acceleration)
+                                        orientation, angular_velocity, angular_acceleration, cables_from_mirror)
     !! Transfer host kinematics for the moving points WITHOUT advancing. The EI=0 system columns
     !! route to CD_FMF_UpdateStates_Moving; each cable column's coupled node is written through
     !! CD_HFMF_SetCoupledKinematics (translation plus parent orientation/rates, interior and time frozen). The
@@ -930,6 +930,13 @@ CONTAINS
     !! CalcOutput taken after a fairlead move -- but before the next Step -- reflects that move:
     !! the cable's reaction is the instantaneous direct-feedthrough load (current coupled
     !! kinematics against the last committed interior shape), not the last committed step's load.
+    !!
+    !! An output probe skips the preflight and the pre-write trial pass of a cable with the nodal
+    !! twist (the write checks the same conditions): its caller reloads the complete state on
+    !! failure, so the update need not be atomic.
+    !! cables_from_mirror = .TRUE. (output probe only) leaves the cables untouched: it is the
+    !! restore of a probe whose caller then reloads every cable from its mirror
+    !! (CD_HFMF_UnpackMirror, which rewrites the coupled ends, their frames and the twist).
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: position(:, :), velocity(:, :), acceleration(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -937,16 +944,24 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: output_probe
     REAL(wp), INTENT(IN), OPTIONAL :: orientation(:, :, :)
     REAL(wp), INTENT(IN), OPTIONAL :: angular_velocity(:, :), angular_acceleration(:, :)
+    LOGICAL, INTENT(IN), OPTIONAL :: cables_from_mirror
 
     INTEGER :: c, col, es
     REAL(wp) :: zero_angular(3)
-    LOGICAL :: is_output_probe
+    LOGICAL :: is_output_probe, skip_cables
     CHARACTER(1024) :: em
 
     IF (.NOT. require_initialized(self, ErrStat, ErrMsg)) RETURN
     zero_angular = CD_ZERO
     is_output_probe = .FALSE.
     IF (PRESENT(output_probe)) is_output_probe = output_probe
+    skip_cables = .FALSE.
+    IF (PRESENT(cables_from_mirror)) skip_cables = cables_from_mirror
+    IF (skip_cables .AND. .NOT. is_output_probe) THEN
+      ErrStat = CD_AGG_BADINPUT
+      ErrMsg = 'CableDyn_OpenFAST_Aggregate: cables_from_mirror is for an output-probe restore only'
+      RETURN
+    END IF
     IF (.NOT. (moving_cols_ok(position, self) .AND. moving_cols_ok(velocity, self) .AND. &
                moving_cols_ok(acceleration, self))) THEN
       ErrStat = CD_AGG_BADINPUT
@@ -990,8 +1005,12 @@ CONTAINS
     END IF
     ! Preflight every cable before touching the EI=0 system or an earlier cable. This
     ! includes the exact-rigid shortest-rotation check, which is stricter than merely
-    ! validating that each supplied orientation is a proper DCM.
+    ! validating that each supplied orientation is a proper DCM. An output probe's caller
+    ! restores the whole state on failure, so a probe writes a cable with the nodal twist
+    ! without it: the write checks every element itself (CD_HFMF_SetCoupledKinematics
+    ! caller_restores).
     DO c = 1, self%ncable
+      IF (is_output_probe .AND. self%cables(c)%line%tw_active) CYCLE
       col = self%ncp_sys + c
       IF (self%cable_col_b(c) > 0) THEN
         CALL cable_two_ends(self%cables(c), col, self%cable_col_b(c), CABLE_PREFLIGHT, position, velocity, &
@@ -1060,20 +1079,23 @@ CONTAINS
       IF (ErrStat /= CD_AGG_OK) RETURN
     END IF
     DO c = 1, self%ncable
+      IF (skip_cables) EXIT
       col = self%ncp_sys + c
       IF (self%cable_col_b(c) > 0) THEN
         CALL cable_two_ends(self%cables(c), col, self%cable_col_b(c), CABLE_SET, position, velocity, &
                             acceleration, es, em, orientation, &
-                            self%mv_omega, self%mv_alpha)
+                            self%mv_omega, self%mv_alpha, caller_restores=is_output_probe)
       ELSE IF (PRESENT(orientation)) THEN
         CALL CD_HFMF_SetCoupledKinematics(self%cables(c), position(:, col), velocity(:, col), &
                                           acceleration(:, col), es, em, orientation(:, :, col), &
-                                          self%mv_omega(:, col), self%mv_alpha(:, col))
+                                          self%mv_omega(:, col), self%mv_alpha(:, col), &
+                                          caller_restores=is_output_probe)
       ELSE
         CALL CD_HFMF_SetCoupledKinematics(self%cables(c), position(:, col), velocity(:, col), &
                                           acceleration(:, col), es, em, &
                                           u_angular_velocity=self%mv_omega(:, col), &
-                                          u_angular_acceleration=self%mv_alpha(:, col))
+                                          u_angular_acceleration=self%mv_alpha(:, col), &
+                                          caller_restores=is_output_probe)
       END IF
       IF (es /= CD_HFMF_OK) THEN
         CALL map_hfmf_status(es, em, ErrStat, ErrMsg)
@@ -3047,7 +3069,7 @@ CONTAINS
   END FUNCTION ncp_all
 
   SUBROUTINE cable_two_ends(cable, ca, cb, mode, position, velocity, acceleration, es, em, orientation, &
-                            angular_velocity, angular_acceleration, twist)
+                            angular_velocity, angular_acceleration, twist, caller_restores)
     !! The HFMF boundary call of a cable with a moving End B (CD_HFMF_Set_Moving_End_B): End A takes
     !! the moving column ca, End B column cb, each with its orientation and rates (the
     !! committed parent orientation and zero rates where the host passes none). mode CABLE_PREFLIGHT
@@ -3062,6 +3084,7 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: orientation(:, :, :)
     REAL(wp), INTENT(IN), OPTIONAL :: angular_velocity(:, :), angular_acceleration(:, :)
     REAL(wp), INTENT(IN), OPTIONAL :: twist
+    LOGICAL, INTENT(IN), OPTIONAL :: caller_restores  ! CABLE_SET: see CD_HFMF_SetCoupledKinematics
     REAL(wp) :: dcm_a(3, 3), dcm_b(3, 3), w_a(3), al_a(3), w_b(3), al_b(3)
     dcm_a = cable%parent_dcm
     dcm_b = cable%parent_dcm_b
@@ -3087,7 +3110,7 @@ CONTAINS
     CASE (CABLE_SET)
       CALL CD_HFMF_SetCoupledKinematics(cable, position(:, ca), velocity(:, ca), acceleration(:, ca), &
                                         es, em, dcm_a, w_a, al_a, position(:, cb), velocity(:, cb), &
-                                        acceleration(:, cb), dcm_b, w_b, al_b)
+                                        acceleration(:, cb), dcm_b, w_b, al_b, caller_restores=caller_restores)
     CASE DEFAULT
       CALL CD_HFMF_UpdateStates(cable, position(:, ca), velocity(:, ca), acceleration(:, ca), es, em, &
                                 dcm_a, w_a, al_a, ub_pos=position(:, cb), ub_vel=velocity(:, cb), &

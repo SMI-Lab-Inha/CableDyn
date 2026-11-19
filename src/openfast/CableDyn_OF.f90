@@ -3087,9 +3087,12 @@ CONTAINS
 
       ErrStat = ErrID_None
       ErrMsg = ''
+      ! the cables are left to the mirror reload below, which rewrites their coupled ends,
+      ! frames and twist (a transfer here would be overwritten)
       CALL CD_AGG_UpdateStates_Moving( inst_e%agg, inst_e%sv_pos, inst_e%sv_vel, inst_e%sv_acc, es, em, &
                                        output_probe=.TRUE., orientation=inst_e%sv_orient, &
-                                       angular_velocity=inst_e%sv_omega, angular_acceleration=inst_e%sv_alpha )
+                                       angular_velocity=inst_e%sv_omega, angular_acceleration=inst_e%sv_alpha, &
+                                       cables_from_mirror=.TRUE. )
       IF (es /= CD_AGG_OK) THEN
          CALL SetErrStat( ErrID_Fatal, 'CableDyn CalcOutput endpoint restore failed: '//TRIM(em), &
                           ErrStat, ErrMsg, 'restore_calcoutput_probe' )
@@ -3466,7 +3469,8 @@ CONTAINS
          !! The committed coupled kinematics and mirror back; the held loads are re-evaluated.
          CALL CD_AGG_UpdateStates_Moving( Inst(id)%agg, Inst(id)%sv_pos, Inst(id)%sv_vel, Inst(id)%sv_acc, es, em, &
                                           output_probe=.TRUE., orientation=Inst(id)%sv_orient, &
-                                          angular_velocity=Inst(id)%sv_omega, angular_acceleration=Inst(id)%sv_alpha )
+                                          angular_velocity=Inst(id)%sv_omega, angular_acceleration=Inst(id)%sv_alpha, &
+                                          cables_from_mirror=.TRUE. )
          IF (es /= CD_AGG_OK) CALL SetErrStat( ErrID_Fatal, 'CableDyn linearization restore failed: '//TRIM(em), &
                                                ErrStat, ErrMsg, RoutineName )
          CALL reload_interiors_ary( Inst(id), m, Inst(id)%ws_lsave, t_clock, ErrStat2, ErrMsg2 )
