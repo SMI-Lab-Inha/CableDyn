@@ -427,6 +427,8 @@ MODULE CableDyn_HermiteCableDynamic
     REAL(wp), ALLOCATABLE :: ws_recovery_q0(:), ws_recovery_v0(:), ws_recovery_a0(:)
     REAL(wp), ALLOCATABLE :: ws_qa(:), ws_aa(:), ws_va(:), ws_vk(:)
     REAL(wp), ALLOCATABLE :: ws_R(:), ws_G(:), ws_Gt(:), ws_inert(:), ws_qtrial(:), ws_dq(:)
+    ! the residual of a single node's assembly (node_reaction), apart from ws_R
+    REAL(wp), ALLOCATABLE :: ws_Rnode(:)
     ! Force-blended generalised-alpha: the unblended residual R(q_{n+1}, v_{n+1}, t_{n+1}) of
     ! the current iterate (ws_Rk) and of a line-search trial (ws_Rt), and the force at the
     ! committed state F_n = R(q_n, v_n, t_n). F_n is cached from the previous step's converged
@@ -952,6 +954,7 @@ CONTAINS
               model%ws_inert(ndof), model%ws_qtrial(ndof), model%ws_dq(ndof), &
               model%ws_recovery_q0(ndof), model%ws_recovery_v0(ndof), model%ws_recovery_a0(ndof))
     ALLOCATE (model%ws_Rk(ndof), model%ws_Rt(ndof), model%fc_R(ndof), model%fc_q(ndof), model%fc_v(ndof))
+    ALLOCATE (model%ws_Rnode(ndof))
     model%fc_valid = .FALSE.
     model%fc_clears = model%fc_clears + 1
     model%tr_valid = .FALSE.
@@ -8034,8 +8037,9 @@ CONTAINS
       ErrStat = CD_HCDYN_BADINPUT; ErrMsg = 'CD_HermiteCable_Dyn_Reaction: node out of range'; RETURN
     END IF
     ! Only the node's rows are needed: assemble them from the elements that reach the node
-    ! (bit-identical to the full assembly below, which torsion still needs).
-    IF (.NOT. (model%torsion%active .OR. full)) THEN
+    ! (bit-identical to the full assembly below, which the condensed torsion still needs: its
+    ! single Theta couples every element; the nodal twist's element torques do not).
+    IF (.NOT. ((model%torsion%active .AND. .NOT. model%tw_active) .OR. full)) THEN
       CALL node_reaction(model, node, freac, es, em2)
       IF (es /= CD_HCDYN_OK) THEN
         freac = CD_ZERO
@@ -8069,8 +8073,10 @@ CONTAINS
     !! the node's rows of the total mass times the acceleration, with the added mass of those
     !! elements. Every row term is formed and summed in the order of the full assembly and of
     !! band_matvec, so the reaction is bit-identical, at the cost of one or two elements
-    !! instead of the line, and the model's scratch is not touched. Not for a line with
-    !! torsion, which couples every element. tangent_rows = .TRUE. returns the node's three
+    !! instead of the line, and the model's scratch is not touched (the rows are assembled in
+    !! ws_Rnode, a buffer of their own: no allocation per call). Not for a line with the
+    !! condensed torsion, which couples every element (the nodal twist is local: its element
+    !! torques reach the node's rows from the same elements). tangent_rows = .TRUE. returns the node's three
     !! material-tangent rows instead of its translational ones (a rigid end connection).
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     INTEGER, INTENT(IN) :: node
@@ -8078,12 +8084,13 @@ CONTAINS
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     LOGICAL, INTENT(IN), OPTIONAL :: tangent_rows
-    REAL(wp) :: Rn(SIZE(model%ws_R)), Me(12, 12), mam(3, -KL_D:KU_D), inert(3), m
+    REAL(wp) :: Me(12, 12), mam(3, -KL_D:KU_D), inert(3), m
     INTEGER :: e, a, b, k, gi, gj, j, n, es
     CHARACTER(1024) :: em
 
     ErrStat = CD_HCDYN_OK; ErrMsg = ''; freac = CD_ZERO
-    CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., es, em, node_only=node, R_out=Rn)
+    ! the rows land in ws_Rnode (assemble_residual node_only without R_out)
+    CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., es, em, node_only=node)
     IF (es /= CD_HCDYN_OK) THEN
       ErrStat = es; ErrMsg = TRIM(em); RETURN
     END IF
@@ -8124,7 +8131,7 @@ CONTAINS
         inert(k) = inert(k) + m*model%a(j)
       END DO
     END DO
-    freac = -(inert + Rn(gi + 1:gi + 3))
+    freac = -(inert + model%ws_Rnode(gi + 1:gi + 3))
   END SUBROUTINE node_reaction
 
   SUBROUTINE CD_HermiteCable_Dyn_End_Force(model, node, force, ErrStat, ErrMsg)
@@ -9339,7 +9346,7 @@ CONTAINS
     angle = ATAN2(NORM2(c), DOT_PRODUCT(a, b))
   END FUNCTION vector_angle
 
-  SUBROUTINE CD_HermiteCable_Dyn_EndConnection_Moment(model, node, moment, ErrStat, ErrMsg)
+  SUBROUTINE CD_HermiteCable_Dyn_EndConnection_Moment(model, node, moment, ErrStat, ErrMsg, full_assembly)
     !! Moment exerted by the line-end connection on its supporting body. Finite
     !! mode evaluates the spring force; rigid mode recovers the exact constraint
     !! reaction from the committed equation of motion. Pinned mode returns zero.
@@ -9348,8 +9355,12 @@ CONTAINS
     REAL(wp), INTENT(OUT) :: moment(3)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    ! .TRUE.: a rigid end's reaction from the full assembly, the reference the node's rows
+    ! reproduce bit for bit (as CD_HermiteCable_Dyn_Reaction)
+    LOGICAL, INTENT(IN), OPTIONAL :: full_assembly
 
     INTEGER :: iend, base, es
+    LOGICAL :: full
     REAL(wp) :: f_ec(3), k_ec(3, 3), direction(3), bend_moment(3)
     CHARACTER(1024) :: em
 
@@ -9450,9 +9461,11 @@ CONTAINS
       ! required in the residual is -G0 in the transverse tangent plane; under
       ! virtual work, m cross that contribution is the line's moment on the
       ! supporting body, matching the finite-spring convention. Only the end tangent's three
-      ! rows are needed: without torsion (which couples every element) they come from the
-      ! elements at the node, bit-identical to the full assembly (node_reaction).
-      IF (model%torsion%active) THEN
+      ! rows are needed: without the condensed torsion (which couples every element) they come
+      ! from the elements at the node, bit-identical to the full assembly (node_reaction).
+      full = .FALSE.
+      IF (PRESENT(full_assembly)) full = full_assembly
+      IF ((model%torsion%active .AND. .NOT. model%tw_active) .OR. full) THEN
         CALL assemble_residual(model, model%q, model%v, model%t, .TRUE., .FALSE., es, em)
         IF (es /= CD_HCDYN_OK) THEN
           ErrStat = es
@@ -10027,6 +10040,7 @@ CONTAINS
                   model%ws_G, model%ws_Gt, model%ws_inert, model%ws_qtrial, model%ws_dq, &
                   model%ws_recovery_q0, model%ws_recovery_v0, model%ws_recovery_a0)
       DEALLOCATE (model%ws_Rk, model%ws_Rt, model%fc_R, model%fc_q, model%fc_v)
+      IF (ALLOCATED(model%ws_Rnode)) DEALLOCATE (model%ws_Rnode)
       DEALLOCATE (model%ws_Kb, model%ws_Kvb, &
                   model%ws_Keffb, model%ws_Msumb, model%ws_Mamb)
       DEALLOCATE (model%ws_ipiv)
@@ -10151,8 +10165,10 @@ CONTAINS
     ! node_only: assemble only the residual rows of that node, into R_out (sized like the
     ! residual) instead of the model's residual: the elements that reach the node and its own
     ! nodal terms, each added in the order of the full assembly, so those rows are bit-identical
-    ! and the model's scratch is untouched (node_reaction). Residual only, without torsion
-    ! (which couples every element). The other rows of R_out are partial.
+    ! and the model's scratch is untouched (node_reaction). Residual only, without the
+    ! condensed torsion (which couples every element; the nodal twist adds the torques of the
+    ! node's elements and end spring, assemble_twist node_only). The other rows of R_out are partial.
+    ! Without R_out the rows land in the model's ws_Rnode.
     INTEGER, INTENT(IN), OPTIONAL :: node_only
     REAL(wp), INTENT(INOUT), TARGET, OPTIONAL :: R_out(:)
     ! stash_tangent: a full residual-only assembly that evaluates each element kernel once for
@@ -10224,9 +10240,9 @@ CONTAINS
     Kvb => model%ws_Kvb
     e_lo = 1; e_hi = ne; n_lo = 1; n_hi = model%nn
     IF (PRESENT(node_only)) THEN
-      IF (want_tangent .OR. model%torsion%active .OR. .NOT. PRESENT(R_out)) THEN
+      IF (want_tangent .OR. (model%torsion%active .AND. .NOT. model%tw_active)) THEN
         ErrStat = CD_HCDYN_BADINPUT
-        ErrMsg = 'a single-node assembly is residual-only, without torsion, into a caller residual'
+        ErrMsg = 'a single-node assembly is residual-only, without the condensed torsion'
         RETURN
       END IF
       IF (node_only < 1 .OR. node_only > model%nn) THEN
@@ -10234,6 +10250,7 @@ CONTAINS
       END IF
       e_lo = MAX(1, node_only - 1); e_hi = MIN(ne, node_only)
       n_lo = node_only; n_hi = node_only
+      R => model%ws_Rnode
     END IF
     IF (PRESENT(R_out)) THEN
       IF (SIZE(R_out) /= SIZE(model%ws_R)) THEN
@@ -10750,7 +10767,12 @@ CONTAINS
     ! rank-one g g^T / C joins the solve by Sherman-Morrison; g is kept in tors_g). Nodal
     ! twist: the element torques and end springs (assemble_twist).
     IF (model%tw_active .AND. (want_residual .OR. want_tangent)) THEN
-      CALL assemble_twist(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, es, em2)
+      IF (PRESENT(node_only)) THEN
+        CALL assemble_twist(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, es, em2, &
+                            node_only=node_only)
+      ELSE
+        CALL assemble_twist(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, es, em2)
+      END IF
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es; ErrMsg = TRIM(em2); RETURN
       END IF
@@ -11137,7 +11159,8 @@ CONTAINS
     END IF
   END SUBROUTINE twist_link
 
-  SUBROUTINE assemble_twist(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, ErrStat, ErrMsg)
+  SUBROUTINE assemble_twist(model, q_cfg, v_cfg, want_residual, want_tangent, R, Kb, Kvb, ErrStat, ErrMsg, &
+                            node_only)
     !! Nodal-twist part of assemble_residual: every element's torque M_e = (GJ/l0) tw_e + (Bt/l0)
     !! d tw_e/dt (tw_e = phi_{e+1} - phi_e + rho_e(q), d/dt from the nodal rates and g . q_dot)
     !! and every elastic end's spring, at q_cfg, v_cfg and the angles and rates of the running
@@ -11146,6 +11169,10 @@ CONTAINS
     !! g (H q_dot)^T) and Kvb (Bt/l0) g g^T, and the coupling to the angles is kept per element
     !! for the solve (tw_eg, tw_ehv, tw_ek, tw_ed, tw_lg, tw_lk; want_tangent). tw_me holds the
     !! element torques and tw_tsum the summed twist.
+    !!
+    !! node_only (residual only): the rows of that node alone, from the elements that reach it
+    !! and its end spring, each added as the full assembly adds it (assemble_residual node_only);
+    !! the model's twist scratch (tw_R, tw_me, tw_tsum) is not touched.
     !!
     !! An element whose length changes at the rate l0_dot (active line control) damps the rate of
     !! its twist per length, the quantity tau/l0 its elastic torque GJ tau/l0 reads, as the axial
@@ -11163,6 +11190,7 @@ CONTAINS
     REAL(wp), INTENT(INOUT) :: R(:), Kb(:, :), Kvb(:, :)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER, INTENT(IN), OPTIONAL :: node_only
     REAL(wp), POINTER :: phi(:), w(:)
     REAL(wp) :: ends(3, 4), phi_end, rho, beta, g(12), h(12, 12), ve(12), hv(12), ke(12, 12), kel, kd
     REAL(wp) :: om(3, 2), ew(3, 2)
@@ -11171,12 +11199,24 @@ CONTAINS
     ! length-rate share of the damping (active line control): l0_dot/l0, the element's tangent
     ! handles (m in the 12-DOF layout, the r slots zero) and the angle stiffness it leaves
     REAL(wp) :: rr, mv(12), gmv(12), kel_t, cpl
-    LOGICAL :: ctrl_rate
-    INTEGER :: e, iend, node, b, i, j, es
+    LOGICAL :: ctrl_rate, one_node
+    INTEGER :: e, iend, node, b, i, j, es, e_lo, e_hi
     CHARACTER(1024) :: em
 
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
+    one_node = PRESENT(node_only)
+    e_lo = 1
+    e_hi = model%ne
+    IF (one_node) THEN
+      IF (want_tangent .OR. .NOT. want_residual .OR. node_only < 1 .OR. node_only > model%nn) THEN
+        ErrStat = CD_HCDYN_BADINPUT
+        ErrMsg = 'assemble_twist: a single-node assembly is residual-only, at a node of the line'
+        RETURN
+      END IF
+      e_lo = MAX(1, node_only - 1)
+      e_hi = MIN(model%ne, node_only)
+    END IF
     CALL tw_frames(model, ends, phi_end)
     IF (model%tors_use_step) THEN
       phi => model%tw_pe
@@ -11185,11 +11225,11 @@ CONTAINS
       phi => model%tw_phi
       w => model%tw_w
     END IF
-    IF (want_residual) model%tw_R = CD_ZERO
-    model%tw_tsum = CD_ZERO
+    IF (want_residual .AND. .NOT. one_node) model%tw_R = CD_ZERO
+    IF (.NOT. one_node) model%tw_tsum = CD_ZERO
     om = MERGE(model%tw_som, model%tw_om, model%tors_use_step)
     turning = ANY(ABS(om) > CD_ZERO) .AND. ALLOCATED(model%torsion%bt)
-    DO e = 1, model%ne
+    DO e = e_lo, e_hi
       kd = CD_ZERO
       IF (ALLOCATED(model%torsion%bt)) kd = model%torsion%bt(e)/model%l0(e)
       ! an element at a rigid end twists through rho as its end frame turns: its damping rate
@@ -11226,6 +11266,10 @@ CONTAINS
         kel_t = kel - kd*rr
       END IF
       mt = kel*tau + kd*rate
+      IF (one_node) THEN
+        R(6*e - 5:6*e + 6) = R(6*e - 5:6*e + 6) + mt*g
+        CYCLE
+      END IF
       model%tw_me(e) = mt
       model%tw_tsum = model%tw_tsum + tau
       IF (want_residual) THEN
@@ -11269,6 +11313,9 @@ CONTAINS
     END IF
     DO iend = 1, 2
       IF (.NOT. tw_spring(model, iend)) CYCLE
+      IF (one_node) THEN
+        IF (MERGE(1, model%nn, iend == 1) /= node_only) CYCLE
+      END IF
       CALL twist_link(model, iend, q_cfg, ends, want_tangent, psi, gl, hl, es, em)
       IF (es /= CD_HCDYN_OK) THEN
         ErrStat = es
@@ -11284,6 +11331,14 @@ CONTAINS
         tw = psi + phi_end - phi(model%nn)
       END IF
       mt = k*tw
+      IF (one_node) THEN
+        IF (iend == 1) THEN
+          R(b + 1:b + 3) = R(b + 1:b + 3) - mt*gl
+        ELSE
+          R(b + 1:b + 3) = R(b + 1:b + 3) + mt*gl
+        END IF
+        CYCLE
+      END IF
       model%tw_tsum = model%tw_tsum + tw
       IF (want_residual) THEN
         IF (iend == 1) THEN

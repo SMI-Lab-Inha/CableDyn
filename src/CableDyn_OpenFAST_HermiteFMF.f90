@@ -1294,7 +1294,8 @@ CONTAINS
 
   SUBROUTINE CD_HFMF_SetCoupledKinematics(self, u_pos, u_vel, u_acc, ErrStat, ErrMsg, u_orientation, &
                                           u_angular_velocity, u_angular_acceleration, ub_pos, ub_vel, ub_acc, &
-                                          ub_orientation, ub_angular_velocity, ub_angular_acceleration)
+                                          ub_orientation, ub_angular_velocity, ub_angular_acceleration, &
+                                          caller_restores)
     !! Direct-feedthrough transfer: write ONLY the coupled node's three translational (r, v, a)
     !! DOFs into the line state, WITHOUT stepping the interior or advancing simulation time. Used
     !! between an UpdateStates_Moving (the host moves the fairlead) and the following CalcOutput so
@@ -1304,6 +1305,13 @@ CONTAINS
     !! does not advance self%line%t; the next CD_HFMF_UpdateStates re-prescribes the boundary and
     !! performs the actual implicit advance. A moving End B (ub_*, required on such a cable) is
     !! written in the same way.
+    !!
+    !! The update is all or nothing: a parent-attached torsion frame is first checked at the state
+    !! about to be written. caller_restores = .TRUE. is for a caller that owns a complete state
+    !! mirror and reloads it on every failure (the OpenFAST output probe): on a cable with the
+    !! nodal twist that trial pass over every element is skipped, as the write itself checks the
+    !! same conditions (Set_Torsion_Frames, with the same message), so a failure can leave the
+    !! cable partly written for the caller to reload. The condensed torsion keeps its check.
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: self
     REAL(wp), INTENT(IN) :: u_pos(3), u_vel(3), u_acc(3)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1312,11 +1320,13 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: u_angular_velocity(3), u_angular_acceleration(3)
     REAL(wp), INTENT(IN), OPTIONAL :: ub_pos(3), ub_vel(3), ub_acc(3), ub_orientation(3, 3)
     REAL(wp), INTENT(IN), OPTIONAL :: ub_angular_velocity(3), ub_angular_acceleration(3)
+    LOGICAL, INTENT(IN), OPTIONAL :: caller_restores
     REAL(wp) :: target_dcm(3, 3), d0_target(3, 2)
     REAL(wp) :: tangent_q(3), tangent_v(3), tangent_a(3)
     REAL(wp) :: target_omega(3), target_alpha(3), tors_ends(3, 4)
     REAL(wp) :: target_dcm_b(3, 3), target_omega_b(3), target_alpha_b(3), tangent_b(3, 3)
     INTEGER :: base, es
+    LOGICAL :: atomic
     CHARACTER(1024) :: em
 
     CALL prepare_coupled_kinematics(self, u_pos, u_vel, u_acc, target_dcm, target_omega, target_alpha, &
@@ -1329,10 +1339,12 @@ CONTAINS
       ErrMsg = 'CD_HFMF_SetCoupledKinematics: '//TRIM(em)
       RETURN
     END IF
+    atomic = .TRUE.
+    IF (PRESENT(caller_restores)) atomic = .NOT. (caller_restores .AND. self%line%tw_active)
+    IF (self%tors_parent .OR. self%tors_parent_b) tors_ends = coupled_torsion_ends(self, target_dcm, target_dcm_b)
     ! A parent-attached torsion frame is checked at the state about to be written before
     ! anything is written (the update is all or nothing)
-    IF (self%tors_parent .OR. self%tors_parent_b) THEN
-      tors_ends = coupled_torsion_ends(self, target_dcm, target_dcm_b)
+    IF ((self%tors_parent .OR. self%tors_parent_b) .AND. atomic) THEN
       ! the candidate configuration in the line's trial scratch (as coupled_candidate_q builds it)
       DO base = 1, SIZE(self%line%q)
         self%line%ws_qtrial(base) = self%line%q(base)

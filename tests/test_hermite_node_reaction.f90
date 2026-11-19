@@ -11,7 +11,10 @@ PROGRAM test_hermite_node_reaction
   !!      attachments; finite, rigid or no end connections), at scattered states;
   !!   B. the maintained IEA-15 MW mixed mooring example through the OpenFAST aggregate, along a
   !!      coupled surge and heave trajectory in a current, and after a fairlead transfer without
-  !!      a step (the state the OpenFAST CalcOutput evaluates).
+  !!      a step (the state the OpenFAST CalcOutput evaluates);
+  !!   C. hand-built cables with the nodal twist (rigid bending ends, End A held in torsion and
+  !!      End B held or on a torsional spring, torsional damping), at scattered states: the
+  !!      reaction and the rigid ends' connection moment equal the full assembly's.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
                                           CD_HermiteCable_Dyn_Reaction, CD_HermiteCable_Dyn_Set_Contact, &
@@ -20,7 +23,10 @@ PROGRAM test_hermite_node_reaction
                                           CD_HermiteCable_Dyn_Set_Drag, CD_HermiteCable_Dyn_Set_AddedMass, &
                                           CD_HermiteCable_Dyn_Set_Waves, CD_HermiteCable_Dyn_Set_Held_Fluid, &
                                           CD_HermiteCable_Dyn_Set_EndConnection, CD_HermiteCable_Dyn_End, &
+                                          CD_HermiteCable_Dyn_Set_Torsion, CD_HermiteCable_Dyn_EndConnection_Moment, &
                                           CD_HCDYN_OK
+  USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
+                                     CD_HTORS_OK
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
   USE CableDyn_Line, ONLY: CD_Nodal_Seabed_Stiffness, CD_LINE_OK
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
@@ -39,12 +45,15 @@ PROGRAM test_hermite_node_reaction
   CALL case_hand_built(waves=.FALSE., mode=CD_ENDCONN_FINITE)
   CALL case_hand_built(waves=.FALSE., mode=CD_ENDCONN_RIGID)
   CALL case_hand_built(waves=.TRUE., mode=-1)
+  CALL case_nodal_twist(spring_b=.FALSE.)
+  CALL case_nodal_twist(spring_b=.TRUE.)
   IF (COMMAND_ARGUMENT_COUNT() >= 1) CALL case_mixed_example()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
   END IF
-  WRITE (*, '(A,I0,A)') 'PASS: node reactions equal the full assembly bit for bit (', ncompared, ' nodes)'
+  WRITE (*, '(A,I0,A)') 'PASS: node reactions and end moments equal the full assembly bit for bit (', &
+    ncompared, ' nodes)'
 
 CONTAINS
 
@@ -204,6 +213,105 @@ CONTAINS
     END DO
     CALL CD_HermiteCable_Dyn_End(m)
   END SUBROUTINE case_hand_built
+
+  SUBROUTINE case_nodal_twist(spring_b)
+    !! A 16-element cable along +x between held ends with Rigid bending connections and the nodal
+    !! twist (polar inertia, torsional damping, an imposed twist), End B held in torsion or on a
+    !! torsional spring, with drag in a current and added mass: at the rest state and at scattered
+    !! states (positions, velocities, accelerations and twist angles and rates), the node reaction
+    !! at every node and the connection moment at both ends equal the full assembly's.
+    LOGICAL, INTENT(IN) :: spring_b
+    INTEGER, PARAMETER :: NE = 16, NN = NE + 1, NDOF = 6*NN
+    REAL(wp), PARAMETER :: L = 1.5_wp, PI_L = 3.14159265358979323846_wp
+    TYPE(CD_HermiteCableDynType) :: m
+    TYPE(CD_HermiteTorsionType) :: tors
+    REAL(wp) :: l0(NE), diam(NE), q(NDOF), g(NDOF), raw, s, span, mo_full(3), mo_node(3)
+    REAL(wp), ALLOCATABLE :: r_saved(:), tw_saved(:)
+    INTEGER :: i, k, trial, es, es2, iend
+    CHARACTER(512) :: em
+    CHARACTER(32) :: label
+
+    WRITE (label, '(A,L1)') 'C spring_b=', spring_b
+    l0 = L
+    diam = 0.12_wp
+    span = L*REAL(NE, wp)
+    q = 0.0_wp
+    DO i = 1, NN
+      ! along +x, bowed in y with the end tangents along +x (as the rigid connections hold them)
+      s = REAL(i - 1, wp)*L
+      q(6*i - 5) = s
+      q(6*i - 4) = 0.3_wp*SIN(PI_L*s/span)**2
+      q(6*i - 2) = 1.0_wp
+      q(6*i - 1) = 0.3_wp*(PI_L/span)*SIN(2.0_wp*PI_L*s/span)
+    END DO
+    CALL CD_HermiteCable_Dyn_Init(m, l0, [(2.0e6_wp, k=1, NE)], [(500.0_wp, k=1, NE)], [(20.0_wp, k=1, NE)], &
+                                  [(0.0_wp, k=1, NE)], q, [1, 2, 3, NDOF - 5, NDOF - 4, NDOF - 3], -100.0_wp, &
+                                  0.0_wp, 0.5_wp, es, em)
+    CALL require(es == CD_HCDYN_OK, TRIM(label)//': init: '//TRIM(em))
+    IF (es /= CD_HCDYN_OK) RETURN
+    CALL CD_HermiteCable_Dyn_Set_EndConnection(m, [0.0_wp, 0.0_wp], &
+                                               RESHAPE([1.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp], [3, 2]), &
+                                               es, em, connection_mode=[CD_ENDCONN_RIGID, CD_ENDCONN_RIGID])
+    CALL require(es == CD_HCDYN_OK, TRIM(label)//': end connections: '//TRIM(em))
+    CALL CD_HermiteCable_Dyn_Set_Drag(m, 1025.0_wp, diam, [(1.2_wp, k=1, NE)], [(0.008_wp, k=1, NE)], 0.0_wp, &
+                                      [0.4_wp, 0.3_wp, 0.0_wp], es, em)
+    CALL require(es == CD_HCDYN_OK, TRIM(label)//': drag: '//TRIM(em))
+    CALL CD_HermiteCable_Dyn_Set_AddedMass(m, 1025.0_wp, diam, [(1.0_wp, k=1, NE)], [(0.1_wp, k=1, NE)], 0.0_wp, &
+                                           es, em)
+    CALL require(es == CD_HCDYN_OK, TRIM(label)//': added mass: '//TRIM(em))
+    tors%active = .TRUE.
+    tors%phi = 0.7_wp
+    tors%ends = RESHAPE([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, &
+                         0.0_wp, 0.0_wp, 1.0_wp], [3, 4])
+    tors%end_compliance = 0.0_wp
+    IF (spring_b) tors%end_compliance(2) = 2.0e-4_wp
+    ALLOCATE (tors%gj(NE), tors%irn(NE), tors%bt(NE))
+    tors%gj = 3.0e3_wp
+    tors%irn = 0.05_wp
+    tors%bt = 40.0_wp
+    CALL CD_HermiteTorsion_Line(q, l0, tors%ends, raw, g, es, em)
+    CALL require(es == CD_HTORS_OK, TRIM(label)//': seed twist: '//TRIM(em))
+    tors%theta = CD_HermiteTorsion_Unwrap(raw, 0.0_wp)
+    tors%has_theta = .TRUE.
+    CALL CD_HermiteCable_Dyn_Set_Torsion(m, tors, es, em)
+    CALL require(es == CD_HCDYN_OK, TRIM(label)//': torsion: '//TRIM(em))
+    CALL require(m%tw_active, TRIM(label)//': the polar inertia installs the nodal twist')
+    IF (nfail > 0) RETURN
+
+    DO trial = 0, 6
+      IF (trial > 0) THEN
+        ! scattered state: positions within +-2 cm and tangent handles within +-0.02, velocities
+        ! and accelerations of order 1, twist angles within +-0.3 rad and their rates of order 1
+        DO i = 1, NDOF
+          m%q(i) = q(i) + 0.02_wp*uniform()
+          m%v(i) = uniform()
+          m%a(i) = 2.0_wp*uniform()
+        END DO
+        DO i = 1, NN
+          m%tw_phi(i) = m%tw_phi(i) + 0.3_wp*uniform()
+          m%tw_w(i) = uniform()
+        END DO
+        m%t = 0.41_wp*REAL(trial, wp)
+      END IF
+      CALL compare_nodes(m, TRIM(label)//MERGE(' rest     ', ' scattered', trial == 0), [(i, i=1, NN)])
+      DO iend = 1, 2
+        k = MERGE(1, NN, iend == 1)
+        CALL CD_HermiteCable_Dyn_EndConnection_Moment(m, k, mo_full, es, em, full_assembly=.TRUE.)
+        CALL require(es == CD_HCDYN_OK, TRIM(label)//': full moment: '//TRIM(em))
+        r_saved = m%ws_R
+        tw_saved = [m%tw_me, m%tw_tsum]
+        CALL CD_HermiteCable_Dyn_EndConnection_Moment(m, k, mo_node, es2, em)
+        CALL require(es2 == CD_HCDYN_OK, TRIM(label)//': node moment: '//TRIM(em))
+        CALL require(same_bits(mo_node, mo_full), TRIM(label)//': end moment equals the full one')
+        CALL require(same_bits(m%ws_R, r_saved) .AND. same_bits([m%tw_me, m%tw_tsum], tw_saved), &
+                     TRIM(label)//': end moment leaves the scratch untouched')
+        IF (.NOT. same_bits(mo_node, mo_full)) WRITE (*, '(A,I0,3ES24.16/A,3ES24.16)') '  node ', k, mo_node, &
+          '  full ', mo_full
+        ncompared = ncompared + 1
+      END DO
+    END DO
+    CALL CD_HermiteCable_Dyn_End(m)
+  END SUBROUTINE case_nodal_twist
 
   SUBROUTINE case_mixed_example()
     !! The mixed mooring example (EI = 0 chains and a grounded finite-EI power cable with contact,
