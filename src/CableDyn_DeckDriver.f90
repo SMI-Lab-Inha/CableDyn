@@ -268,6 +268,9 @@ MODULE CableDyn_DeckDriver
   ! Both reuse the same private evaluators the standalone .out writers use, so a coupled run
   ! and the standalone driver report identical channel values on a shared configuration.
   PUBLIC :: CD_Eval_Aggregate_Channel, CD_Channel_Unit
+  ! The line-wide values one output row of channels shares per finite-EI cable (the rows argument
+  ! of CD_Eval_Aggregate_Channel), cleared before each row.
+  PUBLIC :: CD_ChannelRow, CD_Channel_Row_Reset
   ! The deck node of a node of a finite-EI cable's final mesh (the static-profile DeckNode column).
   PUBLIC :: CD_Cable_Deck_Node
   ! In-process object queries of the C API (CableDyn_CAPI): segment tensions in the .t.out
@@ -925,12 +928,33 @@ MODULE CableDyn_DeckDriver
     REAL(wp), ALLOCATABLE :: line_pv(:), line_pd(:), line_pm(:)
   END TYPE
 
-  TYPE :: LoadPowerRow
-    !! The node load powers of one finite-EI cable at the committed state of one output row
-    !! (CD_HermiteCable_Dyn_Load_Power): the row's first load power channel of the cable
-    !! evaluates them and its other load power channels reuse them.
+  TYPE :: CD_ChannelRow
+    !! The line-wide values of one finite-EI cable at the state of one output row: the row's
+    !! first channel of the cable that needs one evaluates it, and the cable's other channels of
+    !! the row read it, so a row costs one line-wide evaluation per kind of value, not one per
+    !! channel. Each value is the one the channel would evaluate itself, bit for bit. A row is
+    !! valid for one state only: CD_Channel_Row_Reset clears it before every row.
+    !! valid: the node load powers (CD_HermiteCable_Dyn_Load_Power)
     LOGICAL :: valid = .FALSE.
     REAL(wp), ALLOCATABLE :: pv(:), pd(:), pm(:)
+    ! the torsion state Theta and torque (CD_HermiteCable_Dyn_Torsion_State)
+    LOGICAL :: tors_valid = .FALSE.
+    REAL(wp) :: theta = CD_ZERO, torque = CD_ZERO
+    ! the element twists (CD_HermiteCable_Dyn_Element_Twist)
+    LOGICAL :: etw_valid = .FALSE.
+    REAL(wp), ALLOCATABLE :: etw(:)
+    ! the twists of the torsional end springs (CD_HermiteCable_Dyn_End_Twist)
+    LOGICAL :: etw2_valid = .FALSE.
+    REAL(wp) :: etw2(2) = CD_ZERO
+    ! the node torques (CD_HermiteCable_Dyn_Node_Torque)
+    LOGICAL :: ntq_valid = .FALSE.
+    REAL(wp), ALLOCATABLE :: ntq(:)
+    ! the section curvature components (CD_HFMF_Section_Curvature)
+    LOGICAL :: sc_valid = .FALSE.
+    REAL(wp), ALLOCATABLE :: kxa(:), kya(:)
+    ! the smoothed VIV amplitude estimates (CD_HermiteCable_Dyn_VIV_Amplitude)
+    LOGICAL :: amp_valid = .FALSE.
+    REAL(wp), ALLOCATABLE :: amp(:)
   END TYPE
 
   TYPE :: LineStepWorkspace
@@ -24007,6 +24031,8 @@ CONTAINS
     TYPE(ModelOutputWorkspace) :: output_work
     TYPE(DriverProgress) :: progress
     TYPE(CD_RangeSet) :: mb_ranges
+    ! the cables' line-wide values one output row of channels shares (reset per row)
+    TYPE(CD_ChannelRow), ALLOCATABLE :: mb_rows(:)
 
     converged = .FALSE.
     ErrStat = CD_DECKDRV_OK
@@ -24621,6 +24647,14 @@ CONTAINS
       CALL CD_Deck_Range_Sample_Aggregate(mb_ranges, mb%has_sys, mb%system, mb%cables, mb%line_is_cable, &
                                           mb%line_obj_index, time, ErrStat, ErrMsg)
       IF (ErrStat /= CD_DECKDRV_OK) RETURN
+      IF (.NOT. ALLOCATED(mb_rows)) THEN
+        IF (ALLOCATED(mb%cables)) THEN
+          ALLOCATE (mb_rows(SIZE(mb%cables)))
+        ELSE
+          ALLOCATE (mb_rows(0))
+        END IF
+      END IF
+      CALL CD_Channel_Row_Reset(mb_rows)
       DO j = 1, SIZE(channels)
         IF (is_object_channel(to_lower(channels(j)))) THEN
           CALL mb_object_channel(mb, points, opts, time, channels(j), vals(j), found, ErrStat, ErrMsg, bathymetry)
@@ -24632,7 +24666,7 @@ CONTAINS
           CALL mb_point_force(mb, channels(j), vals(j), ErrStat, ErrMsg)
         ELSE
           CALL CD_Eval_Aggregate_Channel(channels(j), mb%has_sys, mb%system, mb%cables, mb%line_is_cable, &
-                                         mb%line_obj_index, vals(j), ErrStat, ErrMsg, ranges=mb_ranges)
+                                         mb%line_obj_index, vals(j), ErrStat, ErrMsg, ranges=mb_ranges, rows=mb_rows)
         END IF
         IF (ErrStat /= CD_DECKDRV_OK) RETURN
         IF (.NOT. IEEE_IS_FINITE(vals(j))) THEN
@@ -34311,8 +34345,9 @@ CONTAINS
     REAL(wp) :: val, f(3), fl(3)
     CHARACTER(NAMELEN) :: lo
     CHARACTER(1024) :: em
-    ! the cables' load powers at this row's state, shared by their load power channels
-    TYPE(LoadPowerRow) :: powers(SIZE(cables))
+    ! the cables' line-wide values at this row's state (load powers, twists, torques, ...), shared by
+    ! their channels of the row
+    TYPE(CD_ChannelRow) :: powers(SIZE(cables))
     ErrStat = CD_DECKDRV_OK; ErrMsg = ''
     IF (PRESENT(ranges)) THEN
       DO li = 1, SIZE(lines)
@@ -39702,12 +39737,14 @@ CONTAINS
   ! -------------------------------------------------------------------------- !
 
   SUBROUTINE CD_Eval_Aggregate_Channel(ch, has_sys, system, cables, line_is_cable, line_obj_index, val, ErrStat, &
-                                       ErrMsg, cable_points, rigid_rt, rod_rt, ranges, mesh_node)
+                                       ErrMsg, cable_points, rigid_rt, rod_rt, ranges, mesh_node, rows)
     !! Evaluate ONE deck OUTPUTS channel token against a built aggregate. The token's deck line
     !! id is resolved through the map to either an EI=0 system line (eval_system_line_channel) or
     !! a finite-EI cable (eval_cable_channel); Point<P> channels read the EI=0 system point state.
     !! The channel is assumed already validated (parse_deck -> check_channel); an internally
-    !! inconsistent token or a failed state query still fails closed here.
+    !! inconsistent token or a failed state query still fails closed here. rows (optional, one
+    !! per cable): the line-wide values the channels of one output row share (CD_ChannelRow),
+    !! reset by the caller before the row; the value is the same with or without them.
     CHARACTER(*), INTENT(IN) :: ch
     LOGICAL, INTENT(IN) :: has_sys
     TYPE(CD_SystemType), INTENT(IN) :: system
@@ -39730,6 +39767,7 @@ CONTAINS
     ! A node channel names a deck node; mesh_node = .TRUE. reads it as a node of the line's final
     ! mesh instead (eval_cable_channel), as the static profile and the C API line arrays do
     LOGICAL, INTENT(IN), OPTIONAL :: mesh_node
+    TYPE(CD_ChannelRow), INTENT(INOUT), OPTIONAL :: rows(:)
 
     CHARACTER(NAMELEN) :: lo
     LOGICAL :: found
@@ -39884,7 +39922,14 @@ CONTAINS
       IF (line_obj_index(line_id) > SIZE(cables)) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": cable index out of range'); RETURN
       END IF
-      CALL eval_cable_channel(cables(line_obj_index(line_id)), ch, val, ErrStat, ErrMsg, mesh_node=mesh_node)
+      c = line_obj_index(line_id)
+      IF (PRESENT(rows)) THEN
+        IF (c <= SIZE(rows)) THEN
+          CALL eval_cable_channel(cables(c), ch, val, ErrStat, ErrMsg, mesh_node=mesh_node, power=rows(c))
+          RETURN
+        END IF
+      END IF
+      CALL eval_cable_channel(cables(c), ch, val, ErrStat, ErrMsg, mesh_node=mesh_node)
     ELSE
       IF (.NOT. has_sys) THEN
         CALL fail(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": line maps to the EI=0 system but no system '// &
@@ -40404,16 +40449,17 @@ CONTAINS
     !! names a deck node (1 + the total NumSegs of the line's sections, End A first), read at its
     !! node of the final mesh on a refined line (cable%deck_node); mesh_node = .TRUE. reads the
     !! token's node as a node of the final mesh instead (the static profile and the C API line
-    !! arrays list every mesh node). power (optional), the cable's load powers at its present
-    !! state: a load power channel takes them when they are valid and stores them otherwise, so
-    !! the load power channels of one output row evaluate them once.
+    !! arrays list every mesh node). power (optional), the cable's line-wide values at its present
+    !! state (CD_ChannelRow: load powers, torsion state, element, end and node twists and
+    !! torques, section curvature, VIV amplitude): a channel takes a value when it is valid and
+    !! stores it otherwise, so the channels of one output row evaluate each kind once.
     TYPE(CD_HFMF_ModuleType), INTENT(INOUT) :: cable
     CHARACTER(*), INTENT(IN) :: ch
     REAL(wp), INTENT(OUT) :: val
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     LOGICAL, INTENT(IN), OPTIONAL :: mesh_node
-    TYPE(LoadPowerRow), INTENT(INOUT), OPTIONAL :: power
+    TYPE(CD_ChannelRow), INTENT(INOUT), OPTIONAL :: power
 
     CHARACTER(NAMELEN) :: lo
     INTEGER :: line_id, node, kind, comp, nnode, nelem, inode, es
@@ -40522,6 +40568,19 @@ CONTAINS
         END IF
       END BLOCK
     CASE (21)   ! the smoothed VIV amplitude estimate of the node (VIV AMPLITUDE)
+      IF (PRESENT(power)) THEN
+        IF (.NOT. power%amp_valid) THEN
+          CALL row_array(power%amp, nnode)
+          CALL CD_HermiteCable_Dyn_VIV_Amplitude(cable%line, power%amp, es, em)
+          IF (es /= CD_HCDYN_OK) THEN
+            CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": finite-EI VIV amplitude recovery failed: '// &
+                            TRIM(em)); RETURN
+          END IF
+          power%amp_valid = .TRUE.
+        END IF
+        val = power%amp(inode)
+        RETURN
+      END IF
       BLOCK
         REAL(wp) :: amp(nnode)
         CALL CD_HermiteCable_Dyn_VIV_Amplitude(cable%line, amp, es, em)
@@ -40549,6 +40608,19 @@ CONTAINS
         CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
       END IF
     CASE (13, 14)   ! the curvature vector on the section axes x, y (CD_HFMF_Section_Curvature)
+      IF (PRESENT(power)) THEN
+        IF (.NOT. power%sc_valid) THEN
+          CALL row_array(power%kxa, cable%line%nn)
+          CALL row_array(power%kya, cable%line%nn)
+          CALL CD_HFMF_Section_Curvature(cable, power%kxa, power%kya, es, em)
+          IF (es /= CD_HFMF_OK) THEN
+            CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
+          END IF
+          power%sc_valid = .TRUE.
+        END IF
+        val = MERGE(power%kxa(inode), power%kya(inode), kind == 13)
+        RETURN
+      END IF
       BLOCK
         REAL(wp) :: kxa(cable%line%nn), kya(cable%line%nn)
         CALL CD_HFMF_Section_Curvature(cable, kxa, kya, es, em)
@@ -40558,6 +40630,10 @@ CONTAINS
         val = MERGE(kxa(inode), kya(inode), kind == 13)
       END BLOCK
     CASE (9, 10, 11)   ! condensed torsion: torque [N m], twist from End A to node J, total twist [deg]
+      IF (PRESENT(power)) THEN
+        CALL row_torsion_value(cable, power, kind, inode, ch, val, ErrStat, ErrMsg)
+        RETURN
+      END IF
       BLOCK
         REAL(wp) :: th, mt
         CALL CD_HermiteCable_Dyn_Torsion_State(cable%line, th, mt, es, em)
@@ -40610,6 +40686,96 @@ CONTAINS
       val = line_geom_value(kind, node, nnode, cable%line%q(1:6*nnode), 6)
     END SELECT
   END SUBROUTINE eval_cable_channel
+
+  SUBROUTINE row_torsion_value(cable, row, kind, inode, ch, val, ErrStat, ErrMsg)
+    !! The torsion channels of eval_cable_channel (kind 9 torque, 10 twist from End A to the node,
+    !! 11 total twist) from the line-wide torsion values of the output row: each is evaluated once
+    !! per row by the first channel that needs it, the same calls in the same order as the
+    !! channel's own evaluation, so the value is bit for bit the one eval_cable_channel computes
+    !! without a row.
+    TYPE(CD_HFMF_ModuleType), INTENT(IN) :: cable
+    TYPE(CD_ChannelRow), INTENT(INOUT) :: row
+    INTEGER, INTENT(IN) :: kind, inode
+    CHARACTER(*), INTENT(IN) :: ch
+    REAL(wp), INTENT(OUT) :: val
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: es, nelem
+    CHARACTER(1024) :: em
+
+    ErrStat = CD_DECKDRV_OK
+    ErrMsg = ''
+    val = CD_ZERO
+    nelem = cable%line%ne
+    IF (.NOT. row%tors_valid) THEN
+      CALL CD_HermiteCable_Dyn_Torsion_State(cable%line, row%theta, row%torque, es, em)
+      IF (es /= CD_HCDYN_OK) THEN
+        CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
+      END IF
+      row%tors_valid = .TRUE.
+    END IF
+    IF (kind == 9 .AND. cable%line%tw_active) THEN
+      ! nodal twist: the torque at the node (its elements' mean; an end node's element)
+      IF (.NOT. row%ntq_valid) THEN
+        CALL row_array(row%ntq, cable%line%nn)
+        CALL CD_HermiteCable_Dyn_Node_Torque(cable%line, row%ntq, es, em)
+        IF (es /= CD_HCDYN_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
+        END IF
+        row%ntq_valid = .TRUE.
+      END IF
+      val = row%ntq(inode)
+    ELSE IF (kind == 9) THEN
+      val = row%torque
+    ELSE IF (cable%line%torsion%active) THEN
+      IF (.NOT. row%etw_valid) THEN
+        CALL row_array(row%etw, nelem)
+        CALL CD_HermiteCable_Dyn_Element_Twist(cable%line, row%etw, es, em)
+        IF (es /= CD_HCDYN_OK) THEN
+          CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
+        END IF
+        row%etw_valid = .TRUE.
+      END IF
+      IF (kind == 11 .AND. cable%line%tw_active) THEN
+        IF (.NOT. row%etw2_valid) THEN
+          CALL CD_HermiteCable_Dyn_End_Twist(cable%line, row%etw2, es, em)
+          IF (es /= CD_HCDYN_OK) THEN
+            CALL fail_solve(ErrStat, ErrMsg, 'OUTPUT "'//TRIM(ch)//'": '//TRIM(em)); RETURN
+          END IF
+          row%etw2_valid = .TRUE.
+        END IF
+        val = (SUM(row%etw2) + SUM(row%etw))*45.0_wp/QUARTER_PI
+      ELSE IF (kind == 11) THEN
+        val = (row%torque*SUM(cable%line%torsion%end_compliance) + SUM(row%etw))*45.0_wp/QUARTER_PI
+      ELSE
+        val = SUM(row%etw(inode:nelem))*45.0_wp/QUARTER_PI
+      END IF
+    END IF
+  END SUBROUTINE row_torsion_value
+
+  SUBROUTINE row_array(a, n)
+    !! A line-wide array of an output row (CD_ChannelRow) sized n; its values are not kept.
+    REAL(wp), ALLOCATABLE, INTENT(INOUT) :: a(:)
+    INTEGER, INTENT(IN) :: n
+    IF (ALLOCATED(a)) THEN
+      IF (SIZE(a) == n) RETURN
+      DEALLOCATE (a)
+    END IF
+    ALLOCATE (a(n))
+  END SUBROUTINE row_array
+
+  ELEMENTAL SUBROUTINE CD_Channel_Row_Reset(row)
+    !! Clear the line-wide values of an output row (CD_ChannelRow) before the channels of a new
+    !! row, or after the state they were evaluated at changed; the arrays are kept for reuse.
+    TYPE(CD_ChannelRow), INTENT(INOUT) :: row
+    row%valid = .FALSE.
+    row%tors_valid = .FALSE.
+    row%etw_valid = .FALSE.
+    row%etw2_valid = .FALSE.
+    row%ntq_valid = .FALSE.
+    row%sc_valid = .FALSE.
+    row%amp_valid = .FALSE.
+  END SUBROUTINE CD_Channel_Row_Reset
 
   PURE LOGICAL FUNCTION cable_state_ready(cable) RESULT(ready)
     !! Whether a finite-EI cable holds the state its channels read.

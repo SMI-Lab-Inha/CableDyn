@@ -29,7 +29,7 @@ PROGRAM cabledyn
                                          CD_AGG_NMovingPoints, CD_AGG_GetMovingPointMesh, &
                                          CD_AGG_Step_Moving, CD_AGG_CalcOutput, CD_AGG_End, &
                                          CD_AGG_NumChannels, CD_AGG_ChannelHeader, &
-                                         CD_AGG_EvalChannel, CD_AGG_WriteStaticProfile, &
+                                         CD_AGG_EvalChannels, CD_AGG_WriteStaticProfile, &
                                          CD_AGG_GetInitMetadata, CD_AGG_GetInitLine, &
                                          CD_AGG_Range_Sample, CD_AGG_Range_Write, CD_AGG_OK, CD_AGG_BADINPUT, &
                                          CD_AGG_UpdateStates_Moving, CD_AGG_MotionKinematics, &
@@ -854,22 +854,27 @@ CONTAINS
     TYPE(CD_AGG_ModuleType), INTENT(INOUT) :: aggregate
     INTEGER, INTENT(OUT) :: stat
     CHARACTER(*), INTENT(OUT) :: msg
-    INTEGER :: i, ios
-    REAL(wp) :: value
+    INTEGER :: i, ios, n_done, eval_stat
+    REAL(wp) :: values(CD_AGG_NumChannels(aggregate))
+    CHARACTER(LEN(msg)) :: eval_msg
 
     ! full-precision time column (the deck-driver writers use the same format)
     WRITE (unit, '(ES25.16E3)', ADVANCE='NO', IOSTAT=ios) time
     IF (ios /= 0) THEN
       stat = CD_AGG_BADINPUT; msg = 'cannot write mixed output row'; RETURN
     END IF
-    DO i = 1, CD_AGG_NumChannels(aggregate)
-      CALL CD_AGG_EvalChannel(aggregate, i, value, stat, msg)
-      IF (stat /= CD_AGG_OK) RETURN
-      WRITE (unit, CD_CHANNEL_FMT, ADVANCE='NO', IOSTAT=ios) CHAR(9), value
+    ! the row's channels in one evaluation (their shared line-wide values once); a failed channel
+    ! ends the row after the channels before it, as a channel-by-channel loop would
+    CALL CD_AGG_EvalChannels(aggregate, values, n_done, eval_stat, eval_msg)
+    DO i = 1, n_done
+      WRITE (unit, CD_CHANNEL_FMT, ADVANCE='NO', IOSTAT=ios) CHAR(9), values(i)
       IF (ios /= 0) THEN
         stat = CD_AGG_BADINPUT; msg = 'cannot write mixed output row'; RETURN
       END IF
     END DO
+    IF (eval_stat /= CD_AGG_OK) THEN
+      stat = eval_stat; msg = eval_msg; RETURN
+    END IF
     WRITE (unit, '(A)', IOSTAT=ios) ''
     IF (ios /= 0) THEN
       stat = CD_AGG_BADINPUT; msg = 'cannot write mixed output row'; RETURN
