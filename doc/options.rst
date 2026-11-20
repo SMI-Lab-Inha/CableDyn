@@ -573,6 +573,16 @@ Finite-EI cable controls
        (see :doc:`openfast`)
      - OpenFAST
      - ``False predictLoads``
+   * - ``CDOutDt`` / ``cd_out_dt``
+     - real, s
+     - ``0``
+     - finite, >= 0, and a whole multiple of the CableDyn step (``dtM``, or ``DT`` when the deck
+       omits ``dtM``; the run stops at initialisation otherwise): the ``.CD.out`` record takes a
+       row at every whole multiple of it, which also skips the channel evaluation those rows
+       make. ``0`` writes a row after every committed step. The channels OpenFAST writes follow
+       its ``DT_Out`` either way (see :doc:`outputs`)
+     - OpenFAST and FAST.Farm
+     - ``0.1 CDOutDt``
 
 Ambient fluid and prescribed motion
 -----------------------------------

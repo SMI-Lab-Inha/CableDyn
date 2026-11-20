@@ -258,6 +258,8 @@ _OPTION_ALIASES = {
     "max_strain": "max_strain",
     "vivrmswindow": "viv_rms_window",
     "viv_rms_window": "viv_rms_window",
+    "cdoutdt": "cd_out_dt",
+    "cd_out_dt": "cd_out_dt",
     "vivphaseseed": "viv_phase_seed",
     "viv_phase_seed": "viv_phase_seed",
     "rangestart": "range_start",
@@ -1258,6 +1260,7 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         "max_strain",
         "range_start",
         "viv_rms_window",
+        "cd_out_dt",
     }:
         if key == "friction" and value.lower() == "none":
             return None
@@ -1297,6 +1300,7 @@ def _scalar_option_value_error(keyword: str, value: str) -> str | None:
         "max_strain",
         "range_start",
         "viv_rms_window",
+        "cd_out_dt",
     } or raw in {
         "dtic",
         "tmaxic",

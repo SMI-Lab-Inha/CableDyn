@@ -15,7 +15,9 @@ PROGRAM test_channel_row
   !!      follow the state (a line-wide value kept from the row before, the stale row, fails);
   !!      a second row at the same state repeats the first bit for bit;
   !!   2. a non-stepping transfer of other kinematics (the shell's output probe) changes the
-  !!      state without a step: the row follows it.
+  !!      state without a step: the row follows it;
+  !!   3. OPTIONS CDOutDt, the interval of the shell's committed-step record, reaches the
+  !!      aggregate, and a negative interval stops the deck.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_NMovingPoints, &
                                          CD_AGG_GetMovingPointMesh, CD_AGG_UpdateStates_Moving, &
@@ -31,6 +33,7 @@ PROGRAM test_channel_row
 
   CALL write_deck('chrow.dat')
   CALL check_rows()
+  CALL check_cd_out_dt()
   IF (n_fail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', n_fail, ' channel row check(s) failed'
     ERROR STOP 1
@@ -63,12 +66,13 @@ CONTAINS
     END DO
   END FUNCTION same_bits
 
-  SUBROUTINE write_deck(path)
+  SUBROUTINE write_deck(path, extra_option)
     !! Three taut 100 m lines from fairleads at x = 0 to anchors at x = 100 m, 40 m deep, the cables
     !! neutrally buoyant: line 1 EI = 0 (twice the displaced mass); line 2 finite EI, clamped and
     !! restrained in torsion at both ends with a quarter turn of pretwist; line 3 finite EI under
     !! torque-tension coupling, clamped, rigid in torsion at End A and on a torsional spring at End B.
     CHARACTER(*), INTENT(IN) :: path
+    CHARACTER(*), INTENT(IN), OPTIONAL :: extra_option
     INTEGER :: u
     REAL(wp) :: m
     CHARACTER(32) :: mtxt, rtxt
@@ -115,6 +119,7 @@ CONTAINS
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'
     WRITE (u, '(A)') '0.05 dtM'
+    IF (PRESENT(extra_option)) WRITE (u, '(A)') extra_option
     WRITE (u, '(A)') '--- OUTPUTS ---'
     WRITE (u, '(A)') 'FairTen1'
     WRITE (u, '(A)') 'L1N4pz'
@@ -148,6 +153,28 @@ CONTAINS
     WRITE (u, '(A)') '--- END ---'
     CLOSE (u)
   END SUBROUTINE write_deck
+
+  SUBROUTINE check_cd_out_dt()
+    !! OPTIONS CDOutDt (the shell's .CD.out row interval) is carried to the aggregate, 0 without it;
+    !! a negative interval fails the deck naming the option.
+    TYPE(CD_AGG_ModuleType) :: agg
+    INTEGER :: es
+    CHARACTER(512) :: em
+    CALL CD_AGG_Init_From_Deck(agg, 'chrow.dat', DT, es, em, host_orientation=.TRUE.)
+    CALL require(es == CD_AGG_OK .AND. .NOT. (ABS(agg%cd_out_dt) > 0.0_wp), &
+                 'without CDOutDt the record keeps a row per step (cd_out_dt = 0)')
+    CALL CD_AGG_End(agg, es, em)
+    CALL write_deck('chrow_cdout.dat', '0.1 CDOutDt')
+    CALL CD_AGG_Init_From_Deck(agg, 'chrow_cdout.dat', DT, es, em, host_orientation=.TRUE.)
+    CALL require(es == CD_AGG_OK, 'a deck with CDOutDt builds: '//TRIM(em))
+    CALL require(ABS(agg%cd_out_dt - 0.1_wp) <= 0.0_wp, 'CDOutDt reaches the aggregate')
+    CALL CD_AGG_End(agg, es, em)
+    CALL write_deck('chrow_cdout.dat', '-0.1 cd_out_dt')
+    CALL CD_AGG_Init_From_Deck(agg, 'chrow_cdout.dat', DT, es, em, host_orientation=.TRUE.)
+    CALL require(es /= CD_AGG_OK .AND. INDEX(em, 'cd_out_dt') + INDEX(em, 'CDOutDt') > 0, &
+                 'a negative CDOutDt stops the deck naming the option: '//TRIM(em))
+    CALL CD_AGG_End(agg, es, em)
+  END SUBROUTINE check_cd_out_dt
 
   FUNCTION roll_dcm(phi) RESULT(r)
     !! OpenFAST mesh orientation (global to local) of a roll phi about +x.

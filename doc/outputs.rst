@@ -1136,8 +1136,9 @@ output root:
   digits, three-digit exponent), TAB-separated.
 
 The first data row is the static initialisation at ``t = 0``; every further row is written after
-each committed CableDyn step, at every ``dtM`` boundary. It is independent of OpenFAST's ``DT_Out``
-and never repeats held values between
+each committed CableDyn step, at every ``dtM`` boundary, or, with ``OPTIONS CDOutDt`` (a whole
+multiple of the CableDyn step), at every multiple of ``CDOutDt``. It is independent of OpenFAST's
+``DT_Out`` and never repeats held values between
 CableDyn steps. If OpenFAST retries a step, at any ``dtM``, the provisional row is replaced rather
 than duplicated, and a restore of an operating point (``CalcSteady``) keeps the rows of the run;
 the file is flushed after every row, so it is readable during a run and intact after a crash.

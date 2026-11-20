@@ -829,6 +829,9 @@ MODULE CableDyn_DeckDriver
     ! OpenFAST supercycling (dtM > DT): extrapolate the coupled loads between dtM solves from the
     ! last two (CableDyn_LoadPredictor); FALSE holds the last solve's loads
     LOGICAL  :: predict_loads = .TRUE.
+    ! OPTION CDOutDt [s]: the interval of the coupled .CD.out rows, a whole multiple of the
+    ! CableDyn step; 0 (the default) writes a row after every committed step
+    REAL(wp) :: cd_out_dt = CD_ZERO
     ! Opt-in adaptive mesh for COUPLED finite-EI cables: when set, a cable whose static IC is
     ! diagnosed under-resolved (CD_HermiteCable_Resolution_Metrics fragile) is refined by
     ! warm-started cubic-Hermite prolongation before the coupled dynamic run. Default FALSE keeps
@@ -1311,6 +1314,8 @@ MODULE CableDyn_DeckDriver
     LOGICAL :: cable_load_feedback = .TRUE.
     ! Deck OPTION predictLoads (the OpenFAST shell; see CD_AGG_ModuleType%predict_loads)
     LOGICAL :: predict_loads = .TRUE.
+    ! Deck OPTION CDOutDt (the OpenFAST shell; see CD_AGG_ModuleType%cd_out_dt)
+    REAL(wp) :: cd_out_dt = CD_ZERO
     ! OPTION maxStrain, for the per-step plausibility guard of the coupled EI=0 lines.
     REAL(wp) :: max_strain = 0.5_wp
     REAL(wp), ALLOCATABLE :: host_current_profile_z(:)
@@ -8380,6 +8385,7 @@ CONTAINS
     agg%n_turbines = nturb
     agg%cable_load_feedback = opts%cable_load_feedback
     agg%predict_loads = opts%predict_loads
+    agg%cd_out_dt = opts%cd_out_dt
     agg%max_strain = opts%max_strain
 
     ! The standalone driver retains DeckOptions and evaluates a WaveKinMod-1 Fourier
@@ -9665,6 +9671,7 @@ CONTAINS
     agg%host_current_enabled = .FALSE.
     agg%cable_load_feedback = .TRUE.
     agg%predict_loads = .TRUE.
+    agg%cd_out_dt = CD_ZERO
     agg%max_strain = 0.5_wp
     IF (ALLOCATED(agg%host_current_profile_z)) DEALLOCATE (agg%host_current_profile_z)
     IF (ALLOCATED(agg%host_current_profile_velocity)) DEALLOCATE (agg%host_current_profile_velocity)
@@ -18838,6 +18845,8 @@ CONTAINS
       opts%has_max_strain = ErrStat == 0
     CASE ('vivrmswindow', 'viv_rms_window')
       CALL rd(val, opts%viv_rms_window, ErrStat, ErrMsg)
+    CASE ('cdoutdt', 'cd_out_dt')
+      CALL rd(val, opts%cd_out_dt, ErrStat, ErrMsg)
     CASE ('vivphaseseed', 'viv_phase_seed')
       SELECT CASE (TRIM(to_lower(val)))
       CASE ('spread')
@@ -19344,7 +19353,8 @@ CONTAINS
     CASE ('dtm', 'dt')
       rule = 'time step'
     CASE ('tmax', 'tensile_strain_tolerance', 'tensilestraintolerance', 'ramptime', 'ramp_time', 'tramp', &
-          'maxstrain', 'max_strain', 'rangestart', 'range_start', 'vivrmswindow', 'viv_rms_window')
+          'maxstrain', 'max_strain', 'rangestart', 'range_start', 'vivrmswindow', 'viv_rms_window', 'cdoutdt', &
+          'cd_out_dt')
       rule = 'non-negative'
     CASE ('frictionmu', 'mu', 'frictioncoefficient')
       IF (to_lower(TRIM(val)) == 'none') RETURN
