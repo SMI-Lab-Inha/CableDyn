@@ -257,6 +257,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
   evaluation. Results are unchanged to the bit; the Delta Flume case 9 deck of
   `validation/experiments/delta_flume` (64 elements, 80 000 steps) runs in 58.6 s instead of
   73.2 s.
+- The nodal twist of a finite-EI cable (torsion with polar inertia `Irn`) is cheaper to
+  evaluate. Its reference-twist and holonomy Hessians no longer call the run-time library for
+  small outer products and skew matrices, and they form only the solid-angle and intermediate
+  blocks that are read. A frame-only twist transfer (the OpenFAST output probe on every
+  `CalcOutput`, the checkpoint rebuild, linearization) re-bases only the elements at a rigid end
+  or at a turned node; the others keep their reference twist, which the evaluation would return
+  unchanged. Outputs, `.CD.out` and restarts are unchanged to the bit. On the IEA-15MW
+  VolturnUS-S with three chains and a lazy-wave power cable restrained in torsion (one thread),
+  simulation CPU per simulated hour fell from 36.5 to 32.5 min (241 elements, `DT = 0.02 s`)
+  and from 35.0 to 30.6 min (291 elements, `DT = 0.025 s`).
 
 ### Fixed
 

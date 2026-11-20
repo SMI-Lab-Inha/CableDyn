@@ -11685,18 +11685,50 @@ CONTAINS
     !! reference twists and end-frame references (the step's own formulas, so the committed
     !! state reproduces the converged iterate bit for bit), the unit tangents and the directors
     !! carried over by the smallest rotation (a rigid end's: its end frame's normal carried).
+    !!
+    !! An interior element (not at a rigid end) whose two unit node tangents are those of the
+    !! reference, bit for bit, keeps its reference twist: its transport solid angles are those
+    !! of the reference terms they are differenced against, so twist_reference returns
+    !! tw_beta(e) + tw_wrap(0) + 0, which is formed here without the evaluation. A frame-only
+    !! transfer between steps (CD_HermiteCable_Dyn_Set_Torsion_Frames at the committed shape,
+    !! where a host writes only the end nodes) so evaluates only the elements at a rigid end or
+    !! at a node whose tangent the host turned; the commit of a step evaluates every element
+    !! whose node tangents moved. (The skipped elements passed every check of twist_reference at
+    !! the same tangents and, the host writing only end nodes, the same shape.)
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: q_new(:), ends_new(3, 4)
     INTEGER, INTENT(OUT) :: ErrStat
     CHARACTER(*), INTENT(OUT) :: ErrMsg
     INTEGER :: e, i, iend
-    REAL(wp) :: rho, beta, g(12), h(12, 12), psi, gl(3), hl(3, 3), u(3), t(3)
+    REAL(wp) :: rho, beta, g(12), h(12, 12), psi, gl(3), hl(3, 3), u(3), t(3), rn
+    LOGICAL :: kept_prev, kept_i
     ErrStat = CD_HCDYN_OK
     ErrMsg = ''
+    ! the unit tangents at q_new first: an element whose two tangents are the reference's keeps
+    ! its reference twist
+    ! (a zero handle keeps a zero tangent here, so its elements are evaluated and report it)
+    DO i = 1, model%nn
+      rn = NORM2(q_new(6*i - 2:6*i))
+      model%tw_stn(:, i) = CD_ZERO
+      IF (rn > CD_ZERO) model%tw_stn(:, i) = q_new(6*i - 2:6*i)/rn
+    END DO
+    kept_prev = .FALSE.
     DO e = 1, model%ne
-      CALL twist_reference(model, e, q_new, ends_new, .FALSE., rho, beta, g, h, ErrStat, ErrMsg)
-      IF (ErrStat /= CD_HCDYN_OK) RETURN
-      model%tw_sbeta(e) = beta
+      kept_i = bits_equal(model%tw_stn(1, e + 1), model%tw_tn(1, e + 1)) .AND. &
+               bits_equal(model%tw_stn(2, e + 1), model%tw_tn(2, e + 1)) .AND. &
+               bits_equal(model%tw_stn(3, e + 1), model%tw_tn(3, e + 1))
+      IF (e == 1) kept_prev = bits_equal(model%tw_stn(1, 1), model%tw_tn(1, 1)) .AND. &
+                              bits_equal(model%tw_stn(2, 1), model%tw_tn(2, 1)) .AND. &
+                              bits_equal(model%tw_stn(3, 1), model%tw_tn(3, 1))
+      IF (kept_prev .AND. kept_i .AND. .NOT. ((e == 1 .AND. model%tw_rigid(1)) .OR. &
+                                              (e == model%ne .AND. model%tw_rigid(2)))) THEN
+        model%tw_sbeta(e) = model%tw_beta(e) + tw_wrap(CD_ZERO) + CD_ZERO
+      ELSE
+        CALL twist_reference(model, e, q_new, ends_new, .FALSE., rho, beta, g, h, ErrStat, ErrMsg)
+        IF (ErrStat /= CD_HCDYN_OK) RETURN
+        model%tw_sbeta(e) = beta
+      END IF
+      kept_prev = kept_i
     END DO
     model%tw_spsi = model%tw_psi
     DO iend = 1, 2
@@ -11706,8 +11738,7 @@ CONTAINS
       model%tw_spsi(iend) = psi
     END DO
     DO i = 1, model%nn
-      t = q_new(6*i - 2:6*i)/NORM2(q_new(6*i - 2:6*i))
-      model%tw_stn(:, i) = t
+      t = model%tw_stn(:, i)
       IF (i == 1 .AND. model%tw_rigid(1)) THEN
         u = CD_HermiteTwist_Carry(ends_new(:, 1), t, ends_new(:, 2))
       ELSE IF (i == model%nn .AND. model%tw_rigid(2)) THEN
