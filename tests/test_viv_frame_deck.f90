@@ -395,7 +395,8 @@ CONTAINS
     CALL write_deck(tag//'_flt.dat', ei, amp_rows, damp_rows, TMAX, .FALSE., frame_rows='riser 10 filter')
     CALL run(tag//'_flt.dat', tag//'_flt', ok, msg)
     CALL require(ok, 'G5: the deck with Method filter runs'//lab//': '//TRIM(msg))
-    CALL require(same_file(tag//'_tf.out', tag//'_flt.out'), 'G5: Method filter is the row without it, bit for bit'//lab)
+    CALL require(same_file(tag//'_tf.out', tag//'_flt.out'), &
+                 'G5: Method filter is the row without it, bit for bit'//lab)
     CALL write_deck(tag//'_cyc.dat', ei, amp_rows, damp_rows, TMAX, .FALSE., frame_rows='riser 3.5 cycle')
     CALL run(tag//'_cyc.dat', tag//'_cyc', ok, msg)
     CALL require(ok, 'G6: the deck with Method cycle runs'//lab//': '//TRIM(msg))

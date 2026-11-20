@@ -414,8 +414,8 @@ CONTAINS
     CALL refused('riser 0.3 0.2 0.3 12 1', 'TypeName CL0 [St [eps [A]]]', 'a row of six columns')
     CALL refused('riser 0.3', 'VIV FRAME rows must be: TypeName Tf [Method]', 'W7: a VIV FRAME row of four columns', &
                  frame_rows='riser 10 cycle 1')
-    CALL refused('riser 0.3', 'VIV FRAME Method must be filter or cycle', 'W7: a VIV FRAME row with an unknown Method', &
-                 frame_rows='riser 10 1')
+    CALL refused('riser 0.3', 'VIV FRAME Method must be filter or cycle', &
+                 'W7: a VIV FRAME row with an unknown Method', frame_rows='riser 10 1')
     CALL refused('riser 0.3', 'acts on the synchronisation model', 'W7: Method cycle on a wake-oscillator type', &
                  frame_rows='riser 10 cycle')
     CALL refused('riser 0.3', 'VIV FRAME row names undefined LINE TYPE', 'W7: an unknown type', &
