@@ -40,10 +40,16 @@ PROGRAM test_hermite_viv_frame
   !!   18 %) and the RMS more than 15 % (measured 23 %) from the fixed pipe's, with the lift alone
   !!   the RMS more than 4 % (measured 8 %);
   !! * F4 a snapshot taken mid-run and restored replays the following steps bit for bit, the
-  !!   filtered velocity included.
+  !!   filtered velocity included;
+  !! * F5 the cycle-mean frame (tf_cycle, window Tf 1 s, about one period of the response): it
+  !!   installs its state after the frame rows (CD_VIV_NMS_CYC more), the moving and the fixed pipe
+  !!   agree as in F2, its frame velocity follows the imposed one without the filter's lag (at the
+  !!   mid node over 5-15 s, the ramp: within 0.5 % of U0, measured 0.17 %, and at most a fifth of the
+  !!   first-order filter's lag error with Tf 0.6 s, measured 1.7 %), and a snapshot taken mid-run
+  !!   and restored replays the following steps bit for bit, the ring of the cycle mean included.
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
   USE CableDyn_Precision, ONLY: wp
-  USE CableDyn_VIV, ONLY: CD_VIV_AMP_MAXP, CD_VIV_NMS_FRAME
+  USE CableDyn_VIV, ONLY: CD_VIV_AMP_MAXP, CD_VIV_NMS_FRAME, CD_VIV_NMS_CYC
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCableDynType, CD_HermiteCable_Dyn_Init, &
                                           CD_HermiteCable_Dyn_Set_Drag, CD_HermiteCable_Dyn_Set_AddedMass, &
                                           CD_HermiteCable_Dyn_Set_VIV, CD_HermiteCable_Dyn_Set_Held_Fluid, &
@@ -172,6 +178,61 @@ PROGRAM test_hermite_viv_frame
     CALL CD_HermiteCable_Dyn_End(model)
   END BLOCK
 
+  ! ---- F5 the cycle-mean frame ----
+  BLOCK
+    REAL(wp), ALLOCATABLE :: q_ref(:, :), ms_ref(:, :, :)
+    REAL(wp) :: tfc(NE), y, vi, ai, dev, devf
+    INTEGER :: s, nr
+    tfc = 1.0_wp
+    CALL run_case(.TRUE., tfc, .TRUE., pk_mf, rms_mf, cycle=.TRUE.)
+    CALL run_case(.FALSE., tfc, .TRUE., pk_ff, rms_ff, cycle=.TRUE.)
+    WRITE (*, '(A,2F9.4,A,2F9.4)') '  F5 (tables) cycle mean: moving peak, RMS A/D ', pk_mf/D, rms_mf/D, '; fixed ', &
+      pk_ff/D, rms_ff/D
+    CALL require(pk_ff > 0.2_wp*D, 'F5: the fixed pipe locks in with the cycle-mean frame')
+    CALL require(ABS(pk_mf/pk_ff - 1.0_wp) <= TOL_F2_PEAK .AND. ABS(rms_mf/rms_ff - 1.0_wp) <= TOL_F2, &
+                 'F5: with the cycle-mean frame the moving and the fixed pipe agree')
+    nr = CD_VIV_NMS_FRAME + CD_VIV_NMS_CYC + 1
+    CALL build(model)
+    CALL CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy, tf=tfc, &
+                                     tf_cycle=.TRUE.)
+    CALL require(es == CD_HCDYN_OK .AND. model%viv_frame .AND. model%viv_cyc .AND. SIZE(model%viv_ms, 1) == nr, &
+                 'F5: the cycle-mean frame installs its state after the frame rows: '//TRIM(em))
+    CALL build(twin)
+    CALL CD_HermiteCable_Dyn_Set_VIV(twin, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy, tf=tfv)
+    CALL require(es == CD_HCDYN_OK .AND. .NOT. twin%viv_cyc, 'F5: the filter twin installs: '//TRIM(em))
+    dev = 0.0_wp
+    devf = 0.0_wp
+    DO s = 1, 1500
+      CALL advance(model, s, .TRUE.)
+      CALL advance(twin, s, .TRUE.)
+      IF (s > 500) THEN
+        CALL imposed(REAL(s, wp)*DT, y, vi, ai)
+        dev = MAX(dev, ABS(model%viv_ms(8, NE/2 + 1) - vi))
+        devf = MAX(devf, ABS(twin%viv_ms(8, NE/2 + 1) - vi))
+      END IF
+    END DO
+    WRITE (*, '(A,F8.4,A,F8.4)') '  F5 frame velocity off the imposed one, cycle mean ', dev/U0, '; filter ', devf/U0
+    CALL require(dev <= 0.005_wp*U0 .AND. devf > 5.0_wp*dev, &
+                 'F5: the cycle mean follows the imposed velocity without the filter''s lag')
+    CALL CD_HermiteCable_Dyn_Snapshot(model, es, em)
+    CALL require(es == CD_HCDYN_OK, 'F5: snapshot: '//TRIM(em))
+    ALLOCATE (q_ref(SIZE(model%q), 200), ms_ref(nr, NN, 200))
+    DO s = 1, 200
+      CALL advance(model, 1500 + s, .TRUE.)
+      q_ref(:, s) = model%q
+      ms_ref(:, :, s) = model%viv_ms
+    END DO
+    CALL CD_HermiteCable_Dyn_Restore(model, es, em)
+    CALL require(es == CD_HCDYN_OK, 'F5: restore: '//TRIM(em))
+    DO s = 1, 200
+      CALL advance(model, 1500 + s, .TRUE.)
+      IF (ANY(model%q /= q_ref(:, s)) .OR. ANY(model%viv_ms /= ms_ref(:, :, s))) EXIT
+    END DO
+    CALL require(s > 200, 'F5: the restored snapshot replays the state and the cycle-mean ring bit for bit')
+    CALL CD_HermiteCable_Dyn_End(model)
+    CALL CD_HermiteCable_Dyn_End(twin)
+  END BLOCK
+
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -272,20 +333,25 @@ CONTAINS
     IF (es /= CD_HCDYN_OK) CALL require(.FALSE., 'step: '//TRIM(em))
   END SUBROUTINE advance
 
-  SUBROUTINE run_case(moving, tfe, tables, pk, rms)
+  SUBROUTINE run_case(moving, tfe, tables, pk, rms, cycle)
     !! Two periods of the moving or the fixed pipe with the filter times tfe, with the amplitude
     !! tables and the cross-flow damping (tables) or the lift Cl alone; over the second period
     !! the peak and RMS cross-flow (z) displacement of the mid node from its rest depth.
     LOGICAL, INTENT(IN) :: moving, tables
     REAL(wp), INTENT(IN) :: tfe(NE)
     REAL(wp), INTENT(OUT) :: pk, rms
+    LOGICAL, INTENT(IN), OPTIONAL :: cycle
     TYPE(CD_HermiteCableDynType), ALLOCATABLE :: m
+    LOGICAL :: cyc
     REAL(wp) :: z, s2
     INTEGER :: s, n
     ALLOCATE (m)
     CALL build(m)
+    cyc = .FALSE.
+    IF (PRESENT(cycle)) cyc = cycle
     IF (tables) THEN
-      CALL CD_HermiteCable_Dyn_Set_VIV(m, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy, tf=tfe)
+      CALL CD_HermiteCable_Dyn_Set_VIV(m, cl, cf, df, 2.0_wp, es, em, amp=amp, amp_n=ampn, cdy=cdy, tf=tfe, &
+                                       tf_cycle=cyc)
     ELSE
       CALL CD_HermiteCable_Dyn_Set_VIV(m, cl, cf, df, 2.0_wp, es, em, tf=tfe)
     END IF

@@ -471,10 +471,12 @@ MODULE CableDyn_DeckDriver
     ! has_wake_row marks a type the section names.
     REAL(wp) :: wo_cl0 = CD_ZERO, wo_st = CD_VIV_WAKE_DEFAULT_ST, wo_eps = CD_VIV_WAKE_DEFAULT_EPS
     REAL(wp) :: wo_a = CD_VIV_WAKE_DEFAULT_A
-    ! The VIV frame of a line type (the optional VIV FRAME section, a row per type: TypeName Tf):
-    ! the filter time Tf [s] of the cable velocity that the VIV model's flow frame moves with
-    ! (0: the ambient flow); has_vivf_row marks a type the section names.
+    ! The VIV frame of a line type (the optional VIV FRAME section, a row per type: TypeName Tf
+    ! [Method]): the time Tf [s] of the cable velocity that the VIV model's flow frame moves with
+    ! (0: the ambient flow), the first-order filter time or with Method cycle (viv_tfcyc) the
+    ! window of the cycle mean; has_vivf_row marks a type the section names.
     REAL(wp) :: viv_tf = CD_ZERO
+    LOGICAL :: viv_tfcyc = .FALSE.
     LOGICAL :: has_vivf_row = .FALSE.
     ! The stochastic band centre of a line type (the optional VIV STOCHASTIC section, a row per type:
     ! TypeName sigma c [Nf [seed]]; Ulveseter et al. 2017): the standard deviation sigma of the
@@ -3774,6 +3776,9 @@ CONTAINS
         ! nodes and tangent (a line the reader turned around, a mesh the static solve refined)
         BLOCK
           REAL(wp) :: seed(cable%line%nn)
+          LOGICAL :: frame_cyc
+          frame_cyc = deck_line_frame_cycle(ln, sections, types, ErrStat, ErrMsg)
+          IF (ErrStat /= 0) RETURN
           IF (ALLOCATED(cable%deck_node)) THEN
             CALL CD_Deck_VIV_Phase_Seed(cable%line%l0, ln%ends_swapped, seed, deck_map=cable%deck_node, &
                                         zero=opts%viv_phase_zero)
@@ -3801,7 +3806,7 @@ CONTAINS
                                              tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, il_alpha=viv_al, &
                                              chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn, dviv=viv_dva, &
                                              cdy=RESHAPE([cdy_a, cdy_b, cdy_c], [3, SIZE(cdy_a)], ORDER=[2, 1]), &
-                                             tf=wo_tf, sto=viv_sto)
+                                             tf=wo_tf, sto=viv_sto, tf_cycle=frame_cyc)
           ELSE
             CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, viv_cl, viv_cf, viv_df, &
                                              MERGE(opts%viv_rms_window, &
@@ -3810,7 +3815,7 @@ CONTAINS
                                              tangent_reversed=.NOT. ln%ends_swapped, amp=viv_amp3, amp_n=viv_ampn, &
                                              dviv=viv_dva, &
                                              cdy=RESHAPE([cdy_a, cdy_b, cdy_c], [3, SIZE(cdy_a)], ORDER=[2, 1]), &
-                                             tf=wo_tf, sto=viv_sto)
+                                             tf=wo_tf, sto=viv_sto, tf_cycle=frame_cyc)
           END IF
         END BLOCK
         IF (es /= CD_HCDYN_OK) THEN
@@ -10988,6 +10993,9 @@ CONTAINS
         ! deck's End B: CD_Deck_VIV_Phase_Seed takes it to the model's nodes and tangent
         BLOCK
           REAL(wp) :: seed(model%n_dof/3)
+          LOGICAL :: frame_cyc
+          frame_cyc = deck_line_frame_cycle(ln, sections, types, ErrStat, ErrMsg)
+          IF (ErrStat /= 0) RETURN
           CALL CD_Deck_VIV_Phase_Seed(model%l0, ln%ends_swapped, seed, zero=opts%viv_phase_zero)
           ! the VIV AMPLITUDE tables, left unallocated (absent below) on a line without one
           CALL viv_amp_tables(types, viv_tix, viv_amp3, viv_ampn)
@@ -11000,11 +11008,11 @@ CONTAINS
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, viv_dia, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, clx=viv_clx, &
                                   il_alpha=viv_al, chh=viv_hh, amp=viv_amp3, amp_n=viv_ampn, tf=viv_ftf, &
-                                  sto=viv_sto)
+                                  sto=viv_sto, tf_cycle=frame_cyc)
           ELSE
             CALL CD_Set_Model_VIV(model, opts%rhoW, viv_cl, viv_dia, viv_cf, viv_df, tw, es, em, &
                                   phase_seed=seed, tangent_reversed=.NOT. ln%ends_swapped, amp=viv_amp3, &
-                                  amp_n=viv_ampn, tf=viv_ftf, sto=viv_sto)
+                                  amp_n=viv_ampn, tf=viv_ftf, sto=viv_sto, tf_cycle=frame_cyc)
           END IF
         END BLOCK
         IF (es == CD_MODEL_OK) CALL CD_Recompute_Model_Acceleration(model, es, em)
@@ -18028,9 +18036,12 @@ CONTAINS
   END SUBROUTINE apply_type_viv_diam
 
   SUBROUTINE apply_type_viv_frame(row, types, ErrStat, ErrMsg)
-    !! One VIV FRAME row: TypeName Tf -- the flow frame of a line type's VIV model: with the filter
-    !! time Tf > 0 [s] (at most 1e15) the flow the model takes as the free stream is the ambient
-    !! flow relative to the cable's velocity low-pass filtered over Tf (first order), so that a
+    !! One VIV FRAME row: TypeName Tf [Method] -- the flow frame of a line type's VIV model: with
+    !! the time Tf > 0 [s] (at most 1e15) the flow the model takes as the free stream is the ambient
+    !! flow relative to the cable's velocity low-pass filtered over Tf (Method filter, the default:
+    !! first order; Method cycle, synchronisation model only: the cycle mean over the window Tf plus
+    !! half the velocity's change over it, which drops a component of period Tf and its harmonics
+    !! and passes the slow motion without lag; Tf then about one VIV period), so that a
     !! cable moved through the water by a tow or its floater sees that motion as flow, and its own
     !! VIV velocity, much faster than Tf, does not count; Tf 0 is the ambient flow. It sets the
     !! wake oscillator's frequency, or on the synchronisation model (LINE TYPES Cl > 0) the motion
@@ -18045,11 +18056,23 @@ CONTAINS
     CHARACTER(DECK_RECLEN) :: tok
     INTEGER :: it
     REAL(wp) :: v
-    LOGICAL :: found, ok
+    LOGICAL :: found, ok, cyc
 
     ErrStat = 0; ErrMsg = ''
-    IF (count_tokens(row) /= 2) THEN
-      CALL fail(ErrStat, ErrMsg, 'VIV FRAME rows must be: TypeName Tf'); RETURN
+    IF (count_tokens(row) /= 2 .AND. count_tokens(row) /= 3) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV FRAME rows must be: TypeName Tf [Method]'); RETURN
+    END IF
+    cyc = .FALSE.
+    IF (count_tokens(row) == 3) THEN
+      CALL get_token(row, 3, tok, found)
+      SELECT CASE (to_lower(TRIM(tok)))
+      CASE ('filter')
+        cyc = .FALSE.
+      CASE ('cycle')
+        cyc = .TRUE.
+      CASE DEFAULT
+        CALL fail(ErrStat, ErrMsg, 'VIV FRAME Method must be filter or cycle, got "'//TRIM(tok)//'"'); RETURN
+      END SELECT
     END IF
     CALL get_token(row, 1, tok, found)
     it = find_type(types, TRIM(tok))
@@ -18072,9 +18095,45 @@ CONTAINS
       CALL fail(ErrStat, ErrMsg, 'VIV FRAME of LINE TYPE "'//TRIM(types(it)%name)//'" sets the flow frame of '// &
                 'its VIV model: give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row'); RETURN
     END IF
+    IF (cyc .AND. .NOT. (types(it)%cl > CD_ZERO .AND. v > CD_ZERO)) THEN
+      CALL fail(ErrStat, ErrMsg, 'VIV FRAME Method cycle of LINE TYPE "'//TRIM(types(it)%name)//'" acts on the '// &
+                'synchronisation model (LINE TYPES Cl > 0) with a window Tf > 0'); RETURN
+    END IF
     types(it)%viv_tf = v
+    types(it)%viv_tfcyc = cyc
     types(it)%has_vivf_row = .TRUE.
   END SUBROUTINE apply_type_viv_frame
+
+  LOGICAL FUNCTION deck_line_frame_cycle(ln, sections, types, ErrStat, ErrMsg) RESULT(cyc)
+    !! The VIV FRAME method of a line: .TRUE. where its lifting types with a frame (Cl > 0, Tf > 0)
+    !! take Method cycle. A line takes one method; types that mix the two are refused.
+    TYPE(DeckLine), INTENT(IN) :: ln
+    TYPE(DeckSection), INTENT(IN) :: sections(:)
+    TYPE(DeckLineType), INTENT(IN) :: types(:)
+    INTEGER, INTENT(OUT) :: ErrStat
+    CHARACTER(*), INTENT(OUT) :: ErrMsg
+    INTEGER :: i, tidx
+    LOGICAL :: any_cyc, any_filter
+    ErrStat = 0; ErrMsg = ''
+    any_cyc = .FALSE.
+    any_filter = .FALSE.
+    DO i = 1, SIZE(sections)
+      IF (sections(i)%line_id /= ln%id) CYCLE
+      tidx = sections(i)%ltype
+      IF (.NOT. (types(tidx)%cl > CD_ZERO .AND. types(tidx)%viv_tf > CD_ZERO)) CYCLE
+      IF (types(tidx)%viv_tfcyc) THEN
+        any_cyc = .TRUE.
+      ELSE
+        any_filter = .TRUE.
+      END IF
+    END DO
+    cyc = any_cyc
+    IF (any_cyc .AND. any_filter) THEN
+      CALL fail(ErrStat, ErrMsg, 'line '//TRIM(int_to_str(ln%id))//': its VIV FRAME rows mix the methods filter '// &
+                'and cycle; a line takes one method')
+      cyc = .FALSE.
+    END IF
+  END FUNCTION deck_line_frame_cycle
 
   SUBROUTINE apply_type_viv_sto(row, types, ErrStat, ErrMsg)
     !! One VIV STOCHASTIC row: TypeName sigma c [Nf [seed]] -- the stochastic band centre of a line

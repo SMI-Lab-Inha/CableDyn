@@ -25,7 +25,15 @@ PROGRAM test_viv_frame_deck
   !!      0.5 %, measured at most 0.24 %, frequency within 0.005 Hz), on both cores, with and without
   !!      the tables (an EI = 0 line cannot run between two moving points, so the towed case is
   !!      finite-EI only);
-  !!   G4 refusals by name: a VIV FRAME row on a type without VIV (no Cl, no WAKE OSCILLATOR row).
+  !!   G4 refusals by name: a VIV FRAME row on a type without VIV (no Cl, no WAKE OSCILLATOR row);
+  !!   G5 Method filter (the third column) is the row without it, bit for bit, on both cores;
+  !!   G6 Method cycle (the cycle mean over the window Tf 3.5 s, one period of the 0.29 Hz response):
+  !!      towed, the finite-EI cable responds as
+  !!      the cable held in the current (A/D within 1 %, frequency within 0.005 Hz), and held in the
+  !!      current it leaves the response as the ambient flow gives it (A/D within 0.5 %, frequency
+  !!      within 0.005 Hz), on both cores, with the tables;
+  !!   G7 refusals by name: an unknown Method, Method cycle with Tf 0 and a line whose types mix the
+  !!      two methods.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   IMPLICIT NONE
@@ -46,6 +54,10 @@ PROGRAM test_viv_frame_deck
   CALL check_tow('vfd_tow', AMP, 'riser 0.31 0.89', fe_cur, fe_cur_tf, ' (tables)')
   CALL check_tow('vfd_tows', '', '', fs_cur, fs_cur_tf, ' (lift only)')
   CALL check_refusals()
+  CALL check_methods('1.0', AMP, 'riser 0.31 0.89', 'vfm_fe', fe_cur)
+  CALL check_methods('0.0', AMP, '', 'vfm_l', l_cur)
+  CALL check_cycle_tow(fe_cur)
+  CALL check_method_refusals()
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
     ERROR STOP 1
@@ -133,7 +145,7 @@ CONTAINS
     END DO
   END SUBROUTINE write_rows
 
-  SUBROUTINE write_deck(path, ei, amp_rows, damp_rows, tmax_, tow, frame_rows, cl)
+  SUBROUTINE write_deck(path, ei, amp_rows, damp_rows, tmax_, tow, frame_rows, cl, mix)
     !! ei the type's EI; amp_rows/damp_rows: the VIV AMPLITUDE and VIV DAMPING data rows,
     !! ';'-separated ('' for no section); tow: no current, both ends Coupled and moved by the motion
     !! file vfd_tow.txt; frame_rows: the VIV FRAME data rows (no section without it).
@@ -141,10 +153,14 @@ CONTAINS
     REAL(wp), INTENT(IN) :: tmax_
     LOGICAL, INTENT(IN) :: tow
     CHARACTER(*), INTENT(IN), OPTIONAL :: frame_rows, cl
+    LOGICAL, INTENT(IN), OPTIONAL :: mix
     CHARACTER(8) :: cl_col
     INTEGER :: u
+    LOGICAL :: two
     cl_col = '0.8'
     IF (PRESENT(cl)) cl_col = cl
+    two = .FALSE.
+    IF (PRESENT(mix)) two = mix
     OPEN (NEWUNIT=u, FILE=path, STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') '--------------------- CableDyn Input File ---------------------------------'
     WRITE (u, '(A)') 'VIV FRAME deck gate: taut cable in a uniform current or towed through still water'
@@ -152,6 +168,8 @@ CONTAINS
     WRITE (u, '(A)') 'TypeName   Diam   Mass/m   EA        BA/-zeta  EI   Cd    Ca    CdAx  CaAx  Cl   dF    cF'
   WRITE (u, '(A)') 'riser      0.10   10.0     5.0e7     -0.8      '//ei//'  1.2   1.0   0.0   0.0   '//TRIM(cl_col)// &
       '  0.08  0.18'
+    IF (two) WRITE (u, '(A)') 'riser2     0.10   10.0     5.0e7     -0.8      '//ei//'  1.2   1.0   0.0   0.0   '// &
+      TRIM(cl_col)//'  0.08  0.18'
     WRITE (u, '(A)') '----------------------- POINTS ----------------------------------------------'
     WRITE (u, '(A)') 'ID   Attachment   X       Y     Z      M    V     CdA   CA'
     WRITE (u, '(A)') '1    Coupled      0.0     0.0   -50.0  0    0     0     0'
@@ -165,10 +183,21 @@ CONTAINS
     WRITE (u, '(A)') '1    1      2      -'
     WRITE (u, '(A)') '----------------------- SECTIONS --------------------------------------------'
     WRITE (u, '(A)') 'LineID  LineType  Length     NumSegs'
-    WRITE (u, '(A)') '1       riser     99.900100  50'
+    IF (two) THEN
+      WRITE (u, '(A)') '1       riser     49.950050  25'
+      WRITE (u, '(A)') '1       riser2    49.950050  25'
+    ELSE
+      WRITE (u, '(A)') '1       riser     99.900100  50'
+    END IF
     IF (LEN_TRIM(amp_rows) > 0) CALL write_rows(u, 'VIV AMPLITUDE', 'TypeName   AD     Cv     CdAmp', amp_rows)
     IF (LEN_TRIM(damp_rows) > 0) CALL write_rows(u, 'VIV DAMPING', 'TypeName   a      b', damp_rows)
-    IF (PRESENT(frame_rows)) CALL write_rows(u, 'VIV FRAME', 'TypeName   Tf', frame_rows)
+    IF (PRESENT(frame_rows)) THEN
+      IF (INDEX(frame_rows, 'cycle') > 0 .OR. INDEX(frame_rows, 'filter') > 0 .OR. INDEX(frame_rows, 'bogus') > 0) THEN
+        CALL write_rows(u, 'VIV FRAME', 'TypeName   Tf   Method', frame_rows)
+      ELSE
+        CALL write_rows(u, 'VIV FRAME', 'TypeName   Tf', frame_rows)
+      END IF
+    END IF
     WRITE (u, '(A)') '---------------------- OPTIONS ----------------------------------------------'
     WRITE (u, '(A)') '0.01     dtM'
     WRITE (u, '(A)') '100.0    WtrDpth'
@@ -349,5 +378,68 @@ CONTAINS
     CALL require(.NOT. ok .AND. INDEX(msg, 'give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row') > 0, &
                  'G4: a VIV FRAME row on a type without VIV is refused')
   END SUBROUTINE check_refusals
+
+  SUBROUTINE check_methods(ei, amp_rows, damp_rows, tag, ref)
+    !! G5 and G6 (held) on the cable of EI ei in the current: Method filter against the row without
+    !! it, and Method cycle against the ambient flow (ref: A/D, f without the section).
+    CHARACTER(*), INTENT(IN) :: ei, amp_rows, damp_rows, tag
+    REAL(wp), INTENT(IN) :: ref(2)
+    REAL(wp) :: r(2)
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    CHARACTER(:), ALLOCATABLE :: lab
+    lab = ' (EI '//ei//')'
+    CALL write_deck(tag//'_tf.dat', ei, amp_rows, damp_rows, TMAX, .FALSE., frame_rows='riser 10')
+    CALL run(tag//'_tf.dat', tag//'_tf', ok, msg)
+    CALL require(ok, 'G5: the deck with Tf 10 s runs'//lab//': '//TRIM(msg))
+    CALL write_deck(tag//'_flt.dat', ei, amp_rows, damp_rows, TMAX, .FALSE., frame_rows='riser 10 filter')
+    CALL run(tag//'_flt.dat', tag//'_flt', ok, msg)
+    CALL require(ok, 'G5: the deck with Method filter runs'//lab//': '//TRIM(msg))
+    CALL require(same_file(tag//'_tf.out', tag//'_flt.out'), &
+                 'G5: Method filter is the row without it, bit for bit'//lab)
+    CALL write_deck(tag//'_cyc.dat', ei, amp_rows, damp_rows, TMAX, .FALSE., frame_rows='riser 3.5 cycle')
+    CALL run(tag//'_cyc.dat', tag//'_cyc', ok, msg)
+    CALL require(ok, 'G6: the deck with Method cycle runs'//lab//': '//TRIM(msg))
+    CALL stats(tag//'_cyc', r, ok)
+    CALL require(ok, 'G6: the cycle run wrote its rows'//lab)
+    WRITE (*, '(A,2F8.4,A,2F8.4)') 'G6'//lab//': in the current A/D, f [Hz] with Method cycle ', r, '; ambient ', ref
+    CALL require(ABS(r(1)/ref(1) - 1.0_wp) <= 0.005_wp .AND. ABS(r(2) - ref(2)) <= 0.005_wp, &
+                 'G6: held in the current, Method cycle leaves the response as the ambient flow gives it'//lab)
+  END SUBROUTINE check_methods
+
+  SUBROUTINE check_cycle_tow(ref)
+    !! G6 (towed) on the finite-EI cable with the tables, Method cycle, against the cable held in the
+    !! current (ref).
+    REAL(wp), INTENT(IN) :: ref(2)
+    REAL(wp) :: r(2)
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    CALL write_deck('vfm_tow_cyc.dat', '1.0', AMP, 'riser 0.31 0.89', TMAX, .TRUE., frame_rows='riser 3.5 cycle')
+    CALL run('vfm_tow_cyc.dat', 'vfm_tow_cyc', ok, msg)
+    CALL require(ok, 'G6: the towed deck with Method cycle runs: '//TRIM(msg))
+    CALL stats('vfm_tow_cyc', r, ok)
+    CALL require(ok, 'G6: the towed cycle run wrote its rows')
+    WRITE (*, '(A,2F8.4,A,2F8.4)') 'G6: towed A/D, f [Hz] with Method cycle ', r, '; held in the current ', ref
+    CALL require(ABS(r(1)/ref(1) - 1.0_wp) <= TOL_TOW .AND. ABS(r(2) - ref(2)) <= 0.005_wp, &
+                 'G6: towed with Method cycle, the cable responds as the cable held in the current')
+  END SUBROUTINE check_cycle_tow
+
+  SUBROUTINE check_method_refusals()
+    LOGICAL :: ok
+    CHARACTER(1024) :: msg
+    CALL write_deck('vfm_bad1.dat', '1.0', '', '', 1.0_wp, .FALSE., frame_rows='riser 10 bogus')
+    CALL run('vfm_bad1.dat', 'vfm_bad1', ok, msg)
+    WRITE (*, '(A)') 'G7 an unknown Method: '//TRIM(msg)
+    CALL require(.NOT. ok .AND. INDEX(msg, 'Method must be filter or cycle') > 0, 'G7: an unknown Method is refused')
+    CALL write_deck('vfm_bad2.dat', '1.0', '', '', 1.0_wp, .FALSE., frame_rows='riser 0 cycle')
+    CALL run('vfm_bad2.dat', 'vfm_bad2', ok, msg)
+    WRITE (*, '(A)') 'G7 Method cycle with Tf 0: '//TRIM(msg)
+    CALL require(.NOT. ok .AND. INDEX(msg, 'with a window Tf > 0') > 0, 'G7: Method cycle with Tf 0 is refused')
+    CALL write_deck('vfm_bad3.dat', '1.0', '', '', 1.0_wp, .FALSE., frame_rows='riser 1 cycle;riser2 1 filter', &
+                    mix=.TRUE.)
+    CALL run('vfm_bad3.dat', 'vfm_bad3', ok, msg)
+    WRITE (*, '(A)') 'G7 mixed methods: '//TRIM(msg)
+    CALL require(.NOT. ok .AND. INDEX(msg, 'mix the methods') > 0, 'G7: a line whose types mix the methods is refused')
+  END SUBROUTINE check_method_refusals
 
 END PROGRAM test_viv_frame_deck

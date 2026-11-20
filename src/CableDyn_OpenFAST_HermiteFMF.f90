@@ -51,6 +51,7 @@ MODULE CableDyn_OpenFAST_HermiteFMF
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Compliance, CD_HermiteTorsion_Line, &
                                      CD_HermiteTorsion_Unwrap, CD_HTORS_OK, CD_HTORS_MAX_STEP
   USE CableDyn_HermiteCable, ONLY: CD_HermiteCable_Shapes
+  USE CableDyn_VIV, ONLY: CD_VIV_Cycle_Valid, CD_VIV_NMS_FRAME, CD_VIV_NMS_CYC
   USE CableDyn_EndConnection, ONLY: CD_EndConn_Project, CD_ENDCONN_OK, CD_ENDCONN_BADINPUT, &
                                     CD_ENDCONN_PINNED, CD_ENDCONN_FINITE, CD_ENDCONN_RIGID
   USE CableDyn_Bathymetry, ONLY: CD_BathymetryType
@@ -2492,6 +2493,10 @@ CONTAINS
         END IF
         IF (self%line%has_viv_amp .OR. self%line%viv_frame) THEN
           IF (ANY(buf(kb + (i - 1)*nv + 4:kb + (i - 1)*nv + 5) < CD_ZERO)) bad_viv = .TRUE.
+        END IF
+        IF (self%line%viv_cyc) THEN
+          IF (.NOT. CD_VIV_Cycle_Valid(buf(kb + (i - 1)*nv + CD_VIV_NMS_FRAME + 1: &
+                                           kb + (i - 1)*nv + CD_VIV_NMS_FRAME + CD_VIV_NMS_CYC))) bad_viv = .TRUE.
         END IF
       END DO
       IF (bad_viv) THEN

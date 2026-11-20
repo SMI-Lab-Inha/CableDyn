@@ -10,6 +10,18 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- `VIV FRAME` method `cycle`: an optional third column, rows `TypeName Tf [Method]`, `filter` (the
+  default) or `cycle`. With `cycle` the frame velocity of a synchronisation type is the mean of the
+  node velocity over the window `Tf` plus half its change over it, which drops a component of
+  period `Tf` and its harmonics (the cross-flow VIV and the in-line VIV at twice its frequency) and
+  passes the slow motion of a towed or floater-driven cable without the first-order filter's lag;
+  `Tf` is then one period of the response. The filter's lag leaves the frame faster than the cable
+  on a decelerating motion and slower on an accelerating one; on the moving pipe of the frame gate
+  the cycle mean follows the imposed velocity within 0.17 % of its amplitude, the filter within
+  1.7 %. A ring of 66 samples per node is the new state (step recovery, snapshots, checkpoints; an
+  invalid restored state fails closed). `EI = 0` lines and finite-EI cables, standalone and
+  coupled; one method per line; rows without the column are unchanged to the bit.
+
 - `OPTIONS CDOutDt` (alias `cd_out_dt`): the interval of the coupled `.CD.out` rows (OpenFAST and
   FAST.Farm), a whole multiple of the CableDyn step; `0`, the default, keeps a row after every
   committed step. A row re-evaluates and writes every deck channel, so on a cable with many

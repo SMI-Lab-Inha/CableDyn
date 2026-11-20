@@ -5012,7 +5012,9 @@ def test_viv_frame_rows_are_read_and_kept(tmp_path):
 @pytest.mark.parametrize(
     "wake, rows, message",
     [
-        (True, ("chain 8 1",), "rows must be: TypeName Tf"),
+        (True, ("chain 8 cycle 1",), "rows must be: TypeName Tf [Method]"),
+        (True, ("chain 8 1",), 'Method must be filter or cycle, got "1"'),
+        (True, ("chain 8 cycle",), "acts on the synchronisation model"),
         (True, ("cable 8",), 'undefined LINE TYPE "cable"'),
         (True, ("chain 8", "chain 4"), 'names LINE TYPE "chain" twice'),
         (True, ("chain -1",), "filter time Tf must be >= 0"),
@@ -5031,6 +5033,27 @@ _DAMP_BASE = _with_section(
     "chain 0.0 0.8",
     "chain 1.0 0.4",
 )
+
+
+def test_viv_frame_method_cycle_is_read_kept_and_checked(tmp_path):
+    from cabledyn import DeckModel
+
+    lift_only = _edit(_DYNAMIC, (_LIFT_ROW, _LIFT_ROW + " 0.8"))
+    text = _with_section(lift_only, "VIV FRAME", "TypeName Tf Method", "chain 0.4 cycle")
+    DeckFile.from_text(text)
+    path = tmp_path / "cycle.dat"
+    path.write_text(text, encoding="utf-8")
+    model = DeckModel.load(path)
+    assert model.line_types["chain"].viv_frame_tf == 0.4
+    assert model.line_types["chain"].viv_frame_method == "cycle"
+    saved = tmp_path / "saved.dat"
+    model.save(saved)
+    again = DeckModel.load(saved)
+    assert again.line_types["chain"].viv_frame_method == "cycle"
+    assert again.line_types["chain"].viv_frame_tf == 0.4
+    DeckFile.from_text(_with_section(lift_only, "VIV FRAME", "chain 8 filter"))
+    with pytest.raises(DeckFormatError, match=re.escape("with a window Tf > 0")):
+        DeckFile.from_text(_with_section(lift_only, "VIV FRAME", "chain 0 cycle"))
 
 
 def test_viv_frame_takes_a_synchronisation_type():

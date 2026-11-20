@@ -28,8 +28,9 @@ PROGRAM test_viv_wake_deck
   !!      fixed cable in the current with Tf 10 s locks in as without it (the filter removes the
   !!      VIV velocity: A/D within 2 %, frequency within 0.002 Hz), on both cores, and the two
   !!      cores agree there as in W5 (an EI = 0 line cannot run between two moving points);
-  !!   W7 VIV FRAME refusals by name: a malformed row, an unknown or repeated type,
-  !!      a negative Tf, and a type without VIV (no Cl, no WAKE OSCILLATOR row).
+  !!   W7 VIV FRAME refusals by name: a malformed row, an unknown Method, Method cycle on a
+  !!      wake-oscillator type, an unknown or repeated type, a negative Tf, and a type without VIV
+  !!      (no Cl, no WAKE OSCILLATOR row).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Run_Deck_Driver, CD_DECKDRV_OK
   IMPLICIT NONE
@@ -411,8 +412,12 @@ CONTAINS
 
   SUBROUTINE check_refusals()
     CALL refused('riser 0.3 0.2 0.3 12 1', 'TypeName CL0 [St [eps [A]]]', 'a row of six columns')
-    CALL refused('riser 0.3', 'VIV FRAME rows must be: TypeName Tf', 'W7: a VIV FRAME row of three columns', &
-                 frame_rows='riser 10 1')
+    CALL refused('riser 0.3', 'VIV FRAME rows must be: TypeName Tf [Method]', 'W7: a VIV FRAME row of four columns', &
+                 frame_rows='riser 10 cycle 1')
+    CALL refused('riser 0.3', 'VIV FRAME Method must be filter or cycle', &
+                 'W7: a VIV FRAME row with an unknown Method', frame_rows='riser 10 1')
+    CALL refused('riser 0.3', 'acts on the synchronisation model', 'W7: Method cycle on a wake-oscillator type', &
+                 frame_rows='riser 10 cycle')
     CALL refused('riser 0.3', 'VIV FRAME row names undefined LINE TYPE', 'W7: an unknown type', &
                  frame_rows='cable 10')
     CALL refused('riser 0.3', 'VIV FRAME names LINE TYPE', 'W7: a repeated type', frame_rows='riser 10;riser 5')

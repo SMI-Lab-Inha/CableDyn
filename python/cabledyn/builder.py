@@ -240,6 +240,11 @@ class LineType:
         the phases, the amplitude estimate (and so the ``viv_amplitude``
         coefficients) and the ``viv_damping`` split, so it needs ``cl > 0`` or
         ``wake_cl0``. ``None`` writes no row.
+    viv_frame_method : str | None
+        Optional method of the ``VIV FRAME`` row, its third column: ``"filter"`` (the
+        first-order filter, as without the column) or ``"cycle"`` (the lag-free mean over the
+        window ``viv_frame_tf``, one period of the response; synchronisation model only,
+        ``viv_frame_tf > 0``). ``None`` writes the two-column row.
     viv_stochastic : tuple[float, ...] | None
         Optional stochastic band centre of a type's synchronisation model, a
         ``VIV STOCHASTIC`` section row ``Name sigma c [Nf [seed]]`` as
@@ -297,6 +302,7 @@ class LineType:
     viv_frame_tf: float | None = None
     viv_damping: tuple[float, ...] | None = None
     viv_stochastic: tuple[float, ...] | None = None
+    viv_frame_method: str | None = None
 
 
 @dataclass(eq=False)
@@ -1725,6 +1731,7 @@ class DeckModel:
         viv_frame_tf: float | None = None,
         viv_damping: tuple[float, ...] | None = None,
         viv_stochastic: tuple[float, ...] | None = None,
+        viv_frame_method: str | None = None,
     ) -> LineType:
         """Add a ``LINE TYPES`` row; see :class:`LineType` for the fields.
 
@@ -1770,6 +1777,7 @@ class DeckModel:
             viv_frame_tf,
             None if viv_damping is None else tuple(viv_damping),
             None if viv_stochastic is None else tuple(viv_stochastic),
+            viv_frame_method,
         )
         self._line_types.append(item)
         return item
@@ -3117,15 +3125,31 @@ class DeckModel:
 
     def _viv_frame_table(self) -> tuple[str, str, list[list[str]]]:
         rows: list[list[str]] = []
+        with_method = any(
+            item.viv_frame_tf is not None and item.viv_frame_method is not None
+            for item in self._line_types
+        )
         for item in self._line_types:
             if item.viv_frame_tf is None:
+                if item.viv_frame_method is not None:
+                    raise ValueError(
+                        f"line type {item.name!r}: viv_frame_method needs viv_frame_tf"
+                    )
                 continue
             what = f"line type {item.name!r}"
             if item.wake_cl0 is None and not (item.cl is not None and item.cl > 0.0):
                 raise ValueError(
                     f"{what}: viv_frame_tf sets the frame of its VIV model, set cl > 0 or wake_cl0"
                 )
-            rows.append([_text(item.name, what), _num(item.viv_frame_tf, what)])
+            row = [_text(item.name, what), _num(item.viv_frame_tf, what)]
+            if with_method:
+                method = (item.viv_frame_method or "filter").lower()
+                if method not in ("filter", "cycle"):
+                    raise ValueError(f"{what}: viv_frame_method must be 'filter' or 'cycle'")
+                row.append(method)
+            rows.append(row)
+        if with_method:
+            return "Name Tf Method", "(-) (s) (-)", rows
         return "Name Tf", "(-) (s)", rows
 
     def _viv_sto_table(self) -> tuple[str, str, list[list[str]]]:
@@ -3373,6 +3397,8 @@ class _Loader:
         for row in self.rows("VIV FRAME"):
             t = row.tokens
             model.line_types[t[0]].viv_frame_tf = _f(t[1])
+            if len(t) > 2:
+                model.line_types[t[0]].viv_frame_method = t[2].lower()
         for row in self.rows("VIV STOCHASTIC"):
             t = row.tokens
             model.line_types[t[0]].viv_stochastic = tuple(_f(v) for v in t[1:])

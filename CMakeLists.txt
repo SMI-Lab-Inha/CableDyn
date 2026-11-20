@@ -1324,6 +1324,13 @@ target_link_libraries(test_viv_kernels PRIVATE cabledyn_core)
 add_test(NAME viv_kernels COMMAND test_viv_kernels)
 set_tests_properties(viv_kernels PROPERTIES LABELS "fortran;unit;dynamic;viv")
 
+# The cycle-mean flow frame kernel (VIV FRAME method cycle): a component of period T and its second
+# harmonic drop out, a ramp passes without lag, a quadratic gives the second-order error.
+add_executable(test_viv_cycle_frame tests/test_viv_cycle_frame.f90)
+target_link_libraries(test_viv_cycle_frame PRIVATE cabledyn_core)
+add_test(NAME viv_cycle_frame COMMAND test_viv_cycle_frame)
+set_tests_properties(viv_cycle_frame PROPERTIES LABELS "fortran;unit;dynamic;viv")
+
 # Time-step convergence of a locked-in VIV response (the line and the synchronisation model or the
 # wake oscillator coupled): second order in the step at rho_inf 1 and 0.4 on an EI = 0 line, and
 # on a finite-EI cable; the lock-in does not move with the numerical damping.

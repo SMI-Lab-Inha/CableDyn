@@ -21,7 +21,10 @@ PROGRAM test_hfmf_mirror
   !!      non-finite time fail closed;
   !!   5) with cross-flow and in-line VIV the VIV block is 6 nn + 1 values (the in-line phase and
   !!      mean squares after the cross-flow block), it round-trips bit-identically into the twin's
-  !!      in-line state, and a negative in-line mean square fails closed.
+  !!      in-line state, and a negative in-line mean square fails closed;
+  !!   6) with the cycle-mean VIV frame (VIV FRAME method cycle) the VIV block carries its ring
+  !!      (CD_VIV_NMS_CYC rows per node after the frame rows), round-trips bit-identically after a
+  !!      few steps have filled it, and a ring slot off the ring fails closed.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_HermiteCable, CD_DECKDRV_OK
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_MirrorSize, CD_HFMF_PackMirror, &
@@ -29,6 +32,7 @@ PROGRAM test_hfmf_mirror
                                          CD_HFMF_BoundaryMirrorSize, CD_HFMF_VIVMirrorSize, CD_HFMF_TorsionMirrorSize, &
                                           CD_HFMF_End, CD_HFMF_OK, CD_HFMF_BADINPUT
   USE CableDyn_HermiteCableDynamic, ONLY: CD_HermiteCable_Dyn_Set_VIV, CD_HCDYN_OK
+  USE CableDyn_VIV, ONLY: CD_VIV_NMS_FRAME, CD_VIV_NMS_CYC
   USE, INTRINSIC :: IEEE_ARITHMETIC, ONLY: IEEE_IS_FINITE, IEEE_VALUE, IEEE_QUIET_NAN
   IMPLICIT NONE
   INTEGER :: nfail
@@ -148,6 +152,45 @@ PROGRAM test_hfmf_mirror
     CALL CD_HFMF_UnpackMirror(twin, vb, 3.0_wp, es, em)
     CALL require(es == CD_HFMF_BADINPUT .AND. INDEX(em, 'in-line') > 0, &
                  'a negative in-line mean square fails closed')
+  END BLOCK
+
+  ! (6) the cycle-mean frame's ring in the VIV block
+  BLOCK
+    REAL(wp), ALLOCATABLE :: cl(:), cf(:), df(:), tf(:), vb(:), vb2(:)
+    INTEGER :: ne, nn, kv, nv, j
+    ne = cable%line%ne
+    nn = cable%line%nn
+    ALLOCATE (cl(ne), cf(ne), df(ne), tf(ne))
+    cl = 0.8_wp; cf = 0.18_wp; df = 0.08_wp; tf = 1.0_wp
+    CALL CD_HermiteCable_Dyn_Set_VIV(cable%line, cl, cf, df, 0.25_wp, es, em, tf=tf, tf_cycle=.TRUE.)
+    CALL require(es == CD_HCDYN_OK .AND. cable%line%viv_cyc, 'cycle-mean frame on the cable: '//TRIM(em))
+    CALL CD_HermiteCable_Dyn_Set_VIV(twin%line, cl, cf, df, 0.25_wp, es, em, tf=tf, tf_cycle=.TRUE.)
+    CALL require(es == CD_HCDYN_OK, 'cycle-mean frame on the twin: '//TRIM(em))
+    nv = SIZE(cable%line%viv_ms, 1)
+    CALL require(nv == CD_VIV_NMS_FRAME + CD_VIV_NMS_CYC + 1, 'the ring sits after the frame rows')
+    CALL require(CD_HFMF_VIVMirrorSize(cable) == (1 + nv)*nn + 1, 'VIV block with the ring: (1 + nms) nn + 1 values')
+    ! a filled ring: distinct values in every row, a valid sample time and slot
+    DO j = 1, nn
+      DO i = CD_VIV_NMS_FRAME + 3, CD_VIV_NMS_FRAME + CD_VIV_NMS_CYC
+        cable%line%viv_ms(i, j) = 1.0e-3_wp*REAL(i + 7*j, wp)
+      END DO
+      cable%line%viv_ms(CD_VIV_NMS_FRAME + 1, j) = 0.375_wp
+      cable%line%viv_ms(CD_VIV_NMS_FRAME + 2, j) = REAL(MOD(j, 60) + 1, wp)
+    END DO
+    ALLOCATE (vb(CD_HFMF_MirrorSize(cable)), vb2(CD_HFMF_MirrorSize(cable)))
+    CALL CD_HFMF_PackMirror(cable, vb, es, em)
+    CALL require(es == CD_HFMF_OK, 'pack with the ring: '//TRIM(em))
+    kb = 3*nf + CD_HFMF_FrictionMirrorSize(cable) + 3*(cable%line%ndof - nf)
+    vb(kb + 7:kb + 15) = [1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp]
+    CALL CD_HFMF_UnpackMirror(twin, vb, 3.0_wp, es, em)
+    CALL require(es == CD_HFMF_OK, 'unpack with the ring: '//TRIM(em))
+    CALL require(nan_max_abs(twin%line%viv_ms - cable%line%viv_ms) <= 0.0_wp, 'the ring reloads')
+    CALL CD_HFMF_PackMirror(twin, vb2, es, em)
+    CALL require(nan_max_abs(vb2 - vb) <= 0.0_wp, 'the VIV block with the ring round-trips bit-identically')
+    kv = SIZE(vb) - CD_HFMF_TorsionMirrorSize(cable) - CD_HFMF_VIVMirrorSize(cable) + nn
+    vb(kv + CD_VIV_NMS_FRAME + 2) = 0.5_wp
+    CALL CD_HFMF_UnpackMirror(twin, vb, 3.0_wp, es, em)
+    CALL require(es == CD_HFMF_BADINPUT, 'a fractional ring slot fails closed')
   END BLOCK
 
   CALL CD_HFMF_End(cable)

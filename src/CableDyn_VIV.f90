@@ -81,6 +81,9 @@ MODULE CableDyn_VIV
   PUBLIC :: CD_VIV_Ambient_Crossflow_Rate
   PUBLIC :: CD_VIV_Sto_Node
   PUBLIC :: CD_VIV_Sto_Centre
+  PUBLIC :: CD_VIV_Cycle_Init
+  PUBLIC :: CD_VIV_Cycle_Update
+  PUBLIC :: CD_VIV_Cycle_Valid
 
   !> MoorDyn's running-RMS window in time steps (Line%n_m): each step updates the stored
   !> mean square as ((n_m - 1) old + new) / n_m.
@@ -119,6 +122,12 @@ MODULE CableDyn_VIV
   !> the number Ulveseter et al. (2017, Sec. 3) take.
   INTEGER, PARAMETER, PUBLIC :: CD_VIV_STO_MAXF = 1000
   INTEGER, PARAMETER, PUBLIC :: CD_VIV_STO_DEFAULT_NF = 100
+  !> The cycle-mean flow frame (VIV FRAME method `cycle`; CD_VIV_Cycle_Update): samples per window
+  !> T, and the rows of its state per node, the time since the last sample, the ring position of
+  !> that sample and the ring of CD_VIV_CYC_NB + 2 samples of the integral of the velocity (three
+  !> components each), held relative to the integral at the committed time.
+  INTEGER, PARAMETER, PUBLIC :: CD_VIV_CYC_NB = 64
+  INTEGER, PARAMETER, PUBLIC :: CD_VIV_NMS_CYC = 2 + 3*(CD_VIV_CYC_NB + 2)
 
   !> Chord below which a node tangent is undefined (a collapsed pair of neighbours).
   REAL(wp), PARAMETER :: TINY_CHORD = 1.0e-12_wp
@@ -729,6 +738,100 @@ CONTAINS
     REAL(wp), INTENT(IN) :: cf, a, fhat(:), p0(:), theta
     centre = cf + a*SUM(SIN(p0 + CD_VIV_TWO_PI*theta*fhat))
   END FUNCTION CD_VIV_Sto_Centre
+
+  PURE SUBROUTINE CD_VIV_Cycle_Init(st, v)
+    !! The cycle-mean frame state (CD_VIV_Cycle_Update) of a node that has moved at the constant
+    !! velocity v for all past time: its frame velocity is then v.
+    REAL(wp), INTENT(OUT) :: st(CD_VIV_NMS_CYC)
+    REAL(wp), INTENT(IN) :: v(3)
+    INTEGER :: j
+    st(1) = CD_ZERO
+    st(2) = CD_ONE
+    ! slot j holds the sample j - 1 intervals h before the latest, (I - I(t))/h = -(j - 1) v
+    DO j = 1, CD_VIV_CYC_NB + 2
+      st(3 + 3*(j - 1):5 + 3*(j - 1)) = -REAL(j - 1, wp)*v
+    END DO
+  END SUBROUTINE CD_VIV_Cycle_Init
+
+  PURE SUBROUTINE CD_VIV_Cycle_Update(st, v0, v1, dt, tw, vs)
+    !! One step dt of the cycle-mean flow frame of a node: with the node velocity linear from v0
+    !! to v1 over the step, the frame velocity at the step end is
+    !!
+    !!   v_s(t) = (I(t) - I(t - T))/T + (v(t) - v(t - T))/2,   I(t) = int^t v dt'
+    !!
+    !! over the window T = tw: the mean velocity over the last window plus half its change over it.
+    !! A component of period T and its harmonics drop out of both terms exactly (to the sampling
+    !! below), and a velocity linear in time passes unchanged, with no lag; a quadratic one with
+    !! the error T^2/6 of its second derivative. I is sampled every h = T/NB (NB = CD_VIV_CYC_NB) in
+    !! a ring of NB + 2 samples, exactly for the velocity linear over the step, and I(t - T) and
+    !! v(t - T) = I'(t - T) come from the quadratic through the three samples around t - T. The ring
+    !! holds I relative to its value at the step end, (I - I(t))/h, so it stays of the order of the
+    !! velocity however long the run. st: (1) the time since the latest sample over h, (2) the
+    !! ring slot of the latest sample, (3:) the ring (CD_VIV_Cycle_Init).
+    REAL(wp), INTENT(INOUT) :: st(CD_VIV_NMS_CYC)
+    REAL(wp), INTENT(IN) :: v0(3), v1(3), dt, tw
+    REAL(wp), INTENT(OUT) :: vs(3)
+    INTEGER, PARAMETER :: nr = CD_VIV_CYC_NB + 2
+    REAL(wp) :: h, tau, di(3), s, is(3), x, c0, c1, c2, d0, d1, d2, ia(3), ib(3), ic(3)
+    INTEGER :: latest, j, ja, jb, jc
+    h = tw/REAL(CD_VIV_CYC_NB, wp)
+    tau = st(1)*h
+    latest = NINT(st(2))
+    ! the integral over the step, per h: the ring shifts so that it stays relative to I(t_end)
+    di = 0.5_wp*dt*(v0 + v1)/h
+    DO j = 1, nr
+      st(3 + 3*(j - 1):5 + 3*(j - 1)) = st(3 + 3*(j - 1):5 + 3*(j - 1)) - di
+    END DO
+    ! the samples inside the step, at s = h - tau, 2h - tau, ... from its start
+    s = h - tau
+    DO WHILE (s <= dt)
+      ! I(t0 + s) - I(t_end) = -int_s^dt v, v linear: per h
+      is = -((dt - s)*v0 + 0.5_wp*(dt*dt - s*s)*(v1 - v0)/dt)/h
+      latest = MODULO(latest - 2, nr) + 1
+      st(3 + 3*(latest - 1):5 + 3*(latest - 1)) = is
+      s = s + h
+    END DO
+    ! the time since the latest sample, in [0, h]: at a sample landing on the step end the
+    ! difference can round to a few ulps below 0 (Tf 1 s, dt 0.01 s), which must stay a valid state
+    tau = MIN(MAX(dt - (s - h), CD_ZERO), h)
+    st(1) = tau/h
+    st(2) = REAL(latest, wp)
+    ! t - T lies x = NB - tau/h sample intervals before the latest sample, x in (NB - 1, NB]: the
+    ! quadratic through the samples NB - 1, NB and NB + 1 intervals back (age a, increasing back in
+    ! time), Lagrange weights at x and of the derivative in x
+    x = REAL(CD_VIV_CYC_NB, wp) - st(1)
+    ja = slot(CD_VIV_CYC_NB - 1)
+    jb = slot(CD_VIV_CYC_NB)
+    jc = slot(CD_VIV_CYC_NB + 1)
+    x = x - REAL(CD_VIV_CYC_NB, wp)   ! in [-1, 0): the ages NB - 1, NB, NB + 1 sit at -1, 0, 1
+    c0 = 0.5_wp*x*(x - CD_ONE)
+    c1 = (CD_ONE - x)*(CD_ONE + x)
+    c2 = 0.5_wp*x*(x + CD_ONE)
+    d0 = x - 0.5_wp
+    d1 = -2.0_wp*x
+    d2 = x + 0.5_wp
+    ia = st(3 + 3*(ja - 1):5 + 3*(ja - 1))
+    ib = st(3 + 3*(jb - 1):5 + 3*(jb - 1))
+    ic = st(3 + 3*(jc - 1):5 + 3*(jc - 1))
+    ! (I(t) - I(t - T))/T with I(t) = 0 in the ring's units (per h, T = NB h); age grows back in
+    ! time, so dI/dt = -(1/h) dI/dage
+    vs = -(c0*ia + c1*ib + c2*ic)/REAL(CD_VIV_CYC_NB, wp) + 0.5_wp*(v1 + (d0*ia + d1*ib + d2*ic))
+  CONTAINS
+    PURE INTEGER FUNCTION slot(age) RESULT(j)
+      INTEGER, INTENT(IN) :: age
+      j = MODULO(latest - 1 + age, nr) + 1
+    END FUNCTION slot
+  END SUBROUTINE CD_VIV_Cycle_Update
+
+  PURE LOGICAL FUNCTION CD_VIV_Cycle_Valid(st) RESULT(ok)
+    !! A cycle-mean frame state (CD_VIV_Cycle_Update) that a restart may install: finite, the time
+    !! since the latest sample in [0, 1] sample intervals and the ring slot an integer of the ring.
+    REAL(wp), INTENT(IN) :: st(:)
+    ok = SIZE(st) == CD_VIV_NMS_CYC
+    IF (.NOT. ok) RETURN
+    ok = ALL(ABS(st) <= HUGE(CD_ONE)) .AND. st(1) >= CD_ZERO .AND. st(1) <= CD_ONE .AND. &
+         st(2) >= CD_ONE .AND. st(2) <= REAL(CD_VIV_CYC_NB + 2, wp) .AND. .NOT. (ABS(st(2) - ANINT(st(2))) > CD_ZERO)
+  END FUNCTION CD_VIV_Cycle_Valid
 
   ELEMENTAL REAL(wp) FUNCTION CD_VIV_Wrap_Phase(phi) RESULT(wrapped)
     !! The phase mapped to [0, 2 pi); the model only uses cos(phi) and sin(. - phi).

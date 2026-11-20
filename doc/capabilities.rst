@@ -157,7 +157,8 @@ Line and constitutive capability
        host's fluid field on the coupled routes and its state in the checkpoint; a ``VIV FRAME``
        row (``Tf``) takes the cable's filtered motion as the frame of its phases, amplitude
        estimate and cross-flow damping (a towed or floater-driven cable,
-       :ref:`theory-viv-frame`)
+       :ref:`theory-viv-frame`), by a first-order filter or (method ``cycle``) the lag-free mean
+       over one response period
    * - Stochastic VIV band centre (``VIV STOCHASTIC`` section ``sigma``, ``c``, ``Nf``, ``seed``)
      - Standalone and coupled
      - the slowly varying random synchronisation centre of Ulveseter et al. (2017) on ``EI = 0``
