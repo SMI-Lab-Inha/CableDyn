@@ -1682,6 +1682,43 @@ estimate, stay 0 without a table), so it is part of the step-recovery, snapshot 
 state; an ``EI = 0`` line filters its smoothed node velocity. :math:`T_f` 0 or no row leaves the
 run unchanged to the bit.
 
+**Cycle mean** (``VIV FRAME`` method ``cycle``). The first-order filter lags a motion at
+:math:`\omega_m` by :math:`\arctan\omega_m T_f`, so on a decelerating motion the frame keeps more
+of the earlier, faster velocity than the cable has, and on an accelerating one less, so the frame
+speed differs between the two half-cycles at the same flow speed. With the method ``cycle`` the frame velocity is instead the mean over the
+window :math:`T = T_f` plus half the change over it,
+
+.. math::
+
+   \bar{\mathbf v}(t) = \frac{1}{T}\int_{t-T}^{t}\mathbf v\,dt'
+   + \tfrac12\left[\mathbf v(t) - \mathbf v(t - T)\right].
+
+A component of period :math:`T` and its harmonics drop out of both terms (the cross-flow VIV at
+:math:`f = 1/T` and the in-line one at :math:`2f`), and a velocity linear in time passes unchanged,
+without lag; a velocity quadratic in time is off by :math:`T^2/12` times its second derivative.
+The integral :math:`I = \int\mathbf v\,dt` is sampled every :math:`h = T/64`, exactly for the
+velocity linear over a step, in a ring of 66 samples per node held relative to :math:`I` at the
+committed time, and :math:`I(t - T)` and :math:`\mathbf v(t - T) = I'(t - T)` come from the
+quadratic through the three samples around :math:`t - T`; the sampled harmonics at :math:`f` and
+:math:`2f` leave 0.25 % of their amplitude (``viv_cycle_frame``). On the pipe moved through still
+water above (``Tf`` 0.6 s against the window 1 s) the frame velocity is off the imposed velocity
+by 0.17 % of its amplitude over 5-15 s, against 1.7 % for the filter (``hermite_viv_frame``). The
+window must be one period of the response, :math:`T = 1/f`: off the period the VIV velocity
+passes into :math:`\bar{\mathbf v}` by about :math:`|\sin(\pi\,\delta)|` for a mismatch
+:math:`fT = 1 + \delta`, and the phases and the amplitude estimate lose it (the taut cable of the
+deck gate, its response at 0.29 Hz, locks in at A/D 0.79 with :math:`T` 3.5 s and at 0.55 with
+:math:`T` 1 s). It therefore suits a response at one known frequency; a response that moves
+between modes needs the filter. The method acts on the synchronisation model (not the wake
+oscillator), one method per line. The sample time, the ring slot and the ring are
+:math:`2 + 3 \times 66` rows of the node's motion statistics after rows 7-9, so they are part of
+the step-recovery, snapshot and checkpoint state, and a restart that installs a sample time off
+:math:`[0, 1]` or a slot off the ring fails closed. On the L3-O cylinder with the published sets,
+the window :math:`T = 1/f_1` = 0.373 s against the filter of the record (:math:`T_f` 0.2 s), the
+mean gap between the decelerating and accelerating paths becomes 0.413 / 0.599 for uls19 at
+:math:`U_{R,max}` 6.5 / 7.9 (0.426 / 0.498 with the filter; measured 0.089 / 0.123) and
+0.320 / 0.267 for b1 (0.364 / 0.380): the method removes the filter's lag from the frame, not the
+deceleration hold of these sets.
+
 .. _theory-viv-stochastic:
 
 Stochastic band centre

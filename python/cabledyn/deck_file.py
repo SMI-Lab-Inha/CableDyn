@@ -3393,22 +3393,40 @@ class DeckFile:
                     "VIV: give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row"
                 )
 
-    def _check_viv_frame_section(self, frame_type_names: set[str]) -> None:
-        """Native ``apply_type_viv_frame`` for the VIV FRAME section.
+    def _check_viv_frame_section(
+        self,
+        frame_type_names: set[str],
+        lift_type_names: set[str] | None = None,
+        section_types_by_line: dict | None = None,
+    ) -> None:
+        """Native ``apply_type_viv_frame`` and ``deck_line_frame_cycle`` for the VIV FRAME section.
 
-        A row ``TypeName Tf`` sets the flow frame of a line type's VIV model: with the filter
+        A row ``TypeName Tf [Method]`` sets the flow frame of a line type's VIV model: with the
         time ``Tf > 0`` [s] the free stream is the ambient flow relative to the cable's velocity
-        low-pass filtered over ``Tf`` (0: the ambient flow), at most 1e15. It sets the wake
-        oscillator's frequency, or on the synchronisation model the motion of the phases, the
-        amplitude estimate and the VIV DAMPING split, so the type needs LINE TYPES ``Cl > 0`` or
-        a WAKE OSCILLATOR row with ``CL0 > 0`` (``frame_type_names``); a type takes one row.
+        low-pass filtered over ``Tf`` (``Method filter``, the default) or its lag-free mean over
+        the window ``Tf`` (``Method cycle``, synchronisation types only, ``Tf > 0``); 0 is the
+        ambient flow, at most 1e15. It sets the wake oscillator's frequency, or on the
+        synchronisation model the motion of the phases, the amplitude estimate and the VIV
+        DAMPING split, so the type needs LINE TYPES ``Cl > 0`` (``lift_type_names``) or a WAKE
+        OSCILLATOR row with ``CL0 > 0`` (``frame_type_names``); a type takes one row, and a line
+        whose framed lift types mix the two methods fails.
         """
         types = {row.tokens[0].lower(): row.tokens[0] for row in self.line_types}
         named: set[str] = set()
+        cycle_types: set[str] = set()
+        filter_types: set[str] = set()
         for row in self._rows("VIV FRAME"):
             where = self._at(row)
-            if len(row.tokens) != 2:
-                raise DeckFormatError(f"{where}: VIV FRAME rows must be: TypeName Tf")
+            if len(row.tokens) not in (2, 3):
+                raise DeckFormatError(f"{where}: VIV FRAME rows must be: TypeName Tf [Method]")
+            cyc = False
+            if len(row.tokens) == 3:
+                method = row.tokens[2].lower()
+                if method not in ("filter", "cycle"):
+                    raise DeckFormatError(
+                        f'{where}: VIV FRAME Method must be filter or cycle, got "{row.tokens[2]}"'
+                    )
+                cyc = method == "cycle"
             name = row.tokens[0].lower()
             if name not in types:
                 raise DeckFormatError(
@@ -3430,6 +3448,21 @@ class DeckFile:
                 raise DeckFormatError(
                     f'{where}: VIV FRAME of LINE TYPE "{types[name]}" sets the flow frame of its '
                     "VIV model: give the type LINE TYPES Cl > 0 or a WAKE OSCILLATOR row"
+                )
+            lifting = lift_type_names is None or name in lift_type_names
+            if cyc and not (lifting and value > 0.0):
+                raise DeckFormatError(
+                    f'{where}: VIV FRAME Method cycle of LINE TYPE "{types[name]}" acts on the '
+                    "synchronisation model (LINE TYPES Cl > 0) with a window Tf > 0"
+                )
+            if lifting and value > 0.0:
+                (cycle_types if cyc else filter_types).add(name)
+        for line_id, section_types in (section_types_by_line or {}).items():
+            used = {t.lower() for t in section_types}
+            if used & cycle_types and used & filter_types:
+                raise DeckFormatError(
+                    f"{self._label}: line {line_id}: its VIV FRAME rows mix the methods filter and "
+                    "cycle; a line takes one method"
                 )
 
     def _check_viv_sto_section(self, viv_type_names: set[str], wake_type_names: set[str]) -> None:
@@ -4905,7 +4938,9 @@ class DeckFile:
         wake_type_names = self._check_wake_section(viv_type_names)
         amp_type_names = self._check_viv_amp_section(viv_type_names)
         self._check_viv_diam_section(viv_type_names | wake_type_names)
-        self._check_viv_frame_section(viv_type_names | wake_type_names)
+        self._check_viv_frame_section(
+            viv_type_names | wake_type_names, viv_type_names, section_types_by_line
+        )
         self._check_viv_sto_section(viv_type_names, wake_type_names)
         damp_type_names = self._check_viv_damp_section(amp_type_names)
         amp_lines = {

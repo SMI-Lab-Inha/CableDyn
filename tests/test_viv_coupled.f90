@@ -45,11 +45,14 @@ PROGRAM test_viv_coupled
   !!   statistics), with the same restart and rewind checks;
   !! * the flow frame on the lift alone (VIV FRAME Tf 5 s, no tables): both blocks carry the
   !!   filtered velocity in rows 7-9 of 9 motion statistics (rows 3-6 unused), with the same restart
-  !!   and rewind checks;
+  !!   and rewind checks; with the cycle-mean frame (VIV FRAME Tf 3.4 s Method cycle) both blocks
+  !!   carry its ring after them too (CD_VIV_NMS_CYC more rows per node), with the same restart and
+  !!   rewind checks;
   !! * a stochastic band centre (VIV STOCHASTIC sigma 0.02, c 0.07, 100 components on both types):
   !!   both blocks grow by the travelled distance of the centre (1 per node), with the same restart
   !!   and rewind checks.
   USE CableDyn_Precision, ONLY: wp
+  USE CableDyn_VIV, ONLY: CD_VIV_NMS_CYC
   USE CableDyn_OpenFAST_Aggregate, ONLY: CD_AGG_ModuleType, CD_AGG_Init_From_Deck, CD_AGG_End, CD_AGG_OK, &
                                          CD_AGG_NMovingPoints, CD_AGG_GetMovingPointMesh, CD_AGG_Step_Moving, &
                                          CD_AGG_UpdateStates_Moving, CD_AGG_CalcOutput, CD_AGG_NFluidNodes, &
@@ -69,7 +72,7 @@ PROGRAM test_viv_coupled
   ! the deck of the restart and rewind cases, and whether its lines carry in-line VIV
   CHARACTER(32) :: deck_name = 'viv_coupled.dat'
   LOGICAL :: il_case = .FALSE., wake_case = .FALSE., amp_case = .FALSE., wakef_case = .FALSE., ampf_case = .FALSE.
-  LOGICAL :: frame_case = .FALSE., sto_case = .FALSE.
+  LOGICAL :: frame_case = .FALSE., sto_case = .FALSE., cyc_case = .FALSE.
 
   nfail = 0
   CALL write_deck('viv_coupled.dat', 0.8_wp)
@@ -80,6 +83,7 @@ PROGRAM test_viv_coupled
   CALL write_deck('viv_coupled_amp.dat', 0.8_wp, amp=.TRUE.)
   CALL write_deck('viv_coupled_ampf.dat', 0.8_wp, amp=.TRUE., wake_tf='5.0', damp=.TRUE.)
   CALL write_deck('viv_coupled_frame.dat', 0.8_wp, wake_tf='5.0')
+  CALL write_deck('viv_coupled_cyc.dat', 0.8_wp, wake_tf='3.4 cycle')
   CALL write_deck('viv_coupled_sto.dat', 0.8_wp, sto='0.02 0.07 100 3')
   CALL case_lockin()
   CALL case_restart()
@@ -105,6 +109,11 @@ PROGRAM test_viv_coupled
   frame_case = .TRUE.
   CALL case_restart()
   CALL case_rewind()
+  deck_name = 'viv_coupled_cyc.dat'
+  cyc_case = .TRUE.
+  CALL case_restart()
+  CALL case_rewind()
+  cyc_case = .FALSE.
   frame_case = .FALSE.
   deck_name = 'viv_coupled_amp.dat'
   wake_case = .FALSE.
@@ -413,7 +422,7 @@ CONTAINS
       ! synchronisation line, the step predictor (two rows with in-line VIV)
       ok = ok .AND. nv == (MERGE(6, 3, il_case) + MERGE(4, 0, amp_case .OR. wakef_case) + &
                            MERGE(3, 0, ampf_case) + MERGE(7, 0, frame_case) + MERGE(1, 0, sto_case) + &
-                           MERGE(0, MERGE(2, 1, il_case), wake_case))*(ndof/3) + 1
+                           MERGE(CD_VIV_NMS_CYC, 0, cyc_case) + MERGE(0, MERGE(2, 1, il_case), wake_case))*(ndof/3) + 1
       IF (with_viv .AND. nv > 0) THEN
         ALLOCATE (buf(nv))
         CALL CD_Get_System_Line_VIV_State(a%sys%fast%system, il, buf, es, em)
@@ -428,7 +437,8 @@ CONTAINS
     nvc = CD_HFMF_VIVMirrorSize(a%cables(1))
     ok = ok .AND. nvc == (MERGE(6, 3, il_case) + MERGE(MERGE(5, 2, wakef_case), 0, wake_case) + &
                           MERGE(4, 0, amp_case) + MERGE(3, 0, ampf_case) + MERGE(7, 0, frame_case) + &
-                          MERGE(1, 0, sto_case) + MERGE(0, MERGE(2, 1, il_case), wake_case))*a%cables(1)%line%nn + 1
+                          MERGE(1, 0, sto_case) + MERGE(CD_VIV_NMS_CYC, 0, cyc_case) + &
+                          MERGE(0, MERGE(2, 1, il_case), wake_case))*a%cables(1)%line%nn + 1
     IF (.NOT. with_viv) THEN
       ! the cable's VIV block as the fresh build has it (the torsion-free cable ends with it)
       CALL CD_HFMF_PackMirror(b%cables(1), fresh, es, em)
@@ -458,7 +468,9 @@ CONTAINS
       ! the filtered velocity in rows 7-9 of the motion statistics on both lines, no tables
       same = a%cables(1)%line%viv_frame .AND. .NOT. a%cables(1)%line%has_viv_amp .AND. &
              a%sys%fast%system%lines(1)%viv_frame .AND. .NOT. a%sys%fast%system%lines(1)%has_viv_amp .AND. &
-             SIZE(a%cables(1)%line%viv_ms, 1) == 10 .AND. SIZE(a%sys%fast%system%lines(1)%viv_ms, 1) == 10 .AND. &
+             SIZE(a%cables(1)%line%viv_ms, 1) == 10 + MERGE(CD_VIV_NMS_CYC, 0, cyc_case) .AND. &
+             SIZE(a%sys%fast%system%lines(1)%viv_ms, 1) == 10 + MERGE(CD_VIV_NMS_CYC, 0, cyc_case) .AND. &
+             (a%cables(1)%line%viv_cyc .EQV. cyc_case) .AND. (a%sys%fast%system%lines(1)%viv_cyc .EQV. cyc_case) .AND. &
              MAXVAL(ABS(a%sys%fast%system%lines(1)%viv_ms - b%sys%fast%system%lines(1)%viv_ms)) <= 0.0_wp .AND. &
              MAXVAL(ABS(a%cables(1)%line%viv_ms - b%cables(1)%line%viv_ms)) <= 0.0_wp
     END IF
@@ -587,7 +599,11 @@ CONTAINS
     END IF
     IF (PRESENT(wake_tf)) THEN
       WRITE (u, '(A)') '--------------------- VIV FRAME ---'
-      WRITE (u, '(A)') 'TypeName Tf'
+      IF (INDEX(wake_tf, 'cycle') > 0) THEN
+        WRITE (u, '(A)') 'TypeName Tf Method'
+      ELSE
+        WRITE (u, '(A)') 'TypeName Tf'
+      END IF
       WRITE (u, '(A)') 'riser '//wake_tf
       WRITE (u, '(A)') 'cable '//wake_tf
     END IF

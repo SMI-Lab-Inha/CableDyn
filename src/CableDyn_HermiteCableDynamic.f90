@@ -70,6 +70,7 @@ MODULE CableDyn_HermiteCableDynamic
                           CD_VIV_Inline_Phase_Rate, CD_VIV_Wake_Advance, CD_VIV_NMS, CD_VIV_NMS_AMP, &
                           CD_VIV_AMP_MAXP, CD_VIV_Amplitude_Update, CD_VIV_Table, CD_VIV_Check_Amp_Table, &
                           CD_VIV_Ambient_Crossflow_Rate, CD_VIV_NMS_FRAME, CD_VIV_Mean_Square_Weight, &
+                          CD_VIV_NMS_CYC, CD_VIV_Cycle_Init, CD_VIV_Cycle_Update, &
                           CD_VIV_Filter_Linear, CD_VIV_Sto_Node, CD_VIV_Sto_Centre, CD_VIV_STO_MAXF
   USE CableDyn_Hydro, ONLY: CD_Morison_Drag_Per_Length_Jac, CD_Airy_Wave_Kinematics_Precomputed, &
                             CD_Morison_Drag_Split_Per_Length_Jac, &
@@ -406,6 +407,10 @@ MODULE CableDyn_HermiteCableDynamic
     ! amplitude-table coefficients, and on an element with viv_ftfe(e) > 0 the axes and blend of
     ! the cross-flow damping (elem_frame_v, the mean over its end nodes).
     LOGICAL :: viv_frame = .FALSE.
+    ! the cycle-mean frame (Set_VIV tf_cycle; VIV FRAME method cycle): rows 7:9 hold instead the
+    ! cycle mean over Tf of the node velocity (CD_VIV_Cycle_Update), its state in the
+    ! CD_VIV_NMS_CYC rows after them, so the snapshot, the step recovery and the checkpoint carry it
+    LOGICAL :: viv_cyc = .FALSE.
     REAL(wp), ALLOCATABLE :: viv_ftf(:), viv_ftfe(:)
     ! The stochastic band centre (Set_VIV sto; VIV STOCHASTIC section; CableDyn_VIV): with sigma > 0
     ! on some element (viv_sto) viv_ms has one more row, its last, the node's travelled
@@ -1183,7 +1188,7 @@ CONTAINS
   END SUBROUTINE CD_HermiteCable_Dyn_Set_Friction_Axial
 
   SUBROUTINE CD_HermiteCable_Dyn_Set_VIV(model, cl, cf, df, t_window, ErrStat, ErrMsg, phase_seed, tangent_reversed, &
-                                         clx, il_alpha, chh, wake, amp, amp_n, dviv, cdy, tf, sto)
+                                         clx, il_alpha, chh, wake, amp, amp_n, dviv, cdy, tf, sto, tf_cycle)
     !! Install the cross-flow VIV synchronisation model (CableDyn_VIV) on a cable with drag:
     !! per element the lift coefficient cl (0: no lift) and the band df/cf, and the running-RMS
     !! averaging time t_window (s; 0 takes 500 steps of the first step). The lift acts on the
@@ -1252,6 +1257,12 @@ CONTAINS
     !! length-weighted c over those with sigma > 0, the most components and the seed of the first;
     !! its centre advances with the node's travelled distance theta = integral U/D dt, U the
     !! shedding speed of the phase rate, at the step's mid-point as the phase.
+    !!
+    !! tf_cycle (optional, with tf; default .FALSE.): the frame velocity is the cycle mean over the
+    !! window Tf instead of the first-order filter, vbar = (1/Tf) int_{t-Tf}^{t} v dt' +
+    !! (v(t) - v(t-Tf))/2 (CD_VIV_Cycle_Update): a component of period Tf and its harmonics drop
+    !! out and the slow motion passes without the filter's lag. Tf is then about one period of the
+    !! cable's VIV response.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: cl(:), cf(:), df(:), t_window
     INTEGER, INTENT(OUT) :: ErrStat
@@ -1268,9 +1279,10 @@ CONTAINS
     REAL(wp), INTENT(IN), OPTIONAL :: dviv(:)
     REAL(wp), INTENT(IN), OPTIONAL :: cdy(:, :)
     REAL(wp), INTENT(IN), OPTIONAL :: tf(:)
+    LOGICAL, INTENT(IN), OPTIONAL :: tf_cycle
     REAL(wp), INTENT(IN), OPTIONAL :: sto(:, :)
     INTEGER :: e, k, ne, nn, es, nms, nw, nfm, nfk, seedk
-    LOGICAL :: had_filter, had_frame, want_frame, had_sto, want_sto
+    LOGICAL :: had_filter, had_frame, want_frame, had_sto, want_sto, had_cyc, want_cyc
     REAL(wp) :: wsum, tw_old, rest_old, ssum, csum, cw
     REAL(wp), ALLOCATABLE :: s_a(:), s_f(:, :), s_p(:, :)
     INTEGER, ALLOCATABLE :: s_n(:)
@@ -1523,6 +1535,7 @@ CONTAINS
     had_wake = model%viv_wake
     had_filter = model%wo_filter
     had_frame = model%viv_frame
+    had_cyc = model%viv_cyc
     had_sto = model%viv_sto
     had_amp = model%has_viv_amp
     tw_old = model%viv_tw
@@ -1540,6 +1553,10 @@ CONTAINS
     END IF
     nms = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, want_amp)
     IF (want_frame) nms = CD_VIV_NMS_FRAME
+    want_cyc = .FALSE.
+    IF (want_frame .AND. PRESENT(tf_cycle)) want_cyc = tf_cycle
+    ! the cycle-mean frame's state after the frame rows
+    IF (want_cyc) nms = nms + CD_VIV_NMS_CYC
     ! the step predictor after the motion statistics (viv_pred_row; row 2 on a wake cable)
     IF (.NOT. want_wake) nms = nms + MERGE(2, 1, want_il)
     ! the travelled distance of the stochastic band centre last (viv_theta)
@@ -1596,6 +1613,14 @@ CONTAINS
       ALLOCATE (model%viv_ftfe(ne), model%viv_ftf(nn))
       model%viv_ftfe = tf
       model%viv_ftf = CD_ZERO
+      ! every node holds a valid cycle-mean state (nodes without lift included), so a checkpoint of
+      ! the whole block reloads
+      IF (want_cyc) THEN
+        DO k = 1, nn
+          CALL CD_VIV_Cycle_Init(model%viv_ms(CD_VIV_NMS_FRAME + 1:CD_VIV_NMS_FRAME + CD_VIV_NMS_CYC, k), &
+                                 model%v(6*(k - 1) + 1:6*(k - 1) + 3))
+        END DO
+      END IF
       DO k = 1, nn
         IF (.NOT. model%viv_node(k)) CYCLE
         wsum = CD_ZERO
@@ -1606,8 +1631,11 @@ CONTAINS
         END DO
         model%viv_ftf(k) = model%viv_ftf(k)/wsum
         model%viv_ms(7:9, k) = model%v(6*(k - 1) + 1:6*(k - 1) + 3)
+        IF (want_cyc) CALL CD_VIV_Cycle_Init(model%viv_ms(CD_VIV_NMS_FRAME + 1:CD_VIV_NMS_FRAME + CD_VIV_NMS_CYC, k), &
+                                             model%v(6*(k - 1) + 1:6*(k - 1) + 3))
       END DO
       model%viv_frame = .TRUE.
+      model%viv_cyc = want_cyc
     END IF
     IF (want_sto) THEN
       ! per node the length-weighted sigma over its lifting elements, the length-weighted c over
@@ -1750,6 +1778,7 @@ CONTAINS
       model%viv_wake = had_wake
       model%wo_filter = had_filter
       model%viv_frame = had_frame
+      model%viv_cyc = had_cyc
       model%viv_sto = had_sto
       model%has_viv_amp = had_amp
       model%viv_tw = tw_old
@@ -1848,6 +1877,7 @@ CONTAINS
     IF (ALLOCATED(model%viv_ftfe)) DEALLOCATE (model%viv_ftfe)
     IF (ALLOCATED(model%viv_sto_a)) DEALLOCATE (model%viv_sto_a, model%viv_sto_f, model%viv_sto_p, model%viv_sto_n)
     model%viv_frame = .FALSE.
+    model%viv_cyc = .FALSE.
     model%viv_sto = .FALSE.
     model%has_viv_amp = .FALSE.
     model%has_viv = .FALSE.
@@ -2082,6 +2112,7 @@ CONTAINS
     IF (model%viv_wake) RETURN
     r = MERGE(CD_VIV_NMS_AMP, CD_VIV_NMS, model%has_viv_amp)
     IF (model%viv_frame) r = CD_VIV_NMS_FRAME
+    IF (model%viv_cyc) r = r + CD_VIV_NMS_CYC
     r = r + 1
   END FUNCTION viv_pred_row
 
@@ -2304,9 +2335,20 @@ CONTAINS
       vf = CD_ZERO
       IF (model%viv_frame) THEN
         IF (model%viv_ftf(k) > CD_ZERO) THEN
-          IF (CD_All_Finite(model%v(i0 + 1:i0 + 3))) &
-            model%viv_ms_next(7:9, k) = CD_VIV_Filter_Linear(model%viv_ms(7:9, k), model%ws_vn(i0 + 1:i0 + 3), &
-                                                             model%v(i0 + 1:i0 + 3), dt/model%viv_ftf(k))
+          IF (CD_All_Finite(model%v(i0 + 1:i0 + 3))) THEN
+            IF (model%viv_cyc) THEN
+              ! the cycle mean over Tf (CD_VIV_Cycle_Update), the velocity linear over the step,
+              ! from the committed state (so a repeated end-of-step pass gives the same result)
+              model%viv_ms_next(CD_VIV_NMS_FRAME + 1:CD_VIV_NMS_FRAME + CD_VIV_NMS_CYC, k) = &
+                model%viv_ms(CD_VIV_NMS_FRAME + 1:CD_VIV_NMS_FRAME + CD_VIV_NMS_CYC, k)
+              CALL CD_VIV_Cycle_Update(model%viv_ms_next(CD_VIV_NMS_FRAME + 1:CD_VIV_NMS_FRAME + CD_VIV_NMS_CYC, k), &
+                                       model%ws_vn(i0 + 1:i0 + 3), model%v(i0 + 1:i0 + 3), dt, model%viv_ftf(k), &
+                                       model%viv_ms_next(7:9, k))
+            ELSE
+              model%viv_ms_next(7:9, k) = CD_VIV_Filter_Linear(model%viv_ms(7:9, k), model%ws_vn(i0 + 1:i0 + 3), &
+                                                               model%v(i0 + 1:i0 + 3), dt/model%viv_ftf(k))
+            END IF
+          END IF
           vf = 0.5_wp*(model%viv_ms(7:9, k) + model%viv_ms_next(7:9, k))
         END IF
       END IF

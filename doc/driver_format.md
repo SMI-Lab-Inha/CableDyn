@@ -1382,15 +1382,16 @@ filter time `Tf` the frame moves with the cable's own slow motion (see
 
 ```text
 --------------------- VIV FRAME ----------------------------------------
-TypeName   Tf
-(-)        (s)
-cable      10
+TypeName   Tf    Method
+(-)        (s)   (-)
+cable      10    filter
 ```
 
 | Column | Meaning |
 |--------|---------|
 | `TypeName` | an existing LINE TYPES name (case-insensitive) with LINE TYPES `Cl > 0` or a WAKE OSCILLATOR row, at most one row each |
-| `Tf` | filter time >= 0 [s], at most 1e15; `0` is the ambient flow |
+| `Tf` | filter time >= 0 [s], at most 1e15; `0` is the ambient flow; with `Method cycle` the window, one period of the VIV response |
+| `Method` | optional: `filter` (the default) or `cycle` (synchronisation model only, `Tf > 0`) |
 
 Behaviour:
 
@@ -1420,11 +1421,22 @@ Behaviour:
   in the relative velocity (`omega_m Tf <= 0.1`) needs a motion period at least 30 VIV periods
   long. For a motion only a few VIV periods long (a floater heave close to the VIV frequency) no
   `Tf` separates the two, and the response depends on `Tf`: report its sensitivity to `Tf`.
+- `Method cycle` takes the frame velocity as the mean over the window `Tf` plus half its change
+  over it, `(1/Tf) int_{t-Tf}^{t} v dt' + (v(t) - v(t-Tf))/2`: a component of period `Tf` and its
+  harmonics (the cross-flow VIV and the in-line VIV at twice its frequency) drop out, and the
+  slow motion passes without the filter's lag, so a decelerating motion does not leave the frame
+  faster than the cable. Give `Tf` as one period of the response (`1/f`): off the period the VIV
+  velocity passes into the frame by about `|sin(pi delta)|` for `f Tf = 1 + delta` (a taut cable
+  responding at 0.29 Hz locks in at A/D 0.79 with `Tf` 3.5 s and at 0.55 with `Tf` 1 s), so it
+  suits a response at one known frequency. A line takes one method; its ring of 66 samples per node
+  is part of the step-recovery, snapshot and checkpoint state (see
+  [Flow frame of the synchronisation model](theory.rst)).
 - The filtered velocity is part of the step-recovery, snapshot and checkpoint state. A row with
   `Tf = 0` leaves the run exactly as without it. It acts on `EI = 0` lines and finite-EI cables,
-  standalone and coupled. A row fails if it is not `TypeName Tf`, names an undefined or already
-  named type or one without VIV (neither LINE TYPES `Cl > 0` nor a WAKE OSCILLATOR row), or holds
-  a value out of range.
+  standalone and coupled. A row fails if it is not `TypeName Tf [Method]`, names an undefined or
+  already named type or one without VIV (neither LINE TYPES `Cl > 0` nor a WAKE OSCILLATOR row),
+  holds a value out of range or a `Method` other than `filter` and `cycle`, or takes `cycle` on a
+  type without `Cl > 0` or with `Tf = 0`; a line whose types mix the two methods fails.
 
 ### VIV STOCHASTIC (optional)
 
