@@ -682,7 +682,7 @@ the tow tests it predicts). Inputs, reduction scripts, results, and source prove
 
 ### Wall-clock time
 
-The measurements below were made on 2026-11-08 and 2026-11-09 (CableDyn 0.4.2) on one host (AMD Ryzen Threadripper PRO 7965WX,
+The measurements below were made on 2026-11-08 and 2026-11-09 (the 0.4.2 release driver and a GNU build of its source) on one host (AMD Ryzen Threadripper PRO 7965WX,
 Windows 11 Pro) with one thread per code, as the median of three runs after one warm-up. They
 come from [`validation/scripts/performance_records.py`](https://github.com/SMI-Lab-Inha/CableDyn/blob/main/validation/scripts/performance_records.py),
 which also checks each timed model against its reference response. CableDyn is timed with the

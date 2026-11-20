@@ -8,6 +8,8 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-20
+
 ### Added
 
 - `VIV FRAME` method `cycle`: an optional third column, rows `TypeName Tf [Method]`, `filter` (the
@@ -1410,7 +1412,8 @@ Corrections made during the pre-release review.
   values of the shipped example decks and states which tension (end element or
   `FairTen` end force) each comparison uses.
 
-[Unreleased]: https://github.com/SMI-Lab-Inha/CableDyn/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/SMI-Lab-Inha/CableDyn/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.3
 [0.4.2]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.2
 [0.4.1]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.1
 [0.4.0]: https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.0

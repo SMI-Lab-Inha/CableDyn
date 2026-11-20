@@ -14,12 +14,12 @@ with MoorDyn-C, MoorDyn-F, and OrcaFlex on common reference cases.
 .. admonition:: Release status
    :class: note
 
-   CableDyn ``v0.4.2`` is the current stable release. It is on PyPI with wheels that carry the
-   solver (``pip install cabledyn``). It makes the modal analysis of long lines and the
-   finite-EI dynamic step faster, holds the finite-EI static solve to its tolerance on graded
-   meshes, in cross currents, with attachments, ``Rigid`` ends and as-laid friction, gives a
-   mesh-independent axial damping ratio (``axialDampingRatio mode1``), and runs every shipped
-   example deck in its test suite.
+   CableDyn ``v0.4.3`` is the current stable release. It is on PyPI with wheels that carry the
+   solver (``pip install cabledyn``). It adds in-line, higher-harmonic and wake-oscillator VIV,
+   amplitude-dependent VIV coefficients and cross-flow damping, a VIV frame for cables moved
+   through the water, and bending and Rayleigh damping of finite-EI cables, each validated
+   against published riser and power-cable tests; it makes the coupled outputs of a cable
+   restrained in torsion several times cheaper, and lets a finite-EI line end on a free point.
    Every comparative-accuracy statement is linked to a passing benchmark in :doc:`validation`.
    The project remains below ``1.0.0``, so public APIs may evolve between minor releases.
 
@@ -55,8 +55,8 @@ Download to first result in five minutes
 ----------------------------------------
 
 #. Download ``CableDyn_driver.exe``, ``SHA256SUMS.txt``, and **Source code (zip)** (for the
-   ``examples`` folder) from the `v0.4.2 release
-   <https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.2>`_ and verify the checksum —
+   ``examples`` folder) from the `v0.4.3 release
+   <https://github.com/SMI-Lab-Inha/CableDyn/releases/tag/v0.4.3>`_ and verify the checksum —
    :doc:`installation`. No installer and no runtime DLLs.
 #. Put ``CableDyn_driver.exe`` in a working folder, unzip the source archive, and copy its
    ``examples`` folder next to the executable.

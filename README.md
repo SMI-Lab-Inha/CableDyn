@@ -18,7 +18,7 @@ lifting off the seabed lie inside the formulation.
 
 It runs as a standalone program, as a mooring module of OpenFAST and FAST.Farm
 (`CompMooring = 5`), through a C interface, or from Python.
-The current stable release is `v0.4.2`; interfaces are versioned and may change before `1.0.0`.
+The current stable release is `v0.4.3`; interfaces are versioned and may change before `1.0.0`.
 
 ## What CableDyn does
 
@@ -68,10 +68,10 @@ selection:
 | Bergdahl dynamic chain test, 30 conditions | measured end force | correlation 0.993 |
 | IEA 15 MW VolturnUS-S in OpenFAST with a power cable | OpenFAST with MoorDyn | platform motions within 0.6 % |
 
-Run times on one processor thread, same host and protocol, with the timing scripts in
+Run times of the 0.4.2 release driver on one processor thread, same host and protocol, with the timing scripts in
 [`validation/performance`](https://cabledyn.readthedocs.io/en/latest/validation.html):
 
-| Case | CableDyn 0.4.2 | OrcaFlex 11.6d |
+| Case | CableDyn | OrcaFlex 11.6d |
 |---|---|---|
 | 80 / 200 / 800 m lazy-wave spans, 60 s of heave | 1.3 / 2.4 / 5.0 s | 2.7 / 5.3 / 27.8 s |
 | One-hour VolturnUS-S chain mooring | 4.3 s | 19.7 s |
@@ -89,8 +89,8 @@ Unsupported combinations stop with a named error rather than running approximate
    |---|---|
    | `CableDyn_driver.exe` | Standalone solver for Windows x64 (AVX2 processor) |
    | `openfast.exe` | OpenFAST with CableDyn available as `CompMooring = 5` |
-   | `cabledyn-0.4.2-py3-none-any.whl` | Python package (pre- and post-processing, batch runs) |
-   | `cabledyn-0.4.2.tar.gz` | Python source distribution |
+   | `cabledyn-0.4.3-py3-none-any.whl` | Python package (pre- and post-processing, batch runs) |
+   | `cabledyn-0.4.3.tar.gz` | Python source distribution |
    | `SHA256SUMS.txt` | Checksums for the assets above |
 
    Both executables are statically linked, need no installer, compiler, or runtime
@@ -128,7 +128,7 @@ Unsupported combinations stop with a named error rather than running approximate
    cabledyn-run examples\wd0050_chain.dat wd0050
    ```
 
-   The pure Python wheel on the release page (`cabledyn-0.4.2-py3-none-any.whl`)
+   The pure Python wheel on the release page (`cabledyn-0.4.3-py3-none-any.whl`)
    carries no driver: `cabledyn-run` then needs `--executable .\CableDyn_driver.exe`,
    the `CABLEDYN_DRIVER` environment variable, or the driver on `PATH`. A source
    build names the driver `cabledyn` (see [Build from source](#build-from-source));
@@ -202,7 +202,7 @@ If you use CableDyn in academic work, please cite:
 > offshore wind. *Ocean Engineering* 368 (Part 2), 128332, 2026.
 > <https://doi.org/10.1016/j.oceaneng.2026.128332>
 
-To identify the software version, also cite the release (CableDyn 0.4.2).
+To identify the software version, also cite the release (CableDyn 0.4.3).
 The [citation file](https://cabledyn.readthedocs.io/en/latest/citing.html) contains both entries (GitHub **Cite this
 repository**); BibTeX is on the manual's
 [How to cite](https://cabledyn.readthedocs.io/en/latest/citing.html) page.

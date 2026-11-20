@@ -150,7 +150,7 @@ MODULE CableDyn
    ! the kinds of first-order linearization state (lin_state_map)
    INTEGER(IntKi), PARAMETER :: LIN1_VE = 1, LIN1_SYROPE = 2
 
-   TYPE(ProgDesc), PARAMETER :: CableDyn_ProgDesc = ProgDesc( 'CableDyn', 'v0.4.2', '2026-11-09' )
+   TYPE(ProgDesc), PARAMETER :: CableDyn_ProgDesc = ProgDesc( 'CableDyn', 'v0.4.3', '2026-11-20' )
    INTERFACE
       ! 1 when the CableDyn core targets x86-64-v3 (CABLEDYN_TARGET_AVX2) and carries the
       ! start-up processor check of src/cabledyn_cpu_guard.c; the reference also keeps that

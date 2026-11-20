@@ -300,7 +300,7 @@ __all__ = [
     "viv_response",
 ]
 
-__version__ = "0.4.2"
+__version__ = "0.4.3"
 
 
 def __getattr__(name: str) -> Any:
