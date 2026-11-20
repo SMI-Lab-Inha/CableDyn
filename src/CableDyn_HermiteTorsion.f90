@@ -1396,7 +1396,7 @@ CONTAINS
     LOGICAL, INTENT(IN), OPTIONAL :: holonomy
     INTEGER, INTENT(IN), OPTIONAL :: quadrature_order
     INTEGER :: order, k, j, i, ntri, si, sj
-    LOGICAL :: want_hess, with_h, need(2), finite
+    LOGICAL :: want_hess, with_h, need(2), finite, free(3)
     REAL(wp) :: node_t(3, 2), proj(3, 3, 2), x(3, 3), om, g9(9), h9(9, 9), gt(3, 2), htt(3, 3, 2, 2)
     REAL(wp) :: he, ge(12), hk(12, 12), dmy, blk(3, 3), blk2(3, 3)
     CHARACTER(200) :: em
@@ -1433,13 +1433,8 @@ CONTAINS
     END IF
     need(1) = ANY(tslot == 1) .OR. with_h
     need(2) = ANY(tslot == 2) .OR. with_h
-    ! (column by column: a reshaped copy of the assumed-shape tri would be a heap temporary)
-    finite = CD_All_Finite(qe) .AND. CD_Is_Finite(L) .AND. CD_All_Finite(tsign)
-    DO k = 1, ntri
-      DO j = 1, 3
-        finite = finite .AND. CD_All_Finite(tri(:, j, k))
-      END DO
-    END DO
+    ! (the rank-3 test reads tri in place: a reshaped copy would be a heap temporary)
+    finite = CD_All_Finite(qe) .AND. CD_Is_Finite(L) .AND. CD_All_Finite(tsign) .AND. CD_All_Finite(tri)
     IF (.NOT. finite) THEN
       ErrStat = CD_HTORS_NONFINITE
       ErrMsg = 'CD_HermiteTwist_Reference: non-finite input'
@@ -1488,7 +1483,11 @@ CONTAINS
           RETURN
         END IF
       END DO
-      CALL solid_angle(x(:, 1), x(:, 2), x(:, 3), want_hess, om, g9, h9)
+      ! (a local mask: the expression tslot(:, k) /= 0 as the argument is a heap temporary)
+      DO j = 1, 3
+        free(j) = tslot(j, k) /= 0
+      END DO
+      CALL solid_angle(x(:, 1), x(:, 2), x(:, 3), want_hess, om, g9, h9, free=free)
       value = value + tsign(k)*om
       DO j = 1, 3
         si = tslot(j, k)
@@ -1544,11 +1543,7 @@ CONTAINS
       RETURN
     END IF
     IF (want_hess) THEN
-      finite = .TRUE.
-      DO j = 1, 12
-        finite = finite .AND. CD_All_Finite(hess(:, j))
-      END DO
-      IF (.NOT. finite) THEN
+      IF (.NOT. CD_All_Finite(hess)) THEN
         ErrStat = CD_HTORS_NONFINITE
         ErrMsg = 'CD_HermiteTwist_Reference: non-finite twist Hessian'
         value = CD_ZERO
@@ -1727,8 +1722,14 @@ CONTAINS
     margin = HUGE(CD_ONE)
     CALL CD_HermiteCable_Gauss_Rule(order, gp, gw)
     DO ig = 1, order
+      ! (element_ab, on the shape derivatives at hand)
       CALL shape_derivatives(L, gp(ig), dh, ddh)
-      CALL element_ab(qe, L, gp(ig), a, b)
+      a = CD_ZERO
+      b = CD_ZERO
+      DO i = 1, 4
+        a = a + dh(i)*qe(3*i - 2:3*i)
+        b = b + ddh(i)*qe(3*i - 2:3*i)
+      END DO
       s2 = DOT_PRODUCT(a, a)
       sp = SQRT(s2)
       IF (sp <= GEOM_TOL) THEN
@@ -1771,7 +1772,12 @@ CONTAINS
       hd(1:3, 1:3) = 2.0_wp*eye + ta*(eye/sp - outer(a, a)/(sp*s2)) + (outer(a, t) + outer(t, a))/sp
       hd(1:3, 7:9) = outer(a, a)/sp + sp*eye
       hd(7:9, 1:3) = TRANSPOSE(hd(1:3, 7:9))
-      hf = (hn - f*hd - outer9(gf, gd) - outer9(gd, gf))/den
+      ! (the blocks read below: rows 7:9 only against columns 7:9)
+      DO j = 1, 9
+        DO i = 1, MERGE(9, 6, j > 6)
+          hf(i, j) = (hn(i, j) - f*hd(i, j) - gf(i)*gd(j) - gd(i)*gf(j))/den
+        END DO
+      END DO
       DO j = 1, 4
         DO i = 1, 4
           blk = dh(i)*dh(j)*hf(1:3, 1:3) + dh(i)*ddh(j)*hf(1:3, 4:6) + ddh(i)*dh(j)*hf(4:6, 1:3) &
@@ -1871,14 +1877,18 @@ CONTAINS
     r = c*v + cross(w, v) + w*DOT_PRODUCT(w, v)/(CD_ONE + c)
   END FUNCTION smallest_rotation
 
-  PURE SUBROUTINE solid_angle(x, y, z, want_hess, om, g, h)
+  PURE SUBROUTINE solid_angle(x, y, z, want_hess, om, g, h, free)
     !! Omega = 2 atan2(N, D), N = x.(y x z), D = 1 + x.y + y.z + z.x (signed solid angle of the
     !! geodesic triangle x, y, z), with gradient g and Hessian h in the raw vectors (x, y, z).
-    !! Under the fold guard every triangle used here has D >= 1.5.
+    !! Under the fold guard every triangle used here has D >= 1.5. With free, only the Hessian
+    !! blocks between two free vertices (free(j): vertex j is a variable of the caller) are
+    !! formed, each entry as the full Hessian forms it; the others are zero.
     REAL(wp), INTENT(IN) :: x(3), y(3), z(3)
     LOGICAL, INTENT(IN) :: want_hess
     REAL(wp), INTENT(OUT) :: om, g(9), h(9, 9)
-    REAL(wp) :: nv, dv, r2, gn(9), gd(9), eye(3, 3)
+    LOGICAL, INTENT(IN), OPTIONAL :: free(3)
+    REAL(wp) :: nv, dv, r2, gn(9), gd(9), eye(3, 3), h0(3, 3), c1, c2, s(3, 3)
+    INTEGER :: bi, bj, i, j, ii, jj
 
     nv = DOT_PRODUCT(x, cross(y, z))
     dv = CD_ONE + DOT_PRODUCT(x, y) + DOT_PRODUCT(y, z) + DOT_PRODUCT(z, x)
@@ -1894,6 +1904,42 @@ CONTAINS
     h = CD_ZERO
     IF (.NOT. want_hess) RETURN
     eye = identity3()
+    IF (PRESENT(free)) THEN
+      c1 = nv*nv - dv*dv
+      c2 = 2.0_wp*dv*nv
+      DO bj = 1, 3
+        IF (.NOT. free(bj)) CYCLE
+        DO bi = 1, 3
+          IF (.NOT. free(bi)) CYCLE
+          ! the block (bi, bj) of d2N and d2D before the scaling below
+          IF (bi == bj) THEN
+            h0 = CD_ZERO
+          ELSE
+            IF (bi + bj == 3) THEN
+              s = skew(z)
+            ELSE IF (bi + bj == 5) THEN
+              s = skew(x)
+            ELSE
+              s = skew(y)
+            END IF
+            IF (bj == MOD(bi, 3) + 1) THEN
+              h0 = -dv*s - nv*eye
+            ELSE
+              h0 = dv*s - nv*eye
+            END IF
+          END IF
+          DO j = 1, 3
+            jj = 3*(bj - 1) + j
+            DO i = 1, 3
+              ii = 3*(bi - 1) + i
+              h(ii, jj) = 2.0_wp*(h0(i, j)/r2 + (c1*(gn(ii)*gd(jj) + gd(ii)*gn(jj)) &
+                                                 - c2*(gn(ii)*gn(jj) - gd(ii)*gd(jj)))/(r2*r2))
+            END DO
+          END DO
+        END DO
+      END DO
+      RETURN
+    END IF
     ! d2N: (x,y) = -S(z), (y,z) = -S(x), (z,x) = -S(y); d2D: identity off-diagonal blocks
     h(1:3, 4:6) = -dv*skew(z) - nv*eye
     h(4:6, 1:3) = dv*skew(z) - nv*eye
@@ -1959,28 +2005,52 @@ CONTAINS
     c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
   END FUNCTION cross
 
+  ! (element by element: the RESHAPE and SPREAD forms of these are run-time library calls on the
+  ! torsion kernels' hot path; the entries are the same products)
+
   PURE FUNCTION skew(v) RESULT(s)
     !! S(v) w = v x w.
     REAL(wp), INTENT(IN) :: v(3)
     REAL(wp) :: s(3, 3)
-    s = RESHAPE([CD_ZERO, v(3), -v(2), -v(3), CD_ZERO, v(1), v(2), -v(1), CD_ZERO], [3, 3])
+    s(1, 1) = CD_ZERO
+    s(2, 1) = v(3)
+    s(3, 1) = -v(2)
+    s(1, 2) = -v(3)
+    s(2, 2) = CD_ZERO
+    s(3, 2) = v(1)
+    s(1, 3) = v(2)
+    s(2, 3) = -v(1)
+    s(3, 3) = CD_ZERO
   END FUNCTION skew
 
   PURE FUNCTION outer(a, b) RESULT(m)
     REAL(wp), INTENT(IN) :: a(3), b(3)
     REAL(wp) :: m(3, 3)
-    m = SPREAD(a, 2, 3)*SPREAD(b, 1, 3)
+    INTEGER :: i, j
+    DO j = 1, 3
+      DO i = 1, 3
+        m(i, j) = a(i)*b(j)
+      END DO
+    END DO
   END FUNCTION outer
 
   PURE FUNCTION outer9(a, b) RESULT(m)
     REAL(wp), INTENT(IN) :: a(9), b(9)
     REAL(wp) :: m(9, 9)
-    m = SPREAD(a, 2, 9)*SPREAD(b, 1, 9)
+    INTEGER :: i, j
+    DO j = 1, 9
+      DO i = 1, 9
+        m(i, j) = a(i)*b(j)
+      END DO
+    END DO
   END FUNCTION outer9
 
   PURE FUNCTION identity3() RESULT(m)
     REAL(wp) :: m(3, 3)
-    m = RESHAPE([CD_ONE, CD_ZERO, CD_ZERO, CD_ZERO, CD_ONE, CD_ZERO, CD_ZERO, CD_ZERO, CD_ONE], [3, 3])
+    m = CD_ZERO
+    m(1, 1) = CD_ONE
+    m(2, 2) = CD_ONE
+    m(3, 3) = CD_ONE
   END FUNCTION identity3
 
 END MODULE CableDyn_HermiteTorsion
