@@ -640,6 +640,12 @@ MODULE CableDyn_HermiteCableDynamic
     ! the step's residual norm.
     REAL(wp) :: tw_tsum = CD_ZERO, tw_spsi(2) = CD_ZERO, tw_tscale = CD_ONE
     REAL(wp), ALLOCATABLE :: tw_su(:, :), tw_stn(:, :), tw_sbeta(:)
+    ! tw_sq: the configuration tw_advance_reference re-based at; tw_rq: that of the committed
+    ! reference (tw_commit_reference), valid while tw_rq_ok (a reference that comes from a
+    ! mirror, a snapshot or tw_init has none). An element whose DOFs are tw_rq's, bit for bit,
+    ! passed every check of twist_reference there and keeps its reference twist.
+    REAL(wp), ALLOCATABLE :: tw_sq(:), tw_rq(:)
+    LOGICAL :: tw_rq_ok = .FALSE.
     ! tw_som(:, k): the angular velocity of end frame k over the running step, log(R_{n+1}
     ! R_n^T)/dt (R = [d n d x n]); tw_om: that of the committed step. A turning frame twists
     ! the element at a rigid end through rho, and the torsional damping takes that rate.
@@ -10900,6 +10906,9 @@ CONTAINS
     model%tw_psi = buf(9*nn + 2*ne + 1:9*nn + 2*ne + 2)
     model%tw_om = RESHAPE(buf(9*nn + 2*ne + 3:9*nn + 2*ne + 8), [3, 2])
     model%tw_oal = RESHAPE(buf(9*nn + 2*ne + 9:9*nn + 2*ne + 14), [3, 2])
+    ! (a reloaded reference carries no configuration of its own: tw_advance_reference evaluates
+    ! every element until the next commit)
+    model%tw_rq_ok = .FALSE.
   END SUBROUTINE tw_unpack
 
   ELEMENTAL REAL(wp) FUNCTION tw_wrap(x) RESULT(y)
@@ -11519,7 +11528,7 @@ CONTAINS
                 model%tw_we(nn))
       ALLOCATE (model%tw_eg(12, ne), model%tw_ehv(12, ne), model%tw_ek(ne), model%tw_ed(ne), model%tw_me(ne))
       ALLOCATE (model%tw_K7(3*KB7 + 1, 7*nn), model%tw_x7(7*nn), model%tw_ipiv(7*nn))
-      ALLOCATE (model%tw_su(3, nn), model%tw_stn(3, nn), model%tw_sbeta(ne))
+      ALLOCATE (model%tw_su(3, nn), model%tw_stn(3, nn), model%tw_sbeta(ne), model%tw_sq(6*nn), model%tw_rq(6*nn))
       ALLOCATE (model%ws_recovery_tw(tw_pack_size(model)))
     END IF
     model%tw_pn = CD_ZERO; model%tw_wn = CD_ZERO; model%tw_an = CD_ZERO; model%tw_pk = CD_ZERO
@@ -11615,6 +11624,7 @@ CONTAINS
     model%tw_w = CD_ZERO
     model%tw_al = CD_ZERO
     model%tw_mt = mt
+    model%tw_rq_ok = .FALSE.
     model%tw_active = .TRUE.
   CONTAINS
     PURE FUNCTION unit_perp(x, ax) RESULT(y)
@@ -11675,6 +11685,8 @@ CONTAINS
     IF (ALLOCATED(model%tw_eg)) DEALLOCATE (model%tw_eg, model%tw_ehv, model%tw_ek, model%tw_ed, model%tw_me)
     IF (ALLOCATED(model%tw_K7)) DEALLOCATE (model%tw_K7, model%tw_x7, model%tw_ipiv)
     IF (ALLOCATED(model%tw_su)) DEALLOCATE (model%tw_su, model%tw_stn, model%tw_sbeta)
+    IF (ALLOCATED(model%tw_sq)) DEALLOCATE (model%tw_sq, model%tw_rq)
+    model%tw_rq_ok = .FALSE.
     IF (ALLOCATED(model%ws_recovery_tw)) DEALLOCATE (model%ws_recovery_tw)
     IF (ALLOCATED(model%snap_tw)) DEALLOCATE (model%snap_tw)
     IF (ALLOCATED(model%snap_tw_fcR)) DEALLOCATE (model%snap_tw_fcR)
@@ -11686,15 +11698,15 @@ CONTAINS
     !! state reproduces the converged iterate bit for bit), the unit tangents and the directors
     !! carried over by the smallest rotation (a rigid end's: its end frame's normal carried).
     !!
-    !! An interior element (not at a rigid end) whose two unit node tangents are those of the
-    !! reference, bit for bit, keeps its reference twist: its transport solid angles are those
-    !! of the reference terms they are differenced against, so twist_reference returns
-    !! tw_beta(e) + tw_wrap(0) + 0, which is formed here without the evaluation. A frame-only
-    !! transfer between steps (CD_HermiteCable_Dyn_Set_Torsion_Frames at the committed shape,
-    !! where a host writes only the end nodes) so evaluates only the elements at a rigid end or
-    !! at a node whose tangent the host turned; the commit of a step evaluates every element
-    !! whose node tangents moved. (The skipped elements passed every check of twist_reference at
-    !! the same tangents and, the host writing only end nodes, the same shape.)
+    !! An interior element (not at a rigid end) whose 12 DOFs are those the committed reference
+    !! was formed at (tw_rq), bit for bit, keeps its reference twist: its unit node tangents are
+    !! the reference's, so its transport solid angles are those of the reference terms they are
+    !! differenced against and twist_reference returns tw_beta(e) + tw_wrap(0) + 0, which is
+    !! formed here without the evaluation; and it passed every check of twist_reference (the
+    !! element's fold and handle checks) at that same shape. A frame-only transfer between steps
+    !! (CD_HermiteCable_Dyn_Set_Torsion_Frames at the committed shape, where a host writes only
+    !! the end nodes) so evaluates only the elements at a rigid end or at a node the host moved;
+    !! the commit of a step evaluates every element that moved.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
     REAL(wp), INTENT(IN) :: q_new(:), ends_new(3, 4)
     INTEGER, INTENT(OUT) :: ErrStat
@@ -11712,14 +11724,11 @@ CONTAINS
       model%tw_stn(:, i) = CD_ZERO
       IF (rn > CD_ZERO) model%tw_stn(:, i) = q_new(6*i - 2:6*i)/rn
     END DO
+    model%tw_sq = q_new
     kept_prev = .FALSE.
     DO e = 1, model%ne
-      kept_i = bits_equal(model%tw_stn(1, e + 1), model%tw_tn(1, e + 1)) .AND. &
-               bits_equal(model%tw_stn(2, e + 1), model%tw_tn(2, e + 1)) .AND. &
-               bits_equal(model%tw_stn(3, e + 1), model%tw_tn(3, e + 1))
-      IF (e == 1) kept_prev = bits_equal(model%tw_stn(1, 1), model%tw_tn(1, 1)) .AND. &
-                              bits_equal(model%tw_stn(2, 1), model%tw_tn(2, 1)) .AND. &
-                              bits_equal(model%tw_stn(3, 1), model%tw_tn(3, 1))
+      kept_i = node_kept(e + 1)
+      IF (e == 1) kept_prev = node_kept(1)
       IF (kept_prev .AND. kept_i .AND. .NOT. ((e == 1 .AND. model%tw_rigid(1)) .OR. &
                                               (e == model%ne .AND. model%tw_rigid(2)))) THEN
         model%tw_sbeta(e) = model%tw_beta(e) + tw_wrap(CD_ZERO) + CD_ZERO
@@ -11749,6 +11758,22 @@ CONTAINS
       u = u - DOT_PRODUCT(u, t)*t
       model%tw_su(:, i) = u/NORM2(u)
     END DO
+  CONTAINS
+    LOGICAL FUNCTION node_kept(k) RESULT(kept)
+      !! Node k's six DOFs are those of the committed reference configuration and its unit
+      !! tangent the reference tangent, bit for bit.
+      INTEGER, INTENT(IN) :: k
+      INTEGER :: jj
+      kept = model%tw_rq_ok
+      DO jj = 6*k - 5, 6*k
+        IF (.NOT. kept) RETURN
+        kept = bits_equal(q_new(jj), model%tw_rq(jj))
+      END DO
+      DO jj = 1, 3
+        IF (.NOT. kept) RETURN
+        kept = bits_equal(model%tw_stn(jj, k), model%tw_tn(jj, k))
+      END DO
+    END FUNCTION node_kept
   END SUBROUTINE tw_advance_reference
 
   SUBROUTINE tw_frame_rates(model, dt)
@@ -11776,6 +11801,8 @@ CONTAINS
     model%tw_beta = model%tw_sbeta
     model%tw_psi = model%tw_spsi
     model%tw_tn = model%tw_stn
+    model%tw_rq = model%tw_sq
+    model%tw_rq_ok = .TRUE.
     model%tw_u = model%tw_su
   END SUBROUTINE tw_commit_reference
 

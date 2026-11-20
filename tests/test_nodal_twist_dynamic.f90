@@ -28,7 +28,11 @@ PROGRAM test_nodal_twist_dynamic
   !!      carries at most 4e-6 of the peak kinetic energy with an extreme Irn = 1 kg m (6e-8 at
   !!      0.02 kg m), below the step's own energy band;
   !!   R  restart: a rolling, torsionally damped run restored from a snapshot, and one rebuilt
-  !!      from the checkpoint mirror, continue bit-identically.
+  !!      from the checkpoint mirror, continue bit-identically;
+  !!   F  a coupled write that folds the end element (the coupled end, elastic in torsion and
+  !!      pinned in bending, translated past its neighbour with its tangent unchanged) is refused
+  !!      before anything is written, after a march and after a frame-only transfer (whose
+  !!      re-basing keeps the elements at the committed shape).
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
@@ -41,7 +45,8 @@ PROGRAM test_nodal_twist_dynamic
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_Init, CD_HFMF_Set_EndConnection, &
                                           CD_HFMF_Set_Torsion, CD_HFMF_UpdateStates, CD_HFMF_CalcOutput, &
                                           CD_HFMF_Snapshot, CD_HFMF_Restore, CD_HFMF_MirrorSize, &
-                                          CD_HFMF_PackMirror, CD_HFMF_UnpackMirror, CD_HFMF_End, CD_HFMF_OK
+                                          CD_HFMF_PackMirror, CD_HFMF_UnpackMirror, CD_HFMF_End, CD_HFMF_OK, &
+                                          CD_HFMF_SetCoupledKinematics
   IMPLICIT NONE
 
   REAL(wp), PARAMETER :: PI = 3.14159265358979323846_wp
@@ -61,6 +66,7 @@ PROGRAM test_nodal_twist_dynamic
   CALL check_frame_energy()
   CALL check_pinned_energy()
   CALL check_restart()
+  CALL check_fold_refused()
 
   IF (nfail > 0) THEN
     WRITE (*, '(A,I0,A)') 'FAIL: ', nfail, ' assertion(s) failed'
@@ -265,6 +271,50 @@ CONTAINS
     CALL CD_HFMF_End(cc)
     CALL CD_HFMF_End(cn)
   END SUBROUTINE check_quasi_static
+
+  ! ------------------------------------------------------------------------------------------
+  SUBROUTINE check_fold_refused()
+    !! F: march a bending-pinned line, elastic in torsion, then write the coupled end 0.8 m back
+    !! along the line, past its neighbour 0.5 m away, with the end tangent unchanged: the end
+    !! element folds, and the write is refused with the state untouched. The same after a
+    !! frame-only transfer of the march's last pose.
+    TYPE(CD_HFMF_ModuleType), ALLOCATABLE :: cab
+    REAL(wp) :: q(NDOF), x(3), v(3), a(3), dcm(3, 3), w(3), al(3), phi
+    REAL(wp), ALLOCATABLE :: q0(:), u0(:, :), b0(:)
+    INTEGER :: es, pass
+    LOGICAL :: ok
+    CHARACTER(300) :: em
+    ALLOCATE (cab)
+    CALL line_seed(0.0_wp, 0.0_wp, q)
+    CALL build_cable(cab, q, 1.0_wp, 0.01_wp, 1.0e-10_wp, 0.8_wp, .TRUE., 1.0e-9_wp, 0.05_wp)
+    CALL require(cab%line%tw_active, 'F: the nodal twist is active')
+    CALL march(cab, 0, 20, ok)
+    CALL require(ok, 'F: the march steps')
+    IF (.NOT. ok) RETURN
+    DO pass = 1, 2
+      CALL drive(20, x, v, a, dcm, w, al, phi)
+      IF (pass == 2) THEN
+        ! a frame-only transfer of the committed pose first: it re-bases the reference
+        x = cab%line%q(NDOF - 5:NDOF - 3)
+        CALL CD_HFMF_SetCoupledKinematics(cab, x, v, a, es, em, u_orientation=dcm, &
+                                          u_angular_velocity=w, u_angular_acceleration=al)
+        CALL require(es == CD_HFMF_OK, 'F: a frame-only transfer of the committed pose: '//TRIM(em))
+      END IF
+      q0 = cab%line%q
+      u0 = cab%line%tw_u
+      b0 = cab%line%tw_beta
+      ! (the coupled node's committed position, node NN; the cable frame is the global one)
+      x = cab%line%q(NDOF - 5:NDOF - 3) - [0.8_wp, 0.0_wp, 0.0_wp]
+      CALL CD_HFMF_SetCoupledKinematics(cab, x, v, a, es, em, u_orientation=dcm, u_angular_velocity=w, &
+                                        u_angular_acceleration=al)
+      WRITE (*, '(A,I0,A)') 'F fold through the coupled end (pass ', pass, '): '//TRIM(em)
+      CALL require(es /= CD_HFMF_OK, 'F: a write that folds the end element is refused')
+      CALL require(nan_max_abs(cab%line%q - q0) <= 0.0_wp .AND. nan_max_abs(cab%line%tw_beta - b0) <= 0.0_wp &
+                   .AND. nan_max_abs(RESHAPE(cab%line%tw_u - u0, [3*NN])) <= 0.0_wp, &
+                   'F: the refused write leaves the line and its twist reference unchanged')
+    END DO
+    CALL CD_HFMF_End(cab)
+  END SUBROUTINE check_fold_refused
 
   ! ------------------------------------------------------------------------------------------
   SUBROUTINE check_waves()
