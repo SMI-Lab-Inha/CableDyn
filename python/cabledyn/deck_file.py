@@ -3397,7 +3397,7 @@ class DeckFile:
         self,
         frame_type_names: set[str],
         lift_type_names: set[str] | None = None,
-        section_types_by_line: dict | None = None,
+        section_types_by_line: dict[str, list[str]] | None = None,
     ) -> None:
         """Native ``apply_type_viv_frame`` and ``deck_line_frame_cycle`` for the VIV FRAME section.
 
