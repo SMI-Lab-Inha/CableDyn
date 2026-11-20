@@ -248,6 +248,8 @@ MODULE CableDyn
       INTEGER(IntKi)          :: native_wrote_n = -123456789
       REAL(DbKi)              :: native_wrote_t = 0.0_DbKi
       LOGICAL                 :: native_pending = .FALSE.
+      ! glue steps per .CD.out row: nsuper times the CableDyn steps of OPTION CDOutDt (1 without it)
+      INTEGER(IntKi)          :: native_every = 1
       CHARACTER(1024)         :: native_root = ''
       ! Range graphs (LINES flag r): sampled by the aggregate once per committed mooring step
       ! (sample_range); ws_range is the double-precision transfer buffer to the OtherState
@@ -516,6 +518,30 @@ CONTAINS
       Inst(old_id)%native_pending = .FALSE.
    END SUBROUTINE restore_native_outputs
 
+   SUBROUTINE set_native_every( inst_e, ErrStat, ErrMsg )
+      !! Glue steps per .CD.out row from OPTION CDOutDt: nsuper (a row after every committed
+      !! CableDyn step) without it, nsuper times its whole number of CableDyn steps with it.
+      TYPE(CD_OF_Instance), INTENT(INOUT) :: inst_e
+      INTEGER(IntKi),       INTENT(OUT)   :: ErrStat
+      CHARACTER(*),         INTENT(OUT)   :: ErrMsg
+      REAL(wp)       :: ratio
+      INTEGER(IntKi) :: k
+      ErrStat = ErrID_None
+      ErrMsg = ''
+      inst_e%native_every = MAX(1_IntKi, inst_e%nsuper)
+      IF (.NOT. (inst_e%agg%cd_out_dt > 0.0_wp)) RETURN
+      ratio = inst_e%agg%cd_out_dt/inst_e%dt_moor
+      k = NINT(ratio, IntKi)
+      IF (k < 1_IntKi .OR. ABS(ratio - REAL(k, wp)) > 1.0E-6_wp*MAX(1.0_wp, ratio)) THEN
+         CALL SetErrStat( ErrID_Fatal, 'CableDyn mooring module: OPTIONS CDOutDt = '// &
+                          TRIM(Num2LStr(REAL(inst_e%agg%cd_out_dt, DbKi)))//' s is not a whole multiple of '// &
+                          'the CableDyn step '//TRIM(Num2LStr(REAL(inst_e%dt_moor, DbKi)))//' s (dtM, or DT '// &
+                          'when the deck omits dtM).', ErrStat, ErrMsg, 'set_native_every' )
+         RETURN
+      END IF
+      inst_e%native_every = k*MAX(1_IntKi, inst_e%nsuper)
+   END SUBROUTINE set_native_every
+
    SUBROUTINE resume_after_rewind( inst_e, other, ErrStat, ErrMsg )
       !! The run takes a step from a restored state that lies before its last commit: the rows
       !! and the range samples past the restored commit now belong to an abandoned branch.
@@ -544,6 +570,17 @@ CONTAINS
          CALL SetErrStat( ErrID_Fatal, 'The native-history rewind is not an integer number of CableDyn steps.', &
                           ErrStat, ErrMsg, RoutineName )
          RETURN
+      END IF
+      ! the rows past the restored commit: one per CableDyn step, or one per CDOutDt (at the whole
+      ! multiples of native_every/nsuper CableDyn steps)
+      IF (inst_e%native_every > inst_e%nsuper) THEN
+         BLOCK
+            INTEGER(IntKi) :: n_wrote, n_commit, k_row
+            k_row = inst_e%native_every/inst_e%nsuper
+            n_wrote = NINT(inst_e%native_wrote_t/REAL(inst_e%dt_moor, DbKi), IntKi)
+            n_commit = n_wrote - ntrim
+            ntrim = n_wrote/k_row - MAX(n_commit, 0_IntKi)/k_row
+         END BLOCK
       END IF
       DO k = 1, ntrim
          BACKSPACE (inst_e%native_un, IOSTAT=ios)
@@ -957,6 +994,13 @@ CONTAINS
       Inst(id)%nsuper = nsuper
       Inst(id)%dt_moor = dt_moor
       Inst(id)%use_extfluid = use_extf
+      CALL set_native_every( Inst(id), ErrStat2, ErrMsg2 )
+      CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+      IF (ErrStat >= AbortErrLev) RETURN
+      IF (Inst(id)%native_every > Inst(id)%nsuper) &
+         CALL WrScr( '   CableDyn: the .CD.out record takes a row every '// &
+                     TRIM(Num2LStr(REAL(Inst(id)%agg%cd_out_dt, DbKi)))//' s (OPTIONS CDOutDt), every '// &
+                     TRIM(Num2LStr(Inst(id)%native_every/Inst(id)%nsuper))//' CableDyn steps.' )
       IF (nsuper > 1_IntKi) THEN
          IF (Inst(id)%agg%predict_loads) THEN
             CALL WrScr( '   CableDyn: between dtM solves the coupled loads are extrapolated from the last two '// &
@@ -1657,6 +1701,9 @@ CONTAINS
       Inst(id)%nlines = nlines
       Inst(id)%nsuper = MAX(1_IntKi, NINT(p%dtM0/p%dtCoupling, IntKi))
       Inst(id)%dt_moor = REAL(p%dtM0, wp)
+      CALL set_native_every( Inst(id), ErrStat2, ErrMsg2 )
+      CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName )
+      IF (ErrStat >= AbortErrLev) RETURN
       ALLOCATE (Inst(id)%ws_pos(3, ncp), Inst(id)%ws_vel(3, ncp), Inst(id)%ws_acc(3, ncp), &
                 Inst(id)%ws_fld(3, ncp), Inst(id)%ws_moment(3, ncp), Inst(id)%ws_orient(3, 3, ncp), &
                 Inst(id)%ws_omega(3, ncp), Inst(id)%ws_alpha(3, ncp), &
@@ -2051,7 +2098,9 @@ CONTAINS
                ! cache is invalidated on every successful advance (bit-identical for the
                ! normal path -- last_solve_n moved anyway -- and correct for corrections).
                Inst(id)%loads_cached = .FALSE.
-               Inst(id)%native_pending = Inst(id)%native_un > 0_IntKi
+               ! (a row at every native_every-th glue step: OPTIONS CDOutDt)
+               Inst(id)%native_pending = Inst(id)%native_un > 0_IntKi .AND. &
+                                         MOD(n + 1_IntKi, Inst(id)%native_every) == 0_IntKi
                ! commit the restart clock: the state now committed corresponds to the END
                ! of this mooring interval. The advance runs on the LAST glue substep, so
                ! the interval end is t + dtCoupling (t + dt_moor from here overshoots by

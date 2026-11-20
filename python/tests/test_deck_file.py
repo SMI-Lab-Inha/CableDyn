@@ -5148,6 +5148,12 @@ def test_finite_ei_viv_is_accepted_on_the_multibody_march():
     DeckFile.from_text(_example("buoy_clamped_cable.dat", (row, row + "   0.8")))
 
 
+def test_cd_out_dt_option_is_non_negative():
+    DeckFile.from_text(_edit(_STATIC, ("50.0 WtrDpth\n", "50.0 WtrDpth\n0.1 CDOutDt\n")))
+    with pytest.raises(DeckFormatError, match="CDOutDt"):
+        DeckFile.from_text(_edit(_STATIC, ("50.0 WtrDpth\n", "50.0 WtrDpth\n-0.1 CDOutDt\n")))
+
+
 def test_viv_rms_window_option_is_non_negative():
     base = _edit(_STATIC, (_VIV_ROW, _VIV_ROW + " 0.8"))
     DeckFile.from_text(_edit(base, ("50.0 WtrDpth\n", "50.0 WtrDpth\n0.25 VIVrmsWindow\n")))

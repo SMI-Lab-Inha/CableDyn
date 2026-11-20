@@ -166,6 +166,9 @@ MODULE CableDyn_OpenFAST_Aggregate
     ! Deck OPTION predictLoads: the OpenFAST shell extrapolates the coupled loads between
     ! supercycled solves (TRUE) or holds the last solve's (FALSE)
     LOGICAL :: predict_loads = .TRUE.
+    ! Deck OPTION CDOutDt [s]: the OpenFAST shell writes a .CD.out row at every whole multiple
+    ! of it (a whole multiple of the CableDyn step); 0 writes one after every committed step
+    REAL(wp) :: cd_out_dt = CD_ZERO
     ! Deck OPTION maxStrain: the per-step plausibility bound on the EI=0 system lines.
     REAL(wp) :: max_strain = 0.5_wp
     INTEGER :: ncp_sys = 0                               ! moving points owned by sys
@@ -415,6 +418,7 @@ CONTAINS
     candidate%host_current_enabled = parts%host_current_enabled
     candidate%cable_load_feedback = parts%cable_load_feedback
     candidate%predict_loads = parts%predict_loads
+    candidate%cd_out_dt = parts%cd_out_dt
     candidate%max_strain = parts%max_strain
     IF (ALLOCATED(parts%host_current_profile_z)) THEN
       candidate%host_current_profile_z = parts%host_current_profile_z

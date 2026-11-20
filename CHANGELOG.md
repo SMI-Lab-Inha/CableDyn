@@ -10,6 +10,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Added
 
+- `OPTIONS CDOutDt` (alias `cd_out_dt`): the interval of the coupled `.CD.out` rows (OpenFAST and
+  FAST.Farm), a whole multiple of the CableDyn step; `0`, the default, keeps a row after every
+  committed step. A row re-evaluates and writes every deck channel, so on a cable with many
+  station channels at a small step the record is a large share of the module's output cost.
+  Retries, rewinds and restarts keep the row grid; OpenFAST's own channels follow `DT_Out` as
+  before.
 - Stochastic VIV band centre: an optional `VIV STOCHASTIC` section, rows `TypeName sigma c
   [Nf [seed]]`, makes the centre `cF` of a line type's synchronisation band the slowly varying
   random process of Ulveseter et al. (2017): `Nf` (default 100) sinusoids of a flat spectrum up to
