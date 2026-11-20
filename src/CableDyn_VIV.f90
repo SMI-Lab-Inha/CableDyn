@@ -791,7 +791,9 @@ CONTAINS
       st(3 + 3*(latest - 1):5 + 3*(latest - 1)) = is
       s = s + h
     END DO
-    tau = dt - (s - h)
+    ! the time since the latest sample, in [0, h]: at a sample landing on the step end the
+    ! difference can round to a few ulps below 0 (Tf 1 s, dt 0.01 s), which must stay a valid state
+    tau = MIN(MAX(dt - (s - h), CD_ZERO), h)
     st(1) = tau/h
     st(2) = REAL(latest, wp)
     ! t - T lies x = NB - tau/h sample intervals before the latest sample, x in (NB - 1, NB]: the

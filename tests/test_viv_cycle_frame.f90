@@ -16,8 +16,9 @@ PROGRAM test_viv_cycle_frame
   !! * C4 C2 and C3 hold for steps longer than a sample interval (dt = 1.7 T/NB) and for a step that
   !!   does not divide T;
   !! * C5 a node at rest at v0 (Init) gives vbar = v0 at once; the state stays valid
-  !!   (CD_VIV_Cycle_Valid) over a long run, and a state with a sample time outside [0, 1] or a
-  !!   slot off the ring is invalid.
+  !!   (CD_VIV_Cycle_Valid) over a long run, also where samples land on step ends (window 1 s,
+  !!   steps of 0.01 s), and a state with a sample time outside [0, 1] or a slot off the ring is
+  !!   invalid.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_VIV, ONLY: CD_VIV_Cycle_Init, CD_VIV_Cycle_Update, CD_VIV_Cycle_Valid, CD_VIV_NMS_CYC, CD_VIV_CYC_NB
   IMPLICIT NONE
@@ -51,6 +52,21 @@ PROGRAM test_viv_cycle_frame
   CALL require(err <= 1.0e-12_wp, 'C4: a ramp passes without lag with steps longer than a sample interval')
   err = run_case(3, 1.7_wp*TW/REAL(CD_VIV_CYC_NB, wp))
   CALL require(err <= 1.0_wp, 'C4: the quadratic error holds with steps longer than a sample interval')
+
+  ! C5 a sample landing on a step end (window 1 s, steps of 0.01 s, the 25th step rounded the
+  ! sample time a few ulps below 0) keeps the state valid over many windows
+  BLOCK
+    INTEGER :: k
+    LOGICAL :: all_ok
+    CALL CD_VIV_Cycle_Init(st, [0.1_wp, 0.0_wp, 0.0_wp])
+    all_ok = .TRUE.
+    DO k = 1, 10000
+      CALL CD_VIV_Cycle_Update(st, [0.1_wp, 0.0_wp, 0.0_wp], [0.1_wp, 0.0_wp, 0.0_wp], 0.01_wp, 1.0_wp, vs)
+      all_ok = all_ok .AND. CD_VIV_Cycle_Valid(st) .AND. st(1) >= 0.0_wp
+    END DO
+    CALL require(all_ok, 'C5: samples on step ends keep a valid state (window 1 s, dt 0.01 s)')
+    CALL require(MAXVAL(ABS(vs - [0.1_wp, 0.0_wp, 0.0_wp])) <= 1.0e-12_wp, 'C5: and the constant velocity')
+  END BLOCK
 
   ! C5 validity
   CALL CD_VIV_Cycle_Init(st, [0.0_wp, 0.0_wp, 0.0_wp])
