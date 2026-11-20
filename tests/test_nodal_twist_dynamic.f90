@@ -32,7 +32,8 @@ PROGRAM test_nodal_twist_dynamic
   !!   F  a coupled write that folds the end element (the coupled end, elastic in torsion and
   !!      pinned in bending, translated past its neighbour with its tangent unchanged) is refused
   !!      before anything is written, after a march and after a frame-only transfer (whose
-  !!      re-basing keeps the elements at the committed shape).
+  !!      re-basing keeps the elements at the committed shape); a length change drops the
+  !!      configuration the shortcut of the re-basing keeps elements at, and the next step records it.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_EndConnection, ONLY: CD_ENDCONN_RIGID
   USE CableDyn_HermiteTorsion, ONLY: CD_HermiteTorsionType, CD_HermiteTorsion_Line, CD_HermiteTorsion_Unwrap, &
@@ -41,7 +42,8 @@ PROGRAM test_nodal_twist_dynamic
                                           CD_HermiteCable_Dyn_Step, CD_HermiteCable_Dyn_Energy, &
                                           CD_HermiteCable_Dyn_End, CD_HermiteCable_Dyn_Set_EndConnection, &
                                           CD_HermiteCable_Dyn_Set_Torsion, CD_HermiteCable_Dyn_Torsion_State, &
-                                          CD_HermiteCable_Dyn_Node_Torque, CD_HCDYN_OK
+                                          CD_HermiteCable_Dyn_Node_Torque, CD_HermiteCable_Dyn_Set_SegmentLength, &
+                                          CD_HCDYN_OK
   USE CableDyn_OpenFAST_HermiteFMF, ONLY: CD_HFMF_ModuleType, CD_HFMF_Init, CD_HFMF_Set_EndConnection, &
                                           CD_HFMF_Set_Torsion, CD_HFMF_UpdateStates, CD_HFMF_CalcOutput, &
                                           CD_HFMF_Snapshot, CD_HFMF_Restore, CD_HFMF_MirrorSize, &
@@ -313,6 +315,14 @@ CONTAINS
                    .AND. nan_max_abs(RESHAPE(cab%line%tw_u - u0, [3*NN])) <= 0.0_wp, &
                    'F: the refused write leaves the line and its twist reference unchanged')
     END DO
+    ! a length change: the element shapes are no longer those the checks passed at, so the
+    ! recorded configuration is dropped (every element is evaluated) until the next step
+    CALL require(cab%line%tw_rq_ok, 'F: a committed step records its configuration')
+    CALL CD_HermiteCable_Dyn_Set_SegmentLength(cab%line, [NE/2], [0.55_wp], [0.0_wp], es, em)
+    CALL require(es == CD_HCDYN_OK .AND. .NOT. cab%line%tw_rq_ok, &
+                 'F: a length change drops the recorded configuration: '//TRIM(em))
+    CALL march(cab, 20, 21, ok)
+    CALL require(ok .AND. cab%line%tw_rq_ok, 'F: the next step records it again')
     CALL CD_HFMF_End(cab)
   END SUBROUTINE check_fold_refused
 

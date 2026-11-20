@@ -640,10 +640,11 @@ MODULE CableDyn_HermiteCableDynamic
     ! the step's residual norm.
     REAL(wp) :: tw_tsum = CD_ZERO, tw_spsi(2) = CD_ZERO, tw_tscale = CD_ONE
     REAL(wp), ALLOCATABLE :: tw_su(:, :), tw_stn(:, :), tw_sbeta(:)
-    ! tw_sq: the configuration tw_advance_reference re-based at; tw_rq: that of the committed
-    ! reference (tw_commit_reference), valid while tw_rq_ok (a reference that comes from a
-    ! mirror, a snapshot or tw_init has none). An element whose DOFs are tw_rq's, bit for bit,
-    ! passed every check of twist_reference there and keeps its reference twist.
+    ! tw_sq: the configuration tw_advance_reference re-based at; tw_rq: the configuration of the
+    ! last committed step (tw_commit_reference after a step, not a frame-only transfer), at which
+    ! every element passed every check of twist_reference; valid while tw_rq_ok (none before the
+    ! first step, after tw_init or a change of the lengths). An element whose DOFs are tw_rq's
+    ! and whose unit node tangents are the reference's, bit for bit, keeps its reference twist.
     REAL(wp), ALLOCATABLE :: tw_sq(:), tw_rq(:)
     LOGICAL :: tw_rq_ok = .FALSE.
     ! tw_som(:, k): the angular velocity of end frame k over the running step, log(R_{n+1}
@@ -3341,6 +3342,8 @@ CONTAINS
       cn_new = kn_new*model%seabed_cn_over_kn
     END IF
     model%l0 = l0_new
+    ! (the element checks of the nodal twist's recorded configuration hold for the old lengths)
+    model%tw_rq_ok = .FALSE.
     CALL MOVE_ALLOC(mgb_new, model%Mgb)
     CALL MOVE_ALLOC(trib_new, model%trib)
     IF (model%has_contact) THEN
@@ -5160,7 +5163,7 @@ CONTAINS
       IF (PRESENT(q_check)) RETURN
       ! a frame turn within one step of the end-frame constants (the wrapped change is unique)
       model%tors_drive_set = .FALSE.
-      CALL tw_commit_reference(model)
+      CALL tw_commit_reference(model, frames_only=.TRUE.)
       model%torsion%ends = ends
       model%tors_use_step = .FALSE.
       CALL assemble_twist(model, model%q, model%v, .TRUE., .FALSE., model%ws_R, model%ws_Kb, model%ws_Kvb, &
@@ -10906,9 +10909,8 @@ CONTAINS
     model%tw_psi = buf(9*nn + 2*ne + 1:9*nn + 2*ne + 2)
     model%tw_om = RESHAPE(buf(9*nn + 2*ne + 3:9*nn + 2*ne + 8), [3, 2])
     model%tw_oal = RESHAPE(buf(9*nn + 2*ne + 9:9*nn + 2*ne + 14), [3, 2])
-    ! (a reloaded reference carries no configuration of its own: tw_advance_reference evaluates
-    ! every element until the next commit)
-    model%tw_rq_ok = .FALSE.
+    ! (tw_rq stays: it is a configuration this model evaluated, and a reloaded reference is used
+    ! there only where its tangents are those of tw_rq, see tw_advance_reference)
   END SUBROUTINE tw_unpack
 
   ELEMENTAL REAL(wp) FUNCTION tw_wrap(x) RESULT(y)
@@ -11698,12 +11700,12 @@ CONTAINS
     !! state reproduces the converged iterate bit for bit), the unit tangents and the directors
     !! carried over by the smallest rotation (a rigid end's: its end frame's normal carried).
     !!
-    !! An interior element (not at a rigid end) whose 12 DOFs are those the committed reference
-    !! was formed at (tw_rq), bit for bit, keeps its reference twist: its unit node tangents are
-    !! the reference's, so its transport solid angles are those of the reference terms they are
-    !! differenced against and twist_reference returns tw_beta(e) + tw_wrap(0) + 0, which is
+    !! An interior element (not at a rigid end) whose 12 DOFs are those of the last committed step
+    !! (tw_rq) and whose unit node tangents are those of the reference, bit for bit, keeps its
+    !! reference twist: its transport solid angles are those of the reference terms they are
+    !! differenced against, so twist_reference returns tw_beta(e) + tw_wrap(0) + 0, which is
     !! formed here without the evaluation; and it passed every check of twist_reference (the
-    !! element's fold and handle checks) at that same shape. A frame-only transfer between steps
+    !! element's fold and handle checks) at that very shape. A frame-only transfer between steps
     !! (CD_HermiteCable_Dyn_Set_Torsion_Frames at the committed shape, where a host writes only
     !! the end nodes) so evaluates only the elements at a rigid end or at a node the host moved;
     !! the commit of a step evaluates every element that moved.
@@ -11795,14 +11797,22 @@ CONTAINS
     END DO
   END SUBROUTINE tw_frame_rates
 
-  SUBROUTINE tw_commit_reference(model)
-    !! Make the reference state of tw_advance_reference the committed one.
+  SUBROUTINE tw_commit_reference(model, frames_only)
+    !! Make the reference state of tw_advance_reference the committed one. After a step it also
+    !! records the step's configuration as tw_rq; a frame-only transfer (frames_only) keeps the
+    !! tw_rq of the last step, as it moves no element DOF but the end nodes'.
     TYPE(CD_HermiteCableDynType), INTENT(INOUT) :: model
+    LOGICAL, INTENT(IN), OPTIONAL :: frames_only
+    LOGICAL :: record
+    record = .TRUE.
+    IF (PRESENT(frames_only)) record = .NOT. frames_only
     model%tw_beta = model%tw_sbeta
     model%tw_psi = model%tw_spsi
     model%tw_tn = model%tw_stn
-    model%tw_rq = model%tw_sq
-    model%tw_rq_ok = .TRUE.
+    IF (record) THEN
+      model%tw_rq = model%tw_sq
+      model%tw_rq_ok = .TRUE.
+    END IF
     model%tw_u = model%tw_su
   END SUBROUTINE tw_commit_reference
 
