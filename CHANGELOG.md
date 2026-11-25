@@ -10,6 +10,16 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ### Fixed
 
+- A Syrope rope at its running maximum had a band of slow strains, up to 9e-7 wide on the shipped table,
+  over which its recovered mean tension did not change, so every one of them was a rest point and rounding
+  chose the one a static start took. Two starts of the composite example that agreed to 1e-10 gave runs
+  that differed by up to 2.3e-4 of the channel maxima. The OWC recovery is now the exact inverse of
+  `eps_owc(T) - eps_fast(T)`, where it interpolated the slow strains of the table rows, and the working
+  curve meets it at one slow strain. Results of a rope loaded along its OWC change by about the size of
+  the former interpolation error (1.4e-4 on the composite example) and no longer depend on the spacing
+  of the OWC rows. On the OWC the recovery differs from MoorDyn's, which interpolates the rows.
+  A table with a row steeper than the fast spring at the row's start stops with a named error.
+
 - A Syrope line whose rest tension is a small part of its past one (a `SYROPE IC` `Tmax0` well above the
   installed tension, as of a polyester mooring line after a storm that loaded it) failed to start when its
   static secants, far below the working curve's tangent along the whole line, did not settle in 50

@@ -188,10 +188,16 @@ CONTAINS
       RETURN
     END IF
     DO i = 2, n
-      IF (td%owc_slow(i) <= td%owc_slow(i - 1)) THEN
+      ! Within a row the slow strain is convex in the tension, so it increases throughout where it
+      ! does at the row's start: the row's slope dT/deps must lie below the fast spring's stiffness
+      ! alpha + beta T there (a row that falls first and then rises has increasing ends, and no
+      ! inverse).
+      IF (td%owc_slow(i) <= td%owc_slow(i - 1) .OR. &
+          .NOT. (owc_tension(i) - owc_tension(i - 1) < (alpha + beta*owc_tension(i - 1))* &
+                 (owc_strain(i) - owc_strain(i - 1)))) THEN
         CALL CD_Syrope_End(td)
         CALL fail(ErrStat, ErrMsg, 'the OWC slow-spring static strain must be strictly increasing '// &
-                  '(the alpha/beta fast spring is too soft for this table)')
+                  'along every row (the alpha/beta fast spring is too soft for this table)')
         RETURN
       END IF
     END DO
@@ -335,6 +341,9 @@ CONTAINS
       END SELECT
       wc_slow(i) = wc_strain(i) - CD_Syrope_Fast_Strain(td, wc_tension(i))
     END DO
+    ! the top sample is the OWC's slow strain at t_max, to the bit: the branches join at one slow
+    ! strain, the divider (the sampled value differs from it by rounding)
+    wc_slow(CD_SYROPE_NWC) = CD_Syrope_Branch_Divider(td, t_max)
     IF (.NOT. (CD_All_Finite(wc_tension) .AND. CD_All_Finite(wc_slow))) THEN
       CALL fail(ErrStat, ErrMsg, 'the working curve has non-finite samples at this T_max (degenerate '// &
                 'shape parameters)')
@@ -379,10 +388,11 @@ CONTAINS
     !! The static strain split at a mean tension:
     !! total curve strain, the fast-spring share, and the slow-spring share.
     !! on_wc selects the working curve (t_mean below the running max) vs the
-    !! OWC frontier. This is MoorDyn's exact-log partition; the kernel recovers
-    !! T_mean by interpolating the node-sampled slow table, so seeding a state
-    !! from slow_strain misses the rest point by the fast spring's interpolation
-    !! error. CD_Syrope_Slow_At_Mean returns the exact rest-point slow strain.
+    !! OWC frontier. This is MoorDyn's exact-log partition. On the working curve
+    !! the kernel recovers T_mean by interpolating the node-sampled slow table, so
+    !! seeding a state from slow_strain misses the rest point there by the fast
+    !! spring's interpolation error. CD_Syrope_Slow_At_Mean returns the exact
+    !! rest-point slow strain.
     TYPE(CD_SyropeType), INTENT(IN) :: td
     LOGICAL, INTENT(IN) :: on_wc
     REAL(wp), INTENT(IN) :: wc_strain(CD_SYROPE_NWC), wc_tension(CD_SYROPE_NWC), t_mean
@@ -398,8 +408,8 @@ CONTAINS
 
   PURE REAL(wp) FUNCTION CD_Syrope_Slow_At_Mean(td, on_wc, wc_tension, wc_slow, t_mean) RESULT(slow)
     !! The slow-spring strain whose kernel recovery returns exactly t_mean: the
-    !! inverse of the piecewise-linear T_mean(eps_slow) interpolation on the
-    !! selected branch table. With it, eps = eps_curve(t_mean) and zero strain
+    !! inverse of the working curve's piecewise-linear T_mean(eps_slow)
+    !! interpolation, or of the OWC's exact recovery. With it, eps = eps_curve(t_mean) and zero strain
     !! rate is an exact rest point (tension t_mean, zero slow-strain rate).
     TYPE(CD_SyropeType), INTENT(IN) :: td
     LOGICAL, INTENT(IN) :: on_wc
@@ -407,7 +417,7 @@ CONTAINS
     IF (on_wc) THEN
       slow = interp(t_mean, wc_tension, wc_slow)
     ELSE
-      slow = interp(t_mean, td%owc_tension, td%owc_slow)
+      slow = CD_Syrope_Slow_At_Tmax(td, t_mean)
     END IF
   END FUNCTION CD_Syrope_Slow_At_Mean
 
@@ -490,7 +500,7 @@ CONTAINS
       t_mean = interp(slow_eps, wc_slow, wc_tension)
       eps_static = interp(t_mean, wc_tension, wc_strain)
     ELSE
-      t_mean = interp(slow_eps, td%owc_slow, td%owc_tension)
+      t_mean = owc_tension_at_slow(td, slow_eps)
       eps_static = interp(t_mean, td%owc_tension, td%owc_strain)
     END IF
     k1 = td%alpha + td%beta*t_mean
@@ -601,8 +611,8 @@ CONTAINS
     END DO
     ! The safeguarded Newton step can creep along one side of the bracket when the root lies
     ! closer to a kink of the rate than its difference interval h, where the slope of
-    ! T_mean(eps_slow) changes (the top sample of the working curve, beyond which its
-    ! interpolation clamps at T_max, as when a rope rests on its OWC at its running maximum):
+    ! T_mean(eps_slow) changes (the top sample of the working curve, where the OWC takes over,
+    ! as when a rope rests on its OWC at its running maximum):
     ! the difference quotient straddles the kink, and every step lands inside the bracket and
     ! moves only that end. Finish then by bisection, which halves the bracket every iteration
     ! (R is continuous on it, so the bracket closes on its root) until the residual test is met.
@@ -657,13 +667,12 @@ CONTAINS
 
   PURE REAL(wp) FUNCTION CD_Syrope_Branch_Divider(td, t_max) RESULT(divider)
     !! The slow strain dividing the working-curve and OWC branches at the running
-    !! maximum t_max: the OWC recovery's exact inverse at t_max, so the recovered
-    !! mean tension is continuous across the switch (the working curve clamps at
-    !! t_max up to the divider, the OWC returns t_max at it). It lies at or above
-    !! CD_Syrope_Slow_At_Tmax (the exact-log value; equal at table rows).
+    !! maximum t_max: the OWC's slow strain at t_max (CD_Syrope_Slow_At_Tmax), which
+    !! is also the top sample of the working curve's slow strains, so the recovered
+    !! mean tension is continuous across the switch.
     TYPE(CD_SyropeType), INTENT(IN) :: td
     REAL(wp), INTENT(IN) :: t_max
-    divider = interp(t_max, td%owc_tension, td%owc_slow)
+    divider = CD_Syrope_Slow_At_Tmax(td, t_max)
   END FUNCTION CD_Syrope_Branch_Divider
 
   SUBROUTINE CD_Syrope_Static_Tension(td, t_max, eps, tension, ErrStat, ErrMsg)
@@ -751,9 +760,7 @@ CONTAINS
   PURE REAL(wp) FUNCTION CD_Syrope_Slow_At_Tmax(td, t_max) RESULT(slow_at)
     !! The exact-log slow-spring static strain at the running maximum tension:
     !! eps_owc(t_max) minus the fast-spring strain at t_max (the regenerated working
-    !! curve and the OWC coincide at t_max). It is not the branch divider the model
-    !! uses, which is CD_Syrope_Branch_Divider (the interpolated inverse, at or above
-    !! this value).
+    !! curve and the OWC coincide at t_max).
     TYPE(CD_SyropeType), INTENT(IN) :: td
     REAL(wp), INTENT(IN) :: t_max
     slow_at = interp(t_max, td%owc_tension, td%owc_strain) - CD_Syrope_Fast_Strain(td, t_max)
@@ -918,8 +925,9 @@ CONTAINS
                                     r_s, dtm_ds)
     !! Partial derivatives, at fixed (eps, deps), of the slow-strain rate
     !! r = (K1*(eps - eps_static(T_mean)) + c2*deps)/(c1 + c2) and of T_mean with
-    !! respect to the slow strain, on the same piecewise-linear segments the
-    !! kernel interpolates (zero slope where the interpolation clamps).
+    !! respect to the slow strain, of the kernel's own recovery: the piecewise-linear
+    !! segments of the working curve or the OWC's exact inverse (zero slope where
+    !! the recovery clamps).
     TYPE(CD_SyropeType), INTENT(IN) :: td
     LOGICAL, INTENT(IN) :: on_wc
     REAL(wp), INTENT(IN) :: wc_strain(CD_SYROPE_NWC), wc_tension(CD_SYROPE_NWC), wc_slow(CD_SYROPE_NWC)
@@ -931,12 +939,63 @@ CONTAINS
       de_dtm = interp_slope(t_mean, wc_tension, wc_strain)
       eps_static = interp(t_mean, wc_tension, wc_strain)
     ELSE
-      dtm_ds = interp_slope(slow_eps, td%owc_slow, td%owc_tension)
+      dtm_ds = owc_tension_slope(td, slow_eps, t_mean)
       de_dtm = interp_slope(t_mean, td%owc_tension, td%owc_strain)
       eps_static = interp(t_mean, td%owc_tension, td%owc_strain)
     END IF
     r_s = (td%beta*dtm_ds*(eps - eps_static) - (td%alpha + td%beta*t_mean)*de_dtm*dtm_ds)/(td%c1 + td%c2)
   END SUBROUTINE rate_slow_partial
+
+  PURE REAL(wp) FUNCTION owc_tension_at_slow(td, slow) RESULT(t_mean)
+    !! The OWC tension at a slow-spring strain: the exact inverse of eps_owc(T) - eps_fast(T), with
+    !! eps_owc linear between the table rows, constant beyond the first and last one. A straight
+    !! line between the rows' slow strains would reach a running maximum above its exact slow
+    !! strain by up to the fast spring's curvature over the row (about 1e-6): between the two, the
+    !! recovered tension would not change and every slow strain would be a rest point of a rope at
+    !! its running maximum, the rounding of a static start choosing one. The row's residual is
+    !! convex in T (the fast strain is concave) and its chord rises, so Newton from the row's upper
+    !! end falls monotonically to the root.
+    TYPE(CD_SyropeType), INTENT(IN) :: td
+    REAL(wp), INTENT(IN) :: slow
+    REAL(wp) :: de_dt, t, dt_
+    INTEGER :: i, n, it
+    n = SIZE(td%owc_slow)
+    IF (slow <= td%owc_slow(1)) THEN
+      t_mean = td%owc_tension(1)
+      RETURN
+    END IF
+    IF (slow >= td%owc_slow(n)) THEN
+      t_mean = td%owc_tension(n)
+      RETURN
+    END IF
+    DO i = 2, n - 1
+      IF (slow <= td%owc_slow(i)) EXIT
+    END DO
+    de_dt = (td%owc_strain(i) - td%owc_strain(i - 1))/(td%owc_tension(i) - td%owc_tension(i - 1))
+    t = td%owc_tension(i)
+    DO it = 1, 60
+      dt_ = (td%owc_strain(i - 1) + de_dt*(t - td%owc_tension(i - 1)) - CD_Syrope_Fast_Strain(td, t) - slow)/ &
+            (de_dt - CD_ONE/(td%alpha + td%beta*t))
+      t = t - dt_
+      IF (.NOT. (ABS(dt_) > 8.0_wp*EPSILON(CD_ONE)*ABS(t))) EXIT
+    END DO
+    t_mean = MIN(MAX(t, td%owc_tension(i - 1)), td%owc_tension(i))
+  END FUNCTION owc_tension_at_slow
+
+  PURE REAL(wp) FUNCTION owc_tension_slope(td, slow, t_mean) RESULT(dtm_ds)
+    !! d T_mean/d eps_slow of owc_tension_at_slow (zero on the clamped ends), t_mean its value at slow.
+    TYPE(CD_SyropeType), INTENT(IN) :: td
+    REAL(wp), INTENT(IN) :: slow, t_mean
+    INTEGER :: i, n
+    n = SIZE(td%owc_slow)
+    dtm_ds = CD_ZERO
+    IF (slow <= td%owc_slow(1) .OR. slow >= td%owc_slow(n)) RETURN
+    DO i = 2, n - 1
+      IF (slow <= td%owc_slow(i)) EXIT
+    END DO
+    dtm_ds = CD_ONE/((td%owc_strain(i) - td%owc_strain(i - 1))/(td%owc_tension(i) - td%owc_tension(i - 1)) - &
+                     CD_ONE/(td%alpha + td%beta*t_mean))
+  END FUNCTION owc_tension_slope
 
   PURE REAL(wp) FUNCTION interp_slope(x, xp, fp) RESULT(dydx)
     !! The slope of the segment interp uses at x (zero on the clamped ends).

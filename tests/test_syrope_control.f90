@@ -366,16 +366,14 @@ CONTAINS
   SUBROUTINE kernel_rate(slow, eps, deps, tmax, rate, ten)
     !! MoorDyn's Syrope segment law (MoorDyn-C Line::getStateDeriv, MoorDyn-F Line_GetStateDeriv,
     !! ElasticMod 4) in strain form: the mean tension from the slow strain on the working curve
-    !! of tmax (30 samples) below the OWC's slow strain at tmax and on the OWC from it,
+    !! of tmax (30 samples) below the OWC's slow strain at tmax and on the OWC from it (there the
+    !! exact inverse of eps_owc(T) - eps_fast(T), by bisection; MoorDyn interpolates its rows),
     !! K1 = alpha + beta T_mean, d(eps_slow)/dt = (K1 (eps - eps_curve(T_mean)) + BA_d deps)/(BA_s +
     !! BA_d) and T = T_mean (eps >= 0) + BA_s d(eps_slow)/dt, clamped at zero (a line cannot push).
     REAL(wp), INTENT(IN) :: slow, eps, deps, tmax
     REAL(wp), INTENT(OUT) :: rate, ten
-    REAL(wp) :: we(NWC), wt(NWC), ws(NWC), os(NOWC), e_max, e_min, t_mean, e_curve
+    REAL(wp) :: we(NWC), wt(NWC), ws(NWC), e_max, e_min, t_mean, e_curve, lo, hi
     INTEGER :: k
-    DO k = 1, NOWC
-      os(k) = OWC_EPS(k) - fast_strain(OWC_TEN(k))
-    END DO
     e_max = owc_e(tmax)
     e_min = OWC_EPS(1) + K1W*(e_max - OWC_EPS(1))
     DO k = 1, NWC
@@ -383,11 +381,21 @@ CONTAINS
       wt(k) = tmax*(we(k) - e_min)/(e_max - e_min)
       ws(k) = we(k) - fast_strain(wt(k))
     END DO
-    IF (slow < lin(tmax, OWC_TEN, os)) THEN
+    IF (slow < e_max - fast_strain(tmax)) THEN
       t_mean = lin(slow, ws, wt)
       e_curve = lin(t_mean, wt, we)
     ELSE
-      t_mean = lin(slow, os, OWC_TEN)
+      lo = OWC_TEN(1)
+      hi = OWC_TEN(NOWC)
+      DO k = 1, 200
+        t_mean = 0.5_wp*(lo + hi)
+        IF (owc_e(t_mean) - fast_strain(t_mean) < slow) THEN
+          lo = t_mean
+        ELSE
+          hi = t_mean
+        END IF
+      END DO
+      t_mean = 0.5_wp*(lo + hi)
       e_curve = lin(t_mean, OWC_TEN, OWC_EPS)
     END IF
     rate = ((ALPHA + BETA*t_mean)*(eps - e_curve) + BA_D*deps)/(BA_S + BA_D)
