@@ -8,6 +8,15 @@ All notable changes to CableDyn are recorded in this file. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A Syrope line whose rest tension is a small part of its past one (a `SYROPE IC` `Tmax0` well above the
+  installed tension, as of a polyester mooring line after a storm that loaded it) failed to start when its
+  static secants, far below the working curve's tangent along the whole line, did not settle in 50
+  iterations. From the thirtieth iteration on, the static start combines the stored solves of the whole line
+  (Anderson acceleration); a 644 m rope that stopped at a residual of 1.2e-10 after 50 iterations starts in
+  fewer than 40, with the same tensions. Lines that settled in fewer iterations start as before, bit for bit.
+
 ## [0.4.3] - 2026-11-20
 
 ### Added

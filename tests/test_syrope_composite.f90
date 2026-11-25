@@ -25,11 +25,14 @@ PROGRAM test_syrope_composite
   !!   8. A lightly loaded SYROPE IC rope near its working curve's zero-tension strain, where the
   !!      plain secant update contracts slowly: the accelerated update lands every element on the
   !!      Tmax0 working curve.
+  !!   9. A long inclined single-section rope (60 elements, 644 m) whose rest tension is a small part
+  !!      of its past one on a linear working curve: the secants are a fifth and less of the
+  !!      tangent along the whole line, where the element steps alone ran out of iterations.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_Models, CD_Run_Deck_Driver, CD_DECKDRV_OK
   USE CableDyn_Model, ONLY: CD_ModelType, CD_End_Model, CD_Get_Model_Tension
   USE CableDyn_Syrope, ONLY: CD_SyropeType, CD_Syrope_Init, CD_Syrope_End, CD_Syrope_Static_Tension, &
-                             CD_SYROPE_WC_EXP, CD_SYROPE_OK
+                             CD_SYROPE_WC_EXP, CD_SYROPE_WC_LINEAR, CD_SYROPE_OK
   IMPLICIT NONE
 
   INTEGER, PARAMETER :: NOWC = 30, NE_A = 25, NE_P = 40, NE_F = 12
@@ -133,6 +136,13 @@ PROGRAM test_syrope_composite
   ! 8. a lightly loaded, nearly neutrally buoyant rope on the Tmax0 = 2.5 MN working curve, near its
   ! zero-tension strain (about 53 kN), where the plain secant update contracts slowly
   CALL taut_rope(20.2_wp, '16.70', 'a lightly loaded preconditioned rope', tmax0=2.5e6_wp)
+
+  ! 9. the slow case of the whole line (with the element steps alone 2.60, 2.83 and 2.89 MN ran out of
+  ! iterations)
+  CALL long_rope(2.60e6_wp)
+  CALL long_rope(2.83e6_wp)
+  CALL long_rope(2.86e6_wp)
+  CALL long_rope(2.89e6_wp)
 
   CALL finish()
 
@@ -244,6 +254,88 @@ CONTAINS
     CALL CD_End_Model(mt(1), es, em)
     IF (PRESENT(tmax0)) CALL CD_Syrope_End(td)
   END SUBROUTINE taut_rope
+
+  SUBROUTINE long_rope(tmax0)
+    !! A 643.77 m polyester rope between an anchor at 700 m and a fairlead at 58 m radius in 150 m of
+    !! water, on the linear working curve (slope 156 MN) of a past tension tmax0: every element
+    !! lands on that curve.
+    REAL(wp), INTENT(IN) :: tmax0
+    INTEGER, PARAMETER :: NR = 4, NE = 60
+    ! an original working curve of 12 MN breaking strength (strain, tension)
+    REAL(wp), PARAMETER :: R_EPS(NR) = [0.0_wp, 0.010_wp, 0.037_wp, 0.080_wp]
+    REAL(wp), PARAMETER :: R_TEN(NR) = [0.0_wp, 0.9e6_wp, 2.83e6_wp, 6.5e6_wp]
+    TYPE(CD_ModelType), ALLOCATABLE :: ml(:)
+    TYPE(CD_SyropeType) :: td
+    REAL(wp) :: ten(NE), eps_k, wst, tcurve
+    INTEGER :: u, k
+    CHARACTER(32) :: s_tmax0
+    OPEN (NEWUNIT=u, FILE='csyr_long_owc.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'Strain      Tension'
+    WRITE (u, '(A)') '(-)         (N)'
+    DO k = 1, NR
+      WRITE (u, '(ES14.6,1X,ES14.6)') R_EPS(k), R_TEN(k)
+    END DO
+    CLOSE (u)
+    OPEN (NEWUNIT=u, FILE='csyr_long_settings.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'csyr_long_owc.dat  OWC     - Original working-curve table file'
+    WRITE (u, '(A)') 'LINEAR          WCType  - Working-curve formulation'
+    WRITE (u, '(A)') '1.56e8          k1      - Working-curve slope (N)'
+    WRITE (u, '(A)') '0.0             k2      - unused'
+    CLOSE (u)
+    WRITE (s_tmax0, '(ES23.16)') tmax0
+    OPEN (NEWUNIT=u, FILE='csyr_long.dat', STATUS='REPLACE', ACTION='WRITE')
+    WRITE (u, '(A)') 'long single-section Syrope test deck'
+    WRITE (u, '(A)') '--- LINE TYPES ---'
+    WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
+    WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
+    WRITE (u, '(A)') 'rope 0.145 23.0 "SYROPE:csyr_long_settings.dat|2.22e8|33.0" 2.952e9|1.0e5 0.0 1.2 0.2 1.0 0.0'
+    WRITE (u, '(A)') '--- POINTS ---'
+    WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
+    WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
+    WRITE (u, '(A)') '1 Fixed -700.0 0.0 -150.0 0 0 0 0'
+    WRITE (u, '(A)') '2 Vessel -58.0 0.0 -14.0 0 0 0 0'
+    WRITE (u, '(A)') '--- LINES ---'
+    WRITE (u, '(A)') 'ID NodeA NodeB Outputs'
+    WRITE (u, '(A)') '(-) (-) (-) (-)'
+    WRITE (u, '(A)') '1 2 1 -'
+    WRITE (u, '(A)') '--- SYROPE IC ---'
+    WRITE (u, '(A)') 'Line(s) Tmax0 Tmean0'
+    WRITE (u, '(A)') '(-) (N) (N)'
+    WRITE (u, '(A)') '1 '//TRIM(ADJUSTL(s_tmax0))//' 6.0e5'
+    WRITE (u, '(A)') '--- SECTIONS ---'
+    WRITE (u, '(A)') 'LineID LineType Length NumSegs'
+    WRITE (u, '(A)') '(-) (-) (m) (-)'
+    WRITE (u, '(A)') '1 rope 643.7681 60'
+    WRITE (u, '(A)') '--- OPTIONS ---'
+    WRITE (u, '(A)') '9.80665 g'
+    WRITE (u, '(A)') '1025.0 rhoW'
+    WRITE (u, '(A)') '150.0 WtrDpth'
+    WRITE (u, '(A)') '--- OUTPUTS ---'
+    WRITE (u, '(A)') 'FairTen1'
+    WRITE (u, '(A)') '--- end ---'
+    CLOSE (u)
+    CALL CD_Init_Deck_Models('csyr_long.dat', ml, es, em)
+    CALL require(es == CD_DECKDRV_OK, 'the long rope of Tmax0 '//TRIM(ADJUSTL(s_tmax0))//' N builds: '//TRIM(em))
+    IF (es /= CD_DECKDRV_OK) RETURN
+    CALL CD_Syrope_Init(td, R_EPS, R_TEN, CD_SYROPE_WC_LINEAR, 1.56e8_wp, 0.0_wp, 2.22e8_wp, 33.0_wp, &
+                        2.952e9_wp, 1.0e5_wp, es, em)
+    CALL require(es == CD_SYROPE_OK, 'reference linear working curve: '//TRIM(em))
+    ASSOCIATE (md => ml(1))
+      CALL CD_Get_Model_Tension(md, ten, es, em)
+      wst = 0.0_wp
+      DO k = 1, md%n_elem
+        eps_k = NORM2(md%q(3*md%elem_conn(2, k) - 2:3*md%elem_conn(2, k)) - &
+                      md%q(3*md%elem_conn(1, k) - 2:3*md%elem_conn(1, k)))/md%l0(k) - 1.0_wp
+        CALL CD_Syrope_Static_Tension(td, tmax0, eps_k, tcurve, es, em)
+        wst = MAX(wst, ABS(tcurve - ten(k))/ten(k))
+      END DO
+      PRINT '(A,ES10.3,A,ES12.5,A,ES12.5,A,ES10.3)', '  long rope, Tmax0 ', tmax0, ': tensions ', MINVAL(ten), &
+        ' to ', MAXVAL(ten), ' N, elements off their rest curve by at most ', wst
+      CALL require(wst <= 1.0e-8_wp, 'every element of the long rope sits on its Tmax0 working curve')
+    END ASSOCIATE
+    CALL CD_End_Model(ml(1), es, em)
+    CALL CD_Syrope_End(td)
+  END SUBROUTINE long_rope
 
   SUBROUTINE tmax0_curve()
     !! SYROPE IC Tmax0 = 2.5 MN: the polyester's mean tension is the Tmax0 working curve's at its
