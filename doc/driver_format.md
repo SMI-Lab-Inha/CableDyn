@@ -342,9 +342,10 @@ and `BA = BA_s|BA_d`:
   or `EXP`), `k1`, and `k2` rows as `value name`. `OWC` names the original-working-curve table,
   resolved relative to the settings file: a `strain tension` table of at least two numeric rows.
 - `BA_d` enters the slow-state rate; the physical damping contribution is `BA_s*d(eps_slow)/dt`.
-- A Syrope type requires `EI = 0`. A Syrope line is either a single section, taut at
-  initialisation, or a composite line whose other sections are linear-elastic `EI = 0` sections (a
-  chain–polyester–chain mooring), with every Syrope element in tension at initialisation. It runs
+- A Syrope type requires `EI = 0`. A Syrope line is either a single section or a composite line
+  whose other sections are linear-elastic `EI = 0` sections (a chain–polyester–chain mooring), with
+  every Syrope element in tension at initialisation: a line its weight sags taut starts even where
+  its chord is shorter than the line. It runs
   on a dynamic deck (`dtM`/`TMax`) and takes the seabed, `bathymetryFile`, Morison loads, current,
   waves, host fluid fields and VIV of any `EI = 0` line, and active line control of a Syrope
   segment on the OpenFAST route ([CONTROL](#control-optional-openfast-line-control)).

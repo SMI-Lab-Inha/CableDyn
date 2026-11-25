@@ -28,6 +28,10 @@ PROGRAM test_syrope_composite
   !!   9. A long inclined single-section rope (60 elements, 644 m) whose rest tension is a small part
   !!      of its past one on a linear working curve: the secants are a fifth and less of the
   !!      tangent along the whole line, where the element steps alone ran out of iterations.
+  !!  10. The same rope where its chord strain lies below the zero-tension strain of the past
+  !!      tension's curve, or the chord is shorter than the rope: the weight sags it taut, and its
+  !!      tensions are those of an elastic catenary (Python, 60 chords on the same rest curve).
+  !!      A weightless rope there carries nothing and stops with a named error.
   USE CableDyn_Precision, ONLY: wp
   USE CableDyn_DeckDriver, ONLY: CD_Init_Deck_Models, CD_Run_Deck_Driver, CD_DECKDRV_OK
   USE CableDyn_Model, ONLY: CD_ModelType, CD_End_Model, CD_Get_Model_Tension
@@ -143,6 +147,12 @@ PROGRAM test_syrope_composite
   CALL long_rope(2.83e6_wp)
   CALL long_rope(2.86e6_wp)
   CALL long_rope(2.89e6_wp)
+  ! 10. a chord strain below the curve's zero-tension strain, and a chord shorter than the rope
+  CALL long_rope(3.5e6_wp, 643.7681_wp, [1.2200562146866004e5_wp, 1.2979380872515342e5_wp])
+  CALL long_rope(4.5e6_wp, 643.7681_wp, [7.975073758336593e4_wp, 8.752111037376584e4_wp])
+  CALL long_rope(2.83e6_wp, 660.0_wp, [4.757422030236737e4_wp, 5.620254324506163e4_wp])
+  CALL long_rope(1.8e6_wp, 665.0_wp, [4.807701264159228e4_wp, 5.676431216195525e4_wp])
+  CALL long_rope(3.5e6_wp, 643.7681_wp, mass='16.926')
 
   CALL finish()
 
@@ -255,11 +265,14 @@ CONTAINS
     IF (PRESENT(tmax0)) CALL CD_Syrope_End(td)
   END SUBROUTINE taut_rope
 
-  SUBROUTINE long_rope(tmax0)
+  SUBROUTINE long_rope(tmax0, length, catenary, mass)
     !! A 643.77 m polyester rope between an anchor at 700 m and a fairlead at 58 m radius in 150 m of
     !! water, on the linear working curve (slope 156 MN) of a past tension tmax0: every element
-    !! lands on that curve.
+    !! lands on that curve. With length (the seabed then out of reach) the extreme tensions are
+    !! catenary's; with mass (a weightless rope) the line stops by name.
     REAL(wp), INTENT(IN) :: tmax0
+    REAL(wp), INTENT(IN), OPTIONAL :: length, catenary(2)
+    CHARACTER(*), INTENT(IN), OPTIONAL :: mass
     INTEGER, PARAMETER :: NR = 4, NE = 60
     ! an original working curve of 12 MN breaking strength (strain, tension)
     REAL(wp), PARAMETER :: R_EPS(NR) = [0.0_wp, 0.010_wp, 0.037_wp, 0.080_wp]
@@ -268,7 +281,7 @@ CONTAINS
     TYPE(CD_SyropeType) :: td
     REAL(wp) :: ten(NE), eps_k, wst, tcurve
     INTEGER :: u, k
-    CHARACTER(32) :: s_tmax0
+    CHARACTER(32) :: s_tmax0, s_len, s_mass
     OPEN (NEWUNIT=u, FILE='csyr_long_owc.dat', STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'Strain      Tension'
     WRITE (u, '(A)') '(-)         (N)'
@@ -283,12 +296,17 @@ CONTAINS
     WRITE (u, '(A)') '0.0             k2      - unused'
     CLOSE (u)
     WRITE (s_tmax0, '(ES23.16)') tmax0
+    s_len = '643.7681'
+    IF (PRESENT(length)) WRITE (s_len, '(F10.4)') length
+    s_mass = '23.0'
+    IF (PRESENT(mass)) s_mass = mass
     OPEN (NEWUNIT=u, FILE='csyr_long.dat', STATUS='REPLACE', ACTION='WRITE')
     WRITE (u, '(A)') 'long single-section Syrope test deck'
     WRITE (u, '(A)') '--- LINE TYPES ---'
     WRITE (u, '(A)') 'Name Diam Mass EA BA EI Cdn Cdt Can Cat'
     WRITE (u, '(A)') '(-) (m) (kg/m) (N) (-) (Nm2) (-) (-) (-) (-)'
-    WRITE (u, '(A)') 'rope 0.145 23.0 "SYROPE:csyr_long_settings.dat|2.22e8|33.0" 2.952e9|1.0e5 0.0 1.2 0.2 1.0 0.0'
+    WRITE (u, '(A)') 'rope 0.145 '//TRIM(s_mass)//' "SYROPE:csyr_long_settings.dat|2.22e8|33.0" '// &
+      '2.952e9|1.0e5 0.0 1.2 0.2 1.0 0.0'
     WRITE (u, '(A)') '--- POINTS ---'
     WRITE (u, '(A)') 'ID Type X Y Z Mass Vol CdA Ca'
     WRITE (u, '(A)') '(-) (-) (m) (m) (m) (kg) (m3) (m2) (-)'
@@ -305,16 +323,22 @@ CONTAINS
     WRITE (u, '(A)') '--- SECTIONS ---'
     WRITE (u, '(A)') 'LineID LineType Length NumSegs'
     WRITE (u, '(A)') '(-) (-) (m) (-)'
-    WRITE (u, '(A)') '1 rope 643.7681 60'
+    WRITE (u, '(A)') '1 rope '//TRIM(ADJUSTL(s_len))//' 60'
     WRITE (u, '(A)') '--- OPTIONS ---'
     WRITE (u, '(A)') '9.80665 g'
     WRITE (u, '(A)') '1025.0 rhoW'
-    WRITE (u, '(A)') '150.0 WtrDpth'
+    WRITE (u, '(A)') MERGE('600.0 WtrDpth', '150.0 WtrDpth', PRESENT(length))
     WRITE (u, '(A)') '--- OUTPUTS ---'
     WRITE (u, '(A)') 'FairTen1'
     WRITE (u, '(A)') '--- end ---'
     CLOSE (u)
     CALL CD_Init_Deck_Models('csyr_long.dat', ml, es, em)
+    IF (PRESENT(mass)) THEN
+    CALL require(es /= CD_DECKDRV_OK .AND. (INDEX(em, 'slack at init') > 0 .OR. INDEX(em, 'did not converge') > 0 .OR. &
+                                              INDEX(em, 'static solve failed') > 0), &
+                   'a weightless slack rope stops by name: '//TRIM(em))
+      RETURN
+    END IF
     CALL require(es == CD_DECKDRV_OK, 'the long rope of Tmax0 '//TRIM(ADJUSTL(s_tmax0))//' N builds: '//TRIM(em))
     IF (es /= CD_DECKDRV_OK) RETURN
     CALL CD_Syrope_Init(td, R_EPS, R_TEN, CD_SYROPE_WC_LINEAR, 1.56e8_wp, 0.0_wp, 2.22e8_wp, 33.0_wp, &
@@ -332,6 +356,9 @@ CONTAINS
       PRINT '(A,ES10.3,A,ES12.5,A,ES12.5,A,ES10.3)', '  long rope, Tmax0 ', tmax0, ': tensions ', MINVAL(ten), &
         ' to ', MAXVAL(ten), ' N, elements off their rest curve by at most ', wst
       CALL require(wst <= 1.0e-8_wp, 'every element of the long rope sits on its Tmax0 working curve')
+      IF (PRESENT(catenary)) CALL require(ABS(MINVAL(ten) - catenary(1)) <= 1.0e-5_wp*catenary(1) .AND. &
+                                          ABS(MAXVAL(ten) - catenary(2)) <= 1.0e-5_wp*catenary(2), &
+                                          'the sagging rope has the tensions of the elastic catenary')
     END ASSOCIATE
     CALL CD_End_Model(ml(1), es, em)
     CALL CD_Syrope_End(td)
