@@ -69,6 +69,7 @@ PROGRAM test_syrope
   CALL case_quadratic()
   CALL case_exp()
   CALL case_owc_branch_and_running_max()
+  CALL case_branches_join()
   CALL case_interp_clamps()
   CALL case_projected_state_advance()
   CALL case_state_advance_at_wc_top()
@@ -150,6 +151,12 @@ CONTAINS
       CALL require(es /= CD_SYROPE_OK .AND. INDEX(em, 'non-finite') > 0, 'fail:owc-nonfinite-slow')
     END BLOCK
     CALL CD_Syrope_End(td)
+    ! a row whose slow strain falls at its start and rises at its end: its ends increase, yet it
+    ! has no inverse (row slope 1.6e8 N, fast stiffness 1.53e8 N at the start and 1.76e8 N at the end)
+    CALL CD_Syrope_Init(td, [0.0_wp, 6.25e-3_wp], [0.0_wp, 1.0e6_wp], CD_SYROPE_WC_LINEAR, 0.5_wp, 0.0_wp, &
+                        ALPHA, BETA, C1, C2, es, em)
+    CALL require(6.25e-3_wp > LOG(1.0_wp + BETA/ALPHA*1.0e6_wp)/BETA, 'fail:the row ends increase')
+    CALL require(es /= CD_SYROPE_OK .AND. INDEX(em, 'along every row') > 0, 'fail:a row without an inverse')
   END SUBROUTINE case_fail_closed
 
   SUBROUTINE case_degenerate_wc()
@@ -275,7 +282,9 @@ CONTAINS
   SUBROUTINE case_owc_branch_and_running_max()
     !! Committed mean tension AT/ABOVE the running max selects the OWC branch,
     !! and the recovered mean tension above T_max is the caller's regeneration
-    !! event: the regenerated curve matches the production formula.
+    !! event: the regenerated curve matches the production formula. The recovery is the
+    !! exact inverse of eps_owc(T) - eps_fast(T) (values by bisection in Python), where
+    !! MoorDyn interpolates the slow strains of the table rows.
     TYPE(CD_SyropeType) :: td
     REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC)
     REAL(wp) :: st, fa, sl, dsl, ten, tm
@@ -291,17 +300,77 @@ CONTAINS
     CALL CD_Syrope_Rate_And_Tension(td, .FALSE., ws, wt, wsl, sl, 0.045_wp, 5.0e-5_wp, &
                                     dsl, ten, tm, es, em)
     CALL require(es == CD_SYROPE_OK, 'owc:rate-ok')
-    CALL require(close_rel(dsl, 1.2606308143959109e-05_wp), 'owc:rate')
-    CALL require(close_rel(ten, 3130162.871313756_wp), 'owc:tension')
-    CALL require(close_rel(tm, 2499847.4641158003_wp), 'owc:tmean-recovered')
+    CALL require(close_rel(dsl, 1.2597923741103403e-05_wp), 'owc:rate')
+    CALL require(close_rel(ten, 3129896.18705517_wp), 'owc:tension')
+    CALL require(close_rel(tm, 2.5e6_wp), 'owc:tmean-recovered')
     ! the running-max event: t_mean exceeded the 2.0e6 T_max -> regenerate
     CALL require(tm > 2.0e6_wp, 'owc:event-detected')
     CALL CD_Syrope_Working_Curve(td, tm, ws, wt, wsl, es, em)
     CALL require(es == CD_SYROPE_OK, 'owc:regenerated')
-    CALL require(close_rel(ws(1), 0.022011076961851315_wp), 'owc:regen-eps-min')
-    CALL require(close_rel(wt(23), 1896436.0072602627_wp), 'owc:regen-T23')
+    CALL require(close_rel(ws(1), 0.022011895413436695_wp), 'owc:regen-eps-min')
+    CALL require(close_rel(wt(23), 1896551.724137931_wp), 'owc:regen-T23')
     CALL CD_Syrope_End(td)
   END SUBROUTINE case_owc_branch_and_running_max
+
+  SUBROUTINE case_branches_join()
+    !! The working curve and the OWC meet at one slow strain for any running maximum: its top
+    !! sample is the divider to the bit, the OWC returns T_max there, and the recovered mean
+    !! tension changes on both sides of it (no band of slow strains that are all rest points of
+    !! a rope at its running maximum). And the recovery does not depend on the spacing of the
+    !! OWC rows: the same curve on eight times as many rows gives the same tension.
+    TYPE(CD_SyropeType) :: td, tf
+    INTEGER, PARAMETER :: NSUB = 8, NF = 29*NSUB + 1, NT = 200
+    REAL(wp) :: ws(CD_SYROPE_NWC), wt(CD_SYROPE_NWC), wsl(CD_SYROPE_NWC), ef(NF), tnf(NF)
+    REAL(wp) :: tmax, d, dp, rate, ten, t_at, t_below, t_above, t_fine, off_at, off_fine, rise
+    INTEGER :: es, i, k, j, n_curve
+    LOGICAL :: joined
+    CHARACTER(200) :: em
+    CALL CD_Syrope_Init(td, OWC_EPS, OWC_TEN, CD_SYROPE_WC_EXP, 0.2_wp, 1.5_wp, ALPHA, BETA, C1, C2, es, em)
+    CALL require(es == CD_SYROPE_OK, 'join:init')
+    DO i = 1, 29
+      DO j = 1, NSUB
+        k = (i - 1)*NSUB + j
+        ef(k) = OWC_EPS(i) + (OWC_EPS(i + 1) - OWC_EPS(i))*REAL(j - 1, wp)/REAL(NSUB, wp)
+        tnf(k) = OWC_TEN(i) + (OWC_TEN(i + 1) - OWC_TEN(i))*REAL(j - 1, wp)/REAL(NSUB, wp)
+      END DO
+    END DO
+    ef(NF) = OWC_EPS(30)
+    tnf(NF) = OWC_TEN(30)
+    CALL CD_Syrope_Init(tf, ef, tnf, CD_SYROPE_WC_EXP, 0.2_wp, 1.5_wp, ALPHA, BETA, C1, C2, es, em)
+    CALL require(es == CD_SYROPE_OK, 'join:init fine table')
+    joined = .TRUE.
+    off_at = 0.0_wp
+    off_fine = 0.0_wp
+    rise = HUGE(1.0_wp)
+    n_curve = 0
+    DO i = 1, NT
+      tmax = 0.8e6_wp + (4.2e6_wp - 0.8e6_wp)*REAL(i - 1, wp)/REAL(NT - 1, wp)
+      CALL CD_Syrope_Working_Curve(td, tmax, ws, wt, wsl, es, em)
+      IF (es /= CD_SYROPE_OK) CYCLE ! an inadmissible running maximum has no curve
+      n_curve = n_curve + 1
+      d = CD_Syrope_Branch_Divider(td, tmax)
+      joined = joined .AND. bits_same(wsl(CD_SYROPE_NWC), d)
+      CALL CD_Syrope_Rate_And_Tension(td, .FALSE., ws, wt, wsl, d, 0.0_wp, 0.0_wp, rate, ten, t_at, es, em)
+      off_at = MAX(off_at, ABS(t_at - tmax)/tmax)
+      dp = d - 1.0e-9_wp
+      CALL CD_Syrope_Rate_And_Tension(td, .TRUE., ws, wt, wsl, dp, 0.0_wp, 0.0_wp, rate, ten, t_below, es, em)
+      dp = d + 1.0e-9_wp
+      CALL CD_Syrope_Rate_And_Tension(td, .FALSE., ws, wt, wsl, dp, 0.0_wp, 0.0_wp, rate, ten, t_above, es, em)
+      rise = MIN(rise, t_at - t_below, t_above - t_at)
+      dp = d + 1.0e-4_wp
+      CALL CD_Syrope_Rate_And_Tension(tf, .FALSE., ws, wt, wsl, dp, 0.0_wp, 0.0_wp, rate, ten, t_fine, es, em)
+      CALL CD_Syrope_Rate_And_Tension(td, .FALSE., ws, wt, wsl, dp, 0.0_wp, 0.0_wp, rate, ten, t_above, es, em)
+      off_fine = MAX(off_fine, ABS(t_fine - t_above)/t_above)
+    END DO
+    WRITE (*, '(A,I0,A,ES9.2,A,ES9.2,A,ES9.2)') '  branches join at ', n_curve, ' running maxima: OWC off T_max by ', &
+      off_at, ', smallest rise over 1e-9 of slow strain ', rise, ' N, eight times the rows differ by ', off_fine
+    CALL require(n_curve > NT/2, 'join:most running maxima have a curve')
+    CALL require(joined .AND. off_at <= 1.0e-13_wp, 'join:one slow strain at the running maximum')
+    CALL require(rise > 1.0e-3_wp, 'join:no band of rest points')
+    CALL require(off_fine <= 1.0e-12_wp, 'join:independent of the row spacing')
+    CALL CD_Syrope_End(td)
+    CALL CD_Syrope_End(tf)
+  END SUBROUTINE case_branches_join
 
   SUBROUTINE case_interp_clamps()
     !! Piecewise-linear interpolation clamps at both table ends.
@@ -359,13 +428,12 @@ CONTAINS
   END SUBROUTINE case_projected_state_advance
 
   SUBROUTINE case_state_advance_at_wc_top()
-    !! A rope held at rest on its OWC at its running maximum: the backward-Euler root lies just
-    !! above the top sample of the working curve's slow strains, where T_mean(eps_slow) stops
-    !! rising (it clamps at T_max up to the branch divider), closer to it than the Newton
-    !! step's difference interval. The state of a run (LINEAR, k1 = 0.5, BA_s|BA_d = 1e6|1e5,
-    !! a line hauled in and held) on which the safeguarded Newton step crept 80 iterations
-    !! along that kink and the solve failed; the bisection that finishes the solve meets the
-    !! residual test, between the kink and the divider, at the curve's top tension.
+    !! A rope held at rest on its OWC at its running maximum: the backward-Euler root lies at the
+    !! top sample of the working curve's slow strains, where the slope of T_mean(eps_slow)
+    !! changes, closer to it than the Newton step's difference interval. The state of a run
+    !! (LINEAR, k1 = 0.5, BA_s|BA_d = 1e6|1e5, a line hauled in and held) on which the
+    !! safeguarded Newton step crept 80 iterations along that kink and the solve failed; the
+    !! solve meets the residual test there, at the curve's top tension.
     TYPE(CD_SyropeType) :: td
     REAL(wp), PARAMETER :: TMAX = 1.7790941510791376e6_wp, SLOW0 = 2.0004433178640910e-2_wp, &
                            EPS = 3.0303024894996432e-2_wp, DEPS = -1.4208693414705444e-13_wp, DT = 5.0e-2_wp
@@ -387,8 +455,9 @@ CONTAINS
     residual = slow_next - SLOW0 - DT*rate
     WRITE (*, '(A,ES16.9,A,ES10.3,A,ES12.5,A)') '  wc-top: slow strain ', slow_next, ', residual ', residual, &
       ', mean tension ', mean, ' N'
-    CALL require(ABS(residual) <= 5.0e-13_wp .AND. slow_next > wsl(CD_SYROPE_NWC) .AND. slow_next < divider .AND. &
-                 bits_same(mean, wt(CD_SYROPE_NWC)) .AND. bits_same(mean, t_mean), 'wc-top:root at the curve top')
+    CALL require(ABS(residual) <= 5.0e-13_wp .AND. ABS(slow_next - divider) <= 1.0e-8_wp .AND. &
+                 ABS(mean - wt(CD_SYROPE_NWC)) <= 1.0e-6_wp*wt(CD_SYROPE_NWC) .AND. bits_same(mean, t_mean), &
+                 'wc-top:root at the curve top')
     CALL CD_Syrope_End(td)
   END SUBROUTINE case_state_advance_at_wc_top
 
