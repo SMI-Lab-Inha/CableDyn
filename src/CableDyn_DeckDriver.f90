@@ -11126,6 +11126,8 @@ CONTAINS
     TYPE(CD_BathymetryType), INTENT(IN), OPTIONAL :: bathymetry
 
     INTEGER, PARAMETER :: MAX_ITER_COMPOSITE = 50
+    ! the line-wide step replaces the element steps from this iteration on, over this many stored solves
+    INTEGER, PARAMETER :: ITER_LINE_STEP = 30, N_STORED = 6
     ! per section in deck order (End A first): its line type, element count and, for a Syrope
     ! section, its constitutive data; per element (internal order, anchor first): its section,
     ! whether it is a Syrope element and its static secant EA
@@ -11133,10 +11135,10 @@ CONTAINS
     INTEGER, ALLOCATABLE :: sec_type(:), sec_nseg(:), el_sec(:)
     LOGICAL, ALLOCATABLE :: sec_syr(:), sis(:)
     REAL(wp), ALLOCATABLE :: sec_el(:), cand_el(:), sslow(:), stmax(:), t_static(:), eps_prev(:), t_prev(:), &
-                             step_prev(:)
+                             step_prev(:), map_el(:), x_hist(:, :), g_hist(:, :), x_line(:)
     REAL(wp) :: anchor(3), fairlead(3), eps0, t_ref, total_l0, t_hist, t_mean_static
     REAL(wp) :: eps_e, change, secant, eps_now, d_eps, d_t, eps_r, t_r, acc
-    LOGICAL :: have_acc
+    LOGICAL :: have_acc, have_line
     INTEGER :: ne, e, es, n_owc, iter, nsec, j, k, isec, st
     LOGICAL :: composite, converged
     CHARACTER(1024) :: em
@@ -11209,12 +11211,14 @@ CONTAINS
     t_hist = CD_ZERO
     IF (ln%has_syrope_ic) t_hist = ln%syrope_tmax0
     ALLOCATE (sec_el(ne), cand_el(ne), stype(ne), sis(ne), sslow(ne), stmax(ne), t_static(ne), eps_prev(ne), &
-              t_prev(ne), step_prev(ne))
+              t_prev(ne), step_prev(ne), map_el(ne), x_hist(ne, N_STORED), g_hist(ne, N_STORED), x_line(ne))
     sis = .FALSE.
     sslow = CD_ZERO
     stmax = CD_ZERO
     step_prev = CD_ZERO
     sec_el = CD_ZERO
+    x_hist = CD_ZERO
+    g_hist = CD_ZERO
     DO e = 1, ne
       IF (.NOT. sec_syr(el_sec(e))) CYCLE
       sis(e) = .TRUE.
@@ -11278,6 +11282,7 @@ CONTAINS
         ! each Syrope element: the curve's strain at its tension
         change = CD_ZERO
         cand_el = sec_el
+        map_el = sec_el
         DO e = 1, ne
           IF (.NOT. sis(e)) CYCLE
           isec = el_sec(e)
@@ -11305,6 +11310,7 @@ CONTAINS
           ELSE
             cand_el(e) = t_static(e)/eps_e
           END IF
+          map_el(e) = cand_el(e)
           ! the residual: how far the element's (strain, tension) sits off its curve
           change = MAX(change, ABS(cand_el(e) - sec_el(e))/sec_el(e))
           ! The tension update contracts by 1 - (secant / tangent) of the curve, slowly where the
@@ -11355,6 +11361,25 @@ CONTAINS
         IF (change <= 1.0e-10_wp) THEN
           converged = .TRUE.
           EXIT
+        END IF
+        ! The element steps are slow where the secant is far below the tangent along the whole
+        ! line (a low rest tension on a working curve of a high Tmax0): the elements share the
+        ! line's strain, which no element step sees. From ITER_LINE_STEP on, the next secants
+        ! are the combination of the stored solves (secants in, tension update out) that
+        ! minimises the relative residual (Anderson acceleration); else the element steps stand.
+        DO k = N_STORED, 2, -1
+          x_hist(:, k) = x_hist(:, k - 1)
+          g_hist(:, k) = g_hist(:, k - 1)
+        END DO
+        x_hist(:, 1) = sec_el
+        g_hist(:, 1) = map_el
+        have_line = .FALSE.
+        IF (iter >= ITER_LINE_STEP) CALL line_step(MIN(iter, N_STORED), x_line, have_line)
+        IF (have_line) THEN
+          DO e = 1, ne
+            IF (sis(e)) step_prev(e) = x_line(e) - sec_el(e)
+          END DO
+          cand_el = x_line
         END IF
         sec_el = cand_el
       END BLOCK
@@ -11532,6 +11557,68 @@ CONTAINS
       CALL rest_tension(isec_, eps_out, t_out, es_c, em_c)
       IF (es_c /= CD_SYROPE_OK) eps_out = -CD_ONE
     END SUBROUTINE response_root
+
+    SUBROUTINE line_step(n_hist, x_new, ok)
+      !! The secants that minimise the relative residual of the tension update over the affine
+      !! combinations of the newest n_hist solves (x_hist, g_hist, newest first): least squares by
+      !! modified Gram-Schmidt on the residual differences, a difference dependent on the earlier
+      !! ones left out. ok = .FALSE. where no difference is left or a secant would fall outside
+      !! half to twice the newest one.
+      INTEGER, INTENT(IN) :: n_hist
+      REAL(wp), INTENT(OUT) :: x_new(:)
+      LOGICAL, INTENT(OUT) :: ok
+      REAL(wp) :: f_new(SIZE(x_new)), q(SIZE(x_new), N_STORED), dg(SIZE(x_new), N_STORED)
+      REAL(wp) :: r(N_STORED, N_STORED), rhs(N_STORED), coef(N_STORED), w, nrm0, nrm
+      INTEGER :: i, j, m_, el
+      ok = .FALSE.
+      x_new = x_hist(:, 1)
+      f_new = CD_ZERO
+      DO el = 1, SIZE(x_new)
+        IF (sis(el)) f_new(el) = (g_hist(el, 1) - x_hist(el, 1))/x_hist(el, 1)
+      END DO
+      m_ = 0
+      r = CD_ZERO
+      DO j = 2, n_hist
+        m_ = m_ + 1
+        q(:, m_) = CD_ZERO
+        dg(:, m_) = CD_ZERO
+        DO el = 1, SIZE(x_new)
+          IF (.NOT. sis(el)) CYCLE
+          w = (g_hist(el, j) - x_hist(el, j))/x_hist(el, 1)
+          q(el, m_) = f_new(el) - w
+          dg(el, m_) = g_hist(el, 1) - g_hist(el, j)
+        END DO
+        nrm0 = NORM2(q(:, m_))
+        DO i = 1, m_ - 1
+          r(i, m_) = DOT_PRODUCT(q(:, i), q(:, m_))
+          q(:, m_) = q(:, m_) - r(i, m_)*q(:, i)
+        END DO
+        nrm = NORM2(q(:, m_))
+        IF (.NOT. (nrm > 1.0e-6_wp*nrm0)) THEN
+          m_ = m_ - 1
+          CYCLE
+        END IF
+        r(m_, m_) = nrm
+        q(:, m_) = q(:, m_)/nrm
+      END DO
+      IF (m_ < 1) RETURN
+      DO i = 1, m_
+        rhs(i) = DOT_PRODUCT(q(:, i), f_new)
+      END DO
+      DO i = m_, 1, -1
+        coef(i) = rhs(i)
+        DO j = i + 1, m_
+          coef(i) = coef(i) - r(i, j)*coef(j)
+        END DO
+        coef(i) = coef(i)/r(i, i)
+      END DO
+      DO el = 1, SIZE(x_new)
+        IF (.NOT. sis(el)) CYCLE
+        x_new(el) = g_hist(el, 1) - DOT_PRODUCT(coef(1:m_), dg(el, 1:m_))
+        IF (.NOT. (x_new(el) >= 0.5_wp*x_hist(el, 1) .AND. x_new(el) <= 2.0_wp*x_hist(el, 1))) RETURN
+      END DO
+      ok = .TRUE.
+    END SUBROUTINE line_step
 
     LOGICAL FUNCTION strain_in_table(isec_, eps) RESULT(ok)
       !! Whether strain eps lies in section isec_'s OWC table (the interpolation clamps at its end
