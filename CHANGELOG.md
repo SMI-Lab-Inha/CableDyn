@@ -20,6 +20,12 @@ All notable changes to CableDyn are recorded in this file. The format follows
   of the OWC rows. On the OWC the recovery differs from MoorDyn's, which interpolates the rows.
   A table with a row steeper than the fast spring at the row's start stops with a named error.
 
+- A single-section Syrope line was refused as slack where its chord strain lay below the zero-tension
+  strain of its `SYROPE IC` working curve, or its chord was shorter than the line, although its weight sags
+  it taut. It now starts as a composite line does, from the curve's alpha. Nine ropes from 39 kN to 236 kN
+  agree with an independent elastic catenary to 3.4e-6. A rope that carries no tension still stops with a
+  named error.
+
 - A Syrope line whose rest tension is a small part of its past one (a `SYROPE IC` `Tmax0` well above the
   installed tension, as of a polyester mooring line after a storm that loaded it) failed to start when its
   static secants, far below the working curve's tangent along the whole line, did not settle in 50

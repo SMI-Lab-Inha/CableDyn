@@ -11093,7 +11093,7 @@ CONTAINS
 
   RECURSIVE SUBROUTINE init_one_syrope_model(types, ln, sections, points, l0, opts, model, ErrStat, ErrMsg, &
                                              bathymetry)
-    !! Build one Syrope line model: a line of one or more Syrope sections, alone (taut at init) or
+    !! Build one Syrope line model: a line of one or more Syrope sections, alone or
     !! between plain EI = 0 sections (a chain-polyester-chain mooring), with the seabed,
     !! hydrodynamics and fluid fields of any EI = 0 line (init_one_model builds it). Builds each
     !! Syrope section's working-curve constitutive from the parse-resolved OWC data and solves the
@@ -11111,7 +11111,8 @@ CONTAINS
     !! from the mean off the curve, and their slow strains settled the line after the start: a
     !! 991 m single-section rope at rest moved its fairlead tension by 3.4e-4 in 1 s). A
     !! single-section line starts the iteration from the secant at the strain its taut geometry
-    !! fixes, a composite line from the curve's alpha. The tension, which the chains' weight and
+    !! fixes, a composite line, or a chord strain without tension on the rest curve (a line its
+    !! weight sags taut), from the curve's alpha. The tension, which the chains' weight and
     !! the geometry largely fix, keeps this update a contraction where a strain update can
     !! overshoot.
     TYPE(DeckLineType), INTENT(IN) :: types(:)
@@ -11230,10 +11231,9 @@ CONTAINS
       ! OWC secant EA that makes the static solve land at that strain
       total_l0 = SUM(l0)
       eps0 = NORM2(fairlead - anchor)/total_l0 - CD_ONE
-      IF (.NOT. (eps0 > CD_ZERO)) THEN
-        CALL release_syrope(.TRUE.)
-        CALL fail(ErrStat, ErrMsg, 'a Syrope line must be taut at init (stretched length > unstretched)'); RETURN
-      END IF
+    END IF
+    ! (a chord shorter than the line starts from the curve's alpha below, as a composite line)
+    IF (.NOT. composite .AND. eps0 > CD_ZERO) THEN
       ! the OWC table must cover the initial strain: the interpolation would clamp at
       ! the end rows and the line would start silently mis-tensioned
       IF (.NOT. strain_in_table(1, eps0)) THEN
@@ -11245,16 +11245,12 @@ CONTAINS
         CALL release_syrope(.TRUE.)
         CALL fail(ErrStat, ErrMsg, 'SYROPE IC working curve: '//TRIM(em)); RETURN
       END IF
-      IF (.NOT. (t_ref > CD_ZERO)) THEN
-        WRITE (s_eps, '(ES10.3)') eps0
-        CALL release_syrope(.TRUE.)
-        CALL fail(ErrStat, ErrMsg, 'the Syrope line is slack on its SYROPE IC working curve: the initial '// &
-                  'strain '//TRIM(ADJUSTL(s_eps))//' is below the zero-tension strain of the Tmax0 curve; '// &
-                  'lower Tmax0 or shorten the line'); RETURN
-      END IF
       secant = t_ref/eps0
       sec_el = secant
-    ELSE
+    END IF
+    ! A chord strain below the rest curve's zero-tension strain is not a slack line: the sag of its
+    ! weight stretches it further. The start is then a composite line's.
+    IF (.NOT. (secant > CD_ZERO)) THEN
       ! a first solve with each Syrope element at its placeholder stiffness (the working curve's
       ! alpha); the tension update below takes it to the curve
       DO e = 1, ne
